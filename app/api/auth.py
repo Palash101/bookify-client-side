@@ -102,6 +102,26 @@ async def verify_otp_endpoint(
     }
 
 
+@router.post("/forgot-password", response_model=PasswordResetResponse)
+async def forgot_password(
+    reset_data: PasswordResetRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: Session = Depends(get_db),
+):
+    """
+    Forgot password - email bhejo, OTP email par aayega.
+    User must exist and be active. Same as request-password-reset.
+    """
+    AuthService.get_user_for_login(db, reset_data.email)
+    otp_code, verification_token = await AuthService.send_otp(reset_data.email, "password_reset")
+    return {
+        "success": True,
+        "message": "OTP sent to your email. Please verify to reset your password.",
+        "otp_code": otp_code,
+        "token": verification_token,
+    }
+
+
 @router.post("/request-password-reset", response_model=PasswordResetResponse)
 async def request_password_reset(
     reset_data: PasswordResetRequest,
@@ -114,12 +134,11 @@ async def request_password_reset(
     """
     AuthService.get_user_for_login(db, reset_data.email)
     otp_code, verification_token = await AuthService.send_otp(reset_data.email, "password_reset")
-    
     return {
         "success": True,
         "message": "OTP sent to your email. Please verify to reset your password.",
         "otp_code": otp_code,
-        "token": verification_token
+        "token": verification_token,
     }
 
 
@@ -189,7 +208,24 @@ async def update_profile(
     Requires authentication.
     """
     updated_user = AuthService.update_profile(db, current_user, profile_data)
-    
+    return {
+        "success": True,
+        "message": "Profile updated successfully",
+        "data": updated_user
+    }
+
+
+@router.put("/edit-profile", response_model=ProfileResponse)
+async def edit_profile(
+    profile_data: ProfileUpdate,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Edit current user's profile. Same as PUT /profile.
+    Requires authentication (Bearer token).
+    """
+    updated_user = AuthService.update_profile(db, current_user, profile_data)
     return {
         "success": True,
         "message": "Profile updated successfully",

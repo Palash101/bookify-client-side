@@ -46,6 +46,7 @@ def custom_openapi():
         "/api/v1/auth/verify-otp",
         "/api/v1/auth/reset-password",
         "/api/v1/auth/profile",
+        "/api/v1/auth/edit-profile",
     ]
     
     for path, path_item in openapi_schema.get("paths", {}).items():

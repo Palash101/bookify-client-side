@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from app.models.user import User
+from app.models.role import Role
 from app.core.security import (
     verify_password,
     get_password_hash,
@@ -108,7 +109,9 @@ class AuthService:
         skills_data = {}
         if user_data.nationality:
             skills_data["nationality"] = user_data.nationality
-        
+
+        role_id = str(user_data.role_id) if user_data.role_id else None
+
         return {
             "email": user_data.email,
             "password_hash": password_hash,
@@ -119,7 +122,7 @@ class AuthService:
             "dob": str(user_data.dob) if user_data.dob else None,
             "skills": skills_data if skills_data else None,
             "tenant_id": str(tenant_id),
-            "role_id": None
+            "role_id": role_id,
         }
     
     @staticmethod
@@ -200,11 +203,19 @@ class AuthService:
         dob = None
         if cached_user_data.get("dob"):
             dob = date_type.fromisoformat(cached_user_data["dob"])
-        
+
         role_id = cached_user_data.get("role_id")
-        if not role_id:
-            role_id = uuid.uuid4()
-        
+        if role_id:
+            role_id = uuid.UUID(role_id) if isinstance(role_id, str) else role_id
+        else:
+            default_role = db.query(Role).filter(Role.key == "user").first()
+            if not default_role:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Default role (key='user') not found. Please contact admin.",
+                )
+            role_id = default_role.id
+
         db_user = User(
             email=cached_user_data["email"],
             password_hash=cached_user_data["password_hash"],
@@ -216,7 +227,7 @@ class AuthService:
             skills=cached_user_data.get("skills"),
             is_active=True,
             tenant_id=uuid.UUID(cached_user_data["tenant_id"]),
-            role_id=uuid.UUID(role_id) if isinstance(role_id, str) else role_id
+            role_id=role_id,
         )
         
         db.add(db_user)
