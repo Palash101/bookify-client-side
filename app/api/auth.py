@@ -98,7 +98,8 @@ async def verify_otp_endpoint(
         "message": message,
         "access_token": access_token,
         "refresh_token": refresh_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "user": user,
     }
 
 
