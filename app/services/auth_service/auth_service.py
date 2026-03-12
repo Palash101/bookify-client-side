@@ -57,7 +57,7 @@ class AuthService:
                 detail="Incorrect email or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        
+
         if not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -123,7 +123,8 @@ class AuthService:
             "skills": skills_data if skills_data else None,
             "tenant_id": str(tenant_id),
             "role_id": role_id,
-            "user_type": "user",
+            # Mobile app registration creates clients by default
+            "user_type": "client",
         }
     
     @staticmethod
@@ -229,7 +230,8 @@ class AuthService:
             is_active=True,
             tenant_id=uuid.UUID(cached_user_data["tenant_id"]),
             role_id=role_id,
-            user_type=cached_user_data.get("user_type", "user"),
+            # If somehow user_type not present in cache, treat as client for app
+            user_type=cached_user_data.get("user_type", "client"),
         )
         
         db.add(db_user)
@@ -238,11 +240,15 @@ class AuthService:
         return db_user
     
     @staticmethod
-    def get_user_for_login(db: Session, email: str) -> User:
+    def get_user_for_login(db: Session, email: str, tenant_id: Optional[uuid.UUID] = None) -> User:
         """
         Get user for login flow (after OTP verification).
+        If tenant_id is provided, ensure we fetch user for that tenant only.
         """
-        user = db.query(User).filter(User.email == email).first()
+        query = db.query(User).filter(User.email == email)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        user = query.first()
         
         if not user:
             raise HTTPException(
@@ -311,7 +317,13 @@ class AuthService:
         return AuthService.generate_tokens(user)
     
     @staticmethod
-    def reset_password(db: Session, email: str, new_password: str, confirm_password: str) -> None:
+    def reset_password(
+        db: Session,
+        email: str,
+        new_password: str,
+        confirm_password: str,
+        tenant_id: Optional[uuid.UUID] = None,
+    ) -> None:
         """
         Reset user password.
         """
@@ -321,7 +333,10 @@ class AuthService:
                 detail="Password and confirm password do not match"
             )
         
-        user = db.query(User).filter(User.email == email).first()
+        query = db.query(User).filter(User.email == email)
+        if tenant_id:
+            query = query.filter(User.tenant_id == tenant_id)
+        user = query.first()
         
         if not user:
             raise HTTPException(

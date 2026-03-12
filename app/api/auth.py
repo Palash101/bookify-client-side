@@ -113,7 +113,7 @@ async def forgot_password(
     Forgot password - email bhejo, OTP email par aayega.
     User must exist and be active. Same as request-password-reset.
     """
-    AuthService.get_user_for_login(db, reset_data.email)
+    AuthService.get_user_for_login(db, reset_data.email, tenant_id)
     otp_code, verification_token = await AuthService.send_otp(reset_data.email, "password_reset")
     return {
         "success": True,
@@ -133,7 +133,7 @@ async def request_password_reset(
     Request password reset - sends OTP to email.
     User must exist and be active.
     """
-    AuthService.get_user_for_login(db, reset_data.email)
+    AuthService.get_user_for_login(db, reset_data.email, tenant_id)
     otp_code, verification_token = await AuthService.send_otp(reset_data.email, "password_reset")
     return {
         "success": True,
@@ -147,7 +147,8 @@ async def request_password_reset(
 async def reset_password(
     reset_data: PasswordResetVerify,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """
     Reset password after OTP verification.
@@ -156,7 +157,13 @@ async def reset_password(
     authorization = request.headers.get("Authorization")
     email = AuthService.extract_and_validate_token(authorization)
     AuthService.verify_otp(email, reset_data.otp, expected_purpose="password_reset")
-    AuthService.reset_password(db, email, reset_data.new_password, reset_data.confirm_password)
+    AuthService.reset_password(
+        db,
+        email,
+        reset_data.new_password,
+        reset_data.confirm_password,
+        tenant_id,
+    )
     
     return {
         "success": True,
