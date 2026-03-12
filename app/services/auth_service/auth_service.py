@@ -123,6 +123,7 @@ class AuthService:
             "skills": skills_data if skills_data else None,
             "tenant_id": str(tenant_id),
             "role_id": role_id,
+            "user_type": "user",
         }
     
     @staticmethod
@@ -228,6 +229,7 @@ class AuthService:
             is_active=True,
             tenant_id=uuid.UUID(cached_user_data["tenant_id"]),
             role_id=role_id,
+            user_type=cached_user_data.get("user_type", "user"),
         )
         
         db.add(db_user)

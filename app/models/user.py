@@ -31,6 +31,7 @@ class User(Base):
     skills = Column(JSONB, nullable=True)
     
     is_active = Column(Boolean, default=True, nullable=True)
+    user_type = Column(String(20), nullable=False, server_default="user")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
