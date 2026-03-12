@@ -13,15 +13,33 @@ router = APIRouter()
 
 @router.get("", response_model=ClassesListResponse)
 async def get_classes_by_date(
-    class_date: Optional[date] = Query(None, description="Optional. Date in YYYY-MM-DD to filter classes. Omit to get all classes."),
+    date_filter: Optional[date] = Query(
+        None,
+        alias="date",
+        description="Optional. Date in YYYY-MM-DD to filter classes. Omit to get all classes.",
+    ),
+    search: Optional[str] = Query(None, description="Search classes by title"),
+    sort_by: Optional[str] = Query(
+        None, description="Sort by: date, start_time, title"
+    ),
+    sort_order: str = Query(
+        "asc", description="Sort direction: asc or desc"
+    ),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
-    Get gym classes. Pass class_date to filter by date; omit to get all classes.
+    Get gym classes with optional date filter, search and sorting.
+    Date filter param name is `date`.
     Requires X-Tenant-Key header.
     """
-    classes = ClassesService.list_classes(db, class_date=class_date)
+    classes = ClassesService.list_classes(
+        db,
+        class_date=date_filter,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
     return {
         "success": True,
         "message": "Classes fetched successfully",
