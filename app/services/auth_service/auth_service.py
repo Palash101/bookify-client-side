@@ -352,6 +352,8 @@ class AuthService:
         """
         Update user profile.
         """
+        # Ensure the user instance is attached to the current DB session
+        user = db.merge(user)
         update_data = profile_data.model_dump(exclude_unset=True)
         
         if "phone_country_code" in update_data and "phone" in update_data:

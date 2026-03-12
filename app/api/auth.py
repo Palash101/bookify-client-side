@@ -123,26 +123,6 @@ async def forgot_password(
     }
 
 
-@router.post("/request-password-reset", response_model=PasswordResetResponse)
-async def request_password_reset(
-    reset_data: PasswordResetRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
-):
-    """
-    Request password reset - sends OTP to email.
-    User must exist and be active.
-    """
-    AuthService.get_user_for_login(db, reset_data.email, tenant_id)
-    otp_code, verification_token = await AuthService.send_otp(reset_data.email, "password_reset")
-    return {
-        "success": True,
-        "message": "OTP sent to your email. Please verify to reset your password.",
-        "otp_code": otp_code,
-        "token": verification_token,
-    }
-
-
 @router.post("/reset-password", response_model=MessageResponse)
 async def reset_password(
     reset_data: PasswordResetVerify,
@@ -190,12 +170,12 @@ async def refresh_token(
     }
 
 
-@router.get("/profile", response_model=ProfileResponse)
-async def get_profile(
+@router.get("/me", response_model=ProfileResponse)
+async def get_me(
     current_user: UserModel = Depends(get_current_active_user),
 ):
     """
-    Get current user's profile.
+    Get current authenticated user (me).
     Requires authentication.
     """
     return {
@@ -205,33 +185,15 @@ async def get_profile(
     }
 
 
-@router.put("/profile", response_model=ProfileResponse)
-async def update_profile(
+@router.put("/me", response_model=ProfileResponse)
+async def update_me(
     profile_data: ProfileUpdate,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """
-    Update current user's profile.
+    Update current authenticated user (me).
     Requires authentication.
-    """
-    updated_user = AuthService.update_profile(db, current_user, profile_data)
-    return {
-        "success": True,
-        "message": "Profile updated successfully",
-        "data": updated_user
-    }
-
-
-@router.put("/edit-profile", response_model=ProfileResponse)
-async def edit_profile(
-    profile_data: ProfileUpdate,
-    current_user: UserModel = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Edit current user's profile. Same as PUT /profile.
-    Requires authentication (Bearer token).
     """
     updated_user = AuthService.update_profile(db, current_user, profile_data)
     return {
