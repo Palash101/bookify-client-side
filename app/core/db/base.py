@@ -12,5 +12,19 @@ from app.models.gym_class import GymClass
 from app.models.package_discount import PackageDiscount
 from app.models.package import Package
 from app.models.package_pricing import PackagePricing
+from app.models.fitness_program import FitnessProgram
 
-__all__ = ["Base", "Tenant", "User", "Role", "OTP", "TenantAPIKey", "ClassSchedule", "GymClass", "PackageDiscount", "Package", "PackagePricing"]
+__all__ = [
+    "Base",
+    "Tenant",
+    "User",
+    "Role",
+    "OTP",
+    "TenantAPIKey",
+    "ClassSchedule",
+    "GymClass",
+    "PackageDiscount",
+    "Package",
+    "PackagePricing",
+    "FitnessProgram",
+]
