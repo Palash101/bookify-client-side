@@ -12,7 +12,5 @@ class PackageDiscount(Base):
     name = Column(String(150), nullable=True)
     description = Column(Text, nullable=True)
     value = Column(Numeric(10, 2), nullable=True)
-    validity_start_date = Column(Date, nullable=True)
-    validity_end_date = Column(Date, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     type = Column(String(20), nullable=True)  # e.g. flat, percentage (discount_type enum)

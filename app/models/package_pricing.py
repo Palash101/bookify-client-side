@@ -21,3 +21,4 @@ class PackagePricing(Base):
 
     # Relationships
     package = relationship("Package", back_populates="pricing_list", lazy="select", foreign_keys=[package_id])
+    discount = relationship("PackageDiscount", lazy="select", foreign_keys=[discount_id])

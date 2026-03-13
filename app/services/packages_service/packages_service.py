@@ -5,6 +5,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.package import Package
+from app.models.package_pricing import PackagePricing
 
 
 class PackagesService:
@@ -21,7 +22,9 @@ class PackagesService:
         """
         query = (
             db.query(Package)
-            .options(joinedload(Package.pricing_list))
+            .options(
+                joinedload(Package.pricing_list).joinedload(PackagePricing.discount)
+            )
             .filter(Package.tenant_id == tenant_id)
         )
 
@@ -55,7 +58,9 @@ class PackagesService:
     def get_package_detail(db: Session, tenant_id: uuid.UUID, package_id: uuid.UUID) -> Package:
         package = (
             db.query(Package)
-            .options(joinedload(Package.pricing_list))
+            .options(
+                joinedload(Package.pricing_list).joinedload(PackagePricing.discount)
+            )
             .filter(Package.id == package_id, Package.tenant_id == tenant_id)
             .first()
         )

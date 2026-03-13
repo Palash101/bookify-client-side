@@ -5,6 +5,18 @@ from uuid import UUID
 from decimal import Decimal
 
 
+class PackageDiscountResponse(BaseModel):
+    id: UUID
+    name: Optional[str] = None
+    description: Optional[str] = None
+    value: Optional[Decimal] = None
+    type: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class PackagePricingResponse(BaseModel):
     id: UUID
     package_id: UUID
@@ -15,6 +27,7 @@ class PackagePricingResponse(BaseModel):
     is_unlimited: Optional[bool] = None
     persons: Optional[int] = None
     created_at: Optional[datetime] = None
+    discount: Optional[PackageDiscountResponse] = None
 
     class Config:
         from_attributes = True
