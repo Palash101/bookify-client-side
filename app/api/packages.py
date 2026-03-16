@@ -3,9 +3,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db
-from app.dependencies import get_current_tenant_id
-from app.schemas.package import PackageResponse, AllPackagesListResponse, PackageDetailResponse
+from app.dependencies import get_current_tenant_id, get_current_active_user
+from app.schemas.package import (
+    PackageResponse,
+    AllPackagesListResponse,
+    PackageDetailResponse,
+    ActivePackageResponse,
+    ActivePackageData,
+)
 from app.services.packages_service.packages_service import PackagesService
+from app.models.user import User
 import uuid
 
 router = APIRouter()
@@ -57,4 +64,37 @@ async def get_package_detail(
         "success": True,
         "message": "Package detail fetched successfully",
         "data": PackageResponse.model_validate(package),
+    }
+
+
+@router.get("/active", response_model=ActivePackageResponse)
+async def get_active_package(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get current user's latest successful package for this tenant.
+    Returns null data if user has no active package.
+    """
+    package = PackagesService.get_active_package_for_user(
+        db, tenant_id=tenant_id, user_id=current_user.id
+    )
+
+    if not package or not hasattr(package, "_active_order_id"):
+        return {
+            "success": True,
+            "message": "No active package found",
+            "data": None,
+        }
+
+    return {
+        "success": True,
+        "message": "Active package fetched successfully",
+        "data": ActivePackageData(
+            order_id=package._active_order_id,
+            package=PackageResponse.model_validate(package),
+            status=package._active_order_status,
+            purchased_at=package._active_order_created_at,
+        ),
     }

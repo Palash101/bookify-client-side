@@ -7,6 +7,7 @@ The active gateway is resolved per-tenant via the factory.
 
 from typing import Any, Optional
 from uuid import UUID
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
@@ -236,8 +237,34 @@ async def payment_callback(
             ).first()
 
             if order:
-                order.status = result.status.value if hasattr(result.status, "value") else str(result.status)
+                # Update order status + gateway txn id
+                order.status = (
+                    result.status.value if hasattr(result.status, "value") else str(result.status)
+                )
                 order.gateway_transaction_id = result.transaction_id or order.gateway_transaction_id
+
+                # Calculate expiry based on package validity (if available)
+                package = (
+                    db.query(Package)
+                    .filter(Package.id == order.package_id, Package.tenant_id == UUID(tenant_id))
+                    .first()
+                )
+                if package:
+                    expires_at: Optional[datetime] = None
+
+                    # 1) If validity_days set, use created_at + days
+                    if package.validity_days is not None and order.created_at is not None:
+                        expires_at = order.created_at + timedelta(days=package.validity_days)
+                    # 2) Else, if validity_end date set, use that day's end
+                    elif package.validity_end is not None:
+                        expires_at = datetime.combine(
+                            package.validity_end,
+                            datetime.max.time(),
+                            tzinfo=order.created_at.tzinfo if order.created_at else None,
+                        )
+
+                    if expires_at is not None:
+                        order.expires_at = expires_at
 
             txn = PackagePurchaseTransaction(
                 order_id=order.id if order else order_uuid,

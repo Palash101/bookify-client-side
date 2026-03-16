@@ -25,7 +25,7 @@ class PackagePurchaseTransaction(Base):
 
     order_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("package_orders.id", ondelete="CASCADE"),
+        ForeignKey("package_purchase.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

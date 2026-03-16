@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.package import Package
 from app.models.package_pricing import PackagePricing
+from app.models.package_order import PackageOrder
 
 
 class PackagesService:
@@ -66,5 +67,52 @@ class PackagesService:
         )
         if not package:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Package not found")
+        return package
+
+    @staticmethod
+    def get_active_package_for_user(
+        db: Session,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> Optional[Package]:
+        """
+        Return the latest successful & non-expired package for this user+tenant.
+        If no active order, returns None.
+        """
+        from sqlalchemy.sql import func as sa_func
+
+        # Find latest successful, non-expired order
+        order = (
+            db.query(PackageOrder)
+            .filter(
+                PackageOrder.tenant_id == tenant_id,
+                PackageOrder.user_id == user_id,
+                PackageOrder.status == "success",
+                # Either no expiry set yet, or still in future
+                (PackageOrder.expires_at.is_(None)) | (PackageOrder.expires_at > sa_func.now()),
+            )
+            .order_by(PackageOrder.created_at.desc())
+            .first()
+        )
+
+        if not order:
+            return None
+
+        package = (
+            db.query(Package)
+            .options(
+                joinedload(Package.pricing_list).joinedload(PackagePricing.discount)
+            )
+            .filter(Package.id == order.package_id, Package.tenant_id == tenant_id)
+            .first()
+        )
+
+        # Attach order metadata to package instance for schema mapping if needed
+        if package is not None:
+            # non-persistent attrs just for response
+            package._active_order_id = order.id
+            package._active_order_status = order.status
+            package._active_order_created_at = order.created_at
+
         return package
 

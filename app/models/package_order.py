@@ -7,7 +7,8 @@ import uuid
 
 
 class PackageOrder(Base):
-    __tablename__ = "package_orders"
+    # DB table has been renamed to "package_purchase"
+    __tablename__ = "package_purchase"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
 
@@ -32,4 +33,7 @@ class PackageOrder(Base):
         onupdate=func.now(),
         nullable=True,
     )
+
+    # When this purchased package expires for the user
+    expires_at = Column(DateTime(timezone=True), nullable=True)
 

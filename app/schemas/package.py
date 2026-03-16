@@ -66,3 +66,20 @@ class PackageDetailResponse(BaseModel):
     success: bool = True
     message: str = "Package detail fetched successfully"
     data: PackageResponse
+
+
+class ActivePackageData(BaseModel):
+    """
+    Currently active package info for a user.
+    Combines package + basic order metadata.
+    """
+    order_id: UUID
+    package: PackageResponse
+    status: str
+    purchased_at: datetime
+
+
+class ActivePackageResponse(BaseModel):
+    success: bool = True
+    message: str = "Active package fetched successfully"
+    data: Optional[ActivePackageData] = None
