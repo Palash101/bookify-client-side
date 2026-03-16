@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, Text
+from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, Text, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 
@@ -15,6 +15,8 @@ class PackageOrder(Base):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     package_id = Column(UUID(as_uuid=True), ForeignKey("packages.id"), nullable=False, index=True)
+    # Selected pricing option for this purchase (session type, persons, etc.)
+    pricing_id = Column(UUID(as_uuid=True), ForeignKey("package_pricing.id"), nullable=True, index=True)
 
     amount = Column(Numeric(10, 2), nullable=False)
     currency = Column(String(3), nullable=False)
@@ -23,7 +25,7 @@ class PackageOrder(Base):
 
     status = Column(String, nullable=False, default="pending")
 
-    # Extra context about the order (client device, source, etc.)
+    # Extra context about the order (client device, source, persons, sessions, etc.)
     extra_metadata = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)

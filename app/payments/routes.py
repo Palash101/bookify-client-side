@@ -59,10 +59,20 @@ class RefundRequest(BaseModel):
 class PackagePurchaseRequest(BaseModel):
     """
     Request body for package purchase flow.
-    Frontend se sirf package_id + payment_gateway aayega.
-    Amount/currency backend pricing se derive hota hai.
+    Frontend se:
+      - package_id
+      - package_pricing_id (selected price / session option)
+      - persons (kitne log is purchase me cover honge)
+      - optional payment_gateway
+    aayega. Amount/currency backend pricing se derive hota hai.
     """
     package_id: UUID
+    package_pricing_id: UUID
+    persons: Optional[int] = Field(
+        default=1,
+        description="Number of persons for this purchase (e.g. 2 for partner training)",
+        gt=0,
+    )
     payment_gateway: Optional[str] = Field(
         default=None,
         description="Which gateway to use (e.g. 'stripe', 'paypal'). If omitted, tenant default is used.",
@@ -98,12 +108,14 @@ async def initiate_package_purchase(
     # Resolve gateway for this tenant (or override via payment_gateway)
     gateway = get_gateway(tenant_id, body.payment_gateway)
 
-    # Derive amount/currency from package pricing
+    # Derive amount/currency from selected package pricing
     pricing_query = (
         db.query(PackagePricing, Package)
         .join(Package, Package.id == PackagePricing.package_id)
-        .filter(PackagePricing.package_id == body.package_id)
-        .order_by(PackagePricing.price.asc().nullslast())
+        .filter(
+            PackagePricing.id == body.package_pricing_id,
+            PackagePricing.package_id == body.package_id,
+        )
     )
     pricing_row = pricing_query.first()
 
@@ -118,6 +130,14 @@ async def initiate_package_purchase(
             detail="Pricing not configured for this package",
         )
 
+    # Validate persons against pricing rule (if defined)
+    persons_requested = body.persons or 1
+    if pricing.persons is not None and persons_requested != pricing.persons:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This pricing is valid for exactly {pricing.persons} person(s).",
+        )
+
     amount_value = float(pricing.price)
     currency_code = "QAR"  # TODO: if multi-currency later, derive from tenant/settings
 
@@ -126,11 +146,16 @@ async def initiate_package_purchase(
         tenant_id=UUID(tenant_id),
         user_id=current_user.id,
         package_id=body.package_id,
+        pricing_id=pricing.id,
         amount=amount_value,
         currency=currency_code,
         gateway=gateway.GATEWAY_TYPE.value,
         status="pending",
-        extra_metadata=None,
+        extra_metadata={
+            "persons": persons_requested,
+            "session_type": pricing.session_type,
+            "session_count": pricing.session_count,
+        },
     )
     db.add(order)
     db.commit()
@@ -160,7 +185,13 @@ async def initiate_package_purchase(
         customer_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
         or "Customer",
         description=package.name if package and package.name else f"Package purchase {body.package_id}",
-        metadata={"package_id": str(body.package_id)},
+        metadata={
+            "package_id": str(body.package_id),
+            "package_pricing_id": str(pricing.id),
+            "persons": persons_requested,
+            "session_type": pricing.session_type,
+            "session_count": pricing.session_count,
+        },
     )
 
     response = gateway.create_payment(payment_request)
