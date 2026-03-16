@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import auth, classes, packages, trainers, locations, fitness_programs
+from app.api import auth, classes, packages, trainers, locations, fitness_programs, gym
 
 api_router = APIRouter()
 
@@ -14,3 +14,4 @@ api_router.include_router(
     prefix="/training-programs",
     tags=["training-programs"],
 )
+api_router.include_router(gym.router, prefix="/gym", tags=["gym"])
