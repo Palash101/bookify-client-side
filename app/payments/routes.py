@@ -1,0 +1,281 @@
+"""
+FastAPI Payment Routes.
+
+All payment operations go through these endpoints.
+The active gateway is resolved per-tenant via the factory.
+"""
+
+from typing import Any, Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, EmailStr, Field
+from sqlalchemy.orm import Session
+
+from .base import GatewayType, PaymentRequest
+from .factory import get_gateway, TenantPaymentSettings
+from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
+from app.models.user import User
+from app.models.package_order import PackageOrder
+from app.models.package_pricing import PackagePricing
+from app.models.package import Package
+from app.models.package_purchase_transaction import PackagePurchaseTransaction
+
+# Use a single, consistent tag name for Swagger ("payments")
+router = APIRouter(prefix="/payment", tags=["payments"])
+
+
+# ---------------------------------------------------------------------------
+# Request / Response Schemas
+# ---------------------------------------------------------------------------
+
+class InitiatePaymentRequest(BaseModel):
+    order_id: str
+    amount: float = Field(..., gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    customer_email: EmailStr
+    customer_name: str
+    description: str = ""
+    gateway_override: Optional[str] = Field(
+        default=None,
+        description="Force a specific gateway (e.g. 'stripe'). Uses tenant default if omitted.",
+    )
+    metadata: dict[str, Any] = {}
+
+
+class VerifyPaymentRequest(BaseModel):
+    transaction_id: str
+    gateway: Optional[str] = None
+
+
+class RefundRequest(BaseModel):
+    transaction_id: str
+    amount: float = Field(..., gt=0)
+    reason: str = ""
+    gateway: Optional[str] = None
+
+
+class PackagePurchaseRequest(BaseModel):
+    """
+    Request body for package purchase flow.
+    Frontend se sirf package_id + payment_gateway aayega.
+    Amount/currency backend pricing se derive hota hai.
+    """
+    package_id: UUID
+    payment_gateway: Optional[str] = Field(
+        default=None,
+        description="Which gateway to use (e.g. 'stripe', 'paypal'). If omitted, tenant default is used.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dependency: extract tenant_id using existing TenantMiddleware + dependency
+# ---------------------------------------------------------------------------
+
+def get_tenant_id(tenant_id: UUID = Depends(get_current_tenant_id)) -> str:
+    """
+    Resolve tenant from X-Tenant-Key header (via TenantMiddleware)
+    and return it as string for the payment factory.
+    """
+    return str(tenant_id)
+
+
+@router.post("/package-purchase")
+async def initiate_package_purchase(
+    body: PackagePurchaseRequest,
+    tenant_id: str = Depends(get_tenant_id),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    High-level API for package purchase.
+
+    - Creates a PackageOrder row for the current user + package.
+    - Resolves tenant's active payment gateway.
+    - Creates a payment session and returns hosted payment URL.
+    """
+    # Resolve gateway for this tenant (or override via payment_gateway)
+    gateway = get_gateway(tenant_id, body.payment_gateway)
+
+    # Derive amount/currency from package pricing
+    pricing_query = (
+        db.query(PackagePricing, Package)
+        .join(Package, Package.id == PackagePricing.package_id)
+        .filter(PackagePricing.package_id == body.package_id)
+        .order_by(PackagePricing.price.asc().nullslast())
+    )
+    pricing_row = pricing_query.first()
+
+    if pricing_row:
+        pricing, package = pricing_row
+    else:
+        pricing, package = None, None
+
+    if not pricing or pricing.price is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pricing not configured for this package",
+        )
+
+    amount_value = float(pricing.price)
+    currency_code = "QAR"  # TODO: if multi-currency later, derive from tenant/settings
+
+    # Create order in our DB
+    order = PackageOrder(
+        tenant_id=UUID(tenant_id),
+        user_id=current_user.id,
+        package_id=body.package_id,
+        amount=amount_value,
+        currency=currency_code,
+        gateway=gateway.GATEWAY_TYPE.value,
+        status="pending",
+        extra_metadata=None,
+    )
+    db.add(order)
+    db.commit()
+    db.refresh(order)
+
+    # Log initial transaction event (order created / payment initiated)
+    txn = PackagePurchaseTransaction(
+        order_id=order.id,
+        tenant_id=order.tenant_id,
+        gateway=gateway.GATEWAY_TYPE.value,
+        gateway_txn_id=None,
+        event_type="created",
+        status="pending",
+        amount=amount_value,
+        currency=currency_code,
+        raw_payload=None,
+    )
+    db.add(txn)
+    db.commit()
+
+    # Initiate payment with gateway
+    payment_request = PaymentRequest(
+        amount=amount_value,
+        currency=currency_code,
+        order_id=str(order.id),
+        customer_email=current_user.email or "",
+        customer_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
+        or "Customer",
+        description=package.name if package and package.name else f"Package purchase {body.package_id}",
+        metadata={"package_id": str(body.package_id)},
+    )
+
+    response = gateway.create_payment(payment_request)
+
+    if not response.success:
+        # Mark order as failed to initiate
+        order.status = "failed"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=response.error_message or "Payment initiation failed.",
+        )
+
+    # Store gateway transaction ID on the order
+    order.gateway_transaction_id = response.transaction_id
+
+    # Also update the "created" transaction with gateway_txn_id, or insert new record
+    txn.gateway_txn_id = response.transaction_id or ""
+    db.commit()
+
+    return {
+        "order_id":        str(order.id),
+        "payment_url":     response.payment_url,
+        "transaction_id":  response.transaction_id,
+        "gateway":         response.gateway,
+        "status":          response.status,
+    }
+
+
+@router.get("/callback/{gateway_type}")
+@router.post("/callback/{gateway_type}")
+async def payment_callback(
+    gateway_type: str,
+    request: Request,
+    tenant_id: str = Depends(get_tenant_id),
+    db: Session = Depends(get_db),
+):
+    """
+    Unified callback endpoint for all gateways.
+    URL pattern: /payment/callback/{gateway_type}
+    Handles both GET (redirect) and POST (webhook) callbacks.
+    """
+    # Merge query params + JSON body into one payload dict
+    payload: dict[str, Any] = dict(request.query_params)
+
+    try:
+        json_body = await request.json()
+        if isinstance(json_body, dict):
+            payload.update(json_body)
+    except Exception:
+        pass  # Not a JSON request — that's fine
+
+    # For Stripe webhooks we need the raw body for signature verification
+    if gateway_type == GatewayType.STRIPE.value:
+        payload["raw_body"] = await request.body()
+        payload["stripe_signature"] = request.headers.get("stripe-signature", "")
+
+    gateway = get_gateway(tenant_id, gateway_type)
+    result = gateway.handle_callback(payload)
+
+    # ----------------------------------------------------------------
+    # Persist result to orders + transaction log
+    # ----------------------------------------------------------------
+    if result.order_id:
+        try:
+            order_uuid = UUID(result.order_id)
+        except ValueError:
+            order_uuid = None
+
+        if order_uuid is not None:
+            order = db.query(PackageOrder).filter(
+                PackageOrder.id == order_uuid,
+                PackageOrder.tenant_id == UUID(tenant_id),
+            ).first()
+
+            if order:
+                order.status = result.status.value if hasattr(result.status, "value") else str(result.status)
+                order.gateway_transaction_id = result.transaction_id or order.gateway_transaction_id
+
+            txn = PackagePurchaseTransaction(
+                order_id=order.id if order else order_uuid,
+                tenant_id=UUID(tenant_id),
+                gateway=result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway),
+                gateway_txn_id=result.transaction_id or "",
+                event_type="callback",
+                status=result.status.value if hasattr(result.status, "value") else str(result.status),
+                amount=result.amount,
+                currency=result.currency,
+                raw_payload=result.raw_payload,
+            )
+            db.add(txn)
+            db.commit()
+
+    return {
+        "success":        result.success,
+        "order_id":       result.order_id,
+        "transaction_id": result.transaction_id,
+        "status":         result.status,
+        "gateway":        result.gateway,
+        "amount":         result.amount,
+        "currency":       result.currency,
+    }
+
+
+@router.get("/gateways")
+async def list_active_gateways(tenant_id: str = Depends(get_tenant_id)):
+    """
+    Return which payment gateways are configured for the current tenant.
+    Useful for apps that want to show multiple payment options
+    (e.g. Stripe / PayPal) based on tenant setup.
+    """
+    settings = TenantPaymentSettings.get(tenant_id)
+    configured = list(settings.get("gateways", {}).keys())
+    active = settings.get("active_gateway")
+
+    return {
+        "active_gateway":      active,
+        "configured_gateways": configured,
+    }
