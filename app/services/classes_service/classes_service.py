@@ -10,18 +10,20 @@ class ClassesService:
     @staticmethod
     def list_classes(
         db: Session,
-        class_date: Optional[date] = None,
+        tenant_id,
+        start_date: date,
+        end_date: date,
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
     ) -> List[GymClass]:
         """
-        List classes with optional date filter, search and sorting.
+        List classes for a tenant in a date range, with optional search and sorting.
         """
-        query = db.query(GymClass)
-
-        if class_date is not None:
-            query = query.filter(GymClass.class_date == class_date)
+        query = db.query(GymClass).filter(
+            GymClass.class_date >= start_date,
+            GymClass.class_date <= end_date,
+        )
 
         # Search by title
         if search:

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -13,10 +13,11 @@ router = APIRouter()
 
 @router.get("", response_model=ClassesListResponse)
 async def get_classes_by_date(
-    date_filter: Optional[date] = Query(
-        None,
-        alias="date",
-        description="Optional. Date in YYYY-MM-DD to filter classes. Omit to get all classes.",
+    days: int = Query(
+        7,
+        ge=1,
+        le=30,
+        description="How many days ahead from today to include (e.g. 7 or 15).",
     ),
     search: Optional[str] = Query(None, description="Search classes by title"),
     sort_by: Optional[str] = Query(
@@ -29,13 +30,17 @@ async def get_classes_by_date(
     db: Session = Depends(get_db),
 ):
     """
-    Get gym classes with optional date filter, search and sorting.
-    Date filter param name is `date`.
+    Get gym classes for current tenant from today up to next N days.
     Requires X-Tenant-Key header.
     """
+    start_date = date.today()
+    end_date = start_date + timedelta(days=days - 1)
+
     classes = ClassesService.list_classes(
         db,
-        class_date=date_filter,
+        tenant_id=tenant_id,
+        start_date=start_date,
+        end_date=end_date,
         search=search,
         sort_by=sort_by,
         sort_order=sort_order,
