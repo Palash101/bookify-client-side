@@ -2,10 +2,10 @@ from datetime import date, datetime
 from typing import Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from app.models.gym_class import GymClass
-from app.models.class_schedule import ClassSchedule
 from app.models.user import User
 from app.models.tenant import Tenant
 
@@ -34,8 +34,9 @@ class ClassesService:
         """
         List classes for a tenant in a date range, with optional search and sorting.
         Rules:
-          - Only classes whose schedule belongs to this tenant (via created_by user).
-          - Always include schedules with status = 'published'.
+          - Only classes for this tenant (via trainer_id -> users.tenant_id).
+          - Status/publish gating is based on gym_classes.status + gym_classes.publish_at.
+          - Always include status != 'draft'.
           - For status = 'draft', include only when publish_at <= tenant's current time.
         """
         # Resolve tenant timezone (DB may store "IST" etc.; zoneinfo needs IANA e.g. "Asia/Kolkata")
@@ -50,16 +51,17 @@ class ClassesService:
             tz = ZoneInfo("UTC")
         tenant_now: datetime = datetime.now(tz)
 
+        # Tenant bind is via trainer user. This matches typical data where classes are owned by tenant trainers.
         query = (
             db.query(GymClass)
-            .join(ClassSchedule, GymClass.schedule_id == ClassSchedule.id)
-            .join(User, ClassSchedule.created_by == User.id)
-            .options(joinedload(GymClass.schedule))
+            .outerjoin(User, GymClass.trainer_id == User.id)
             .filter(
-                User.tenant_id == tenant_id,
                 GymClass.class_date >= start_date,
                 GymClass.class_date <= end_date,
-                ClassSchedule.status.in_(["published", "draft"]),
+                or_(
+                    GymClass.trainer_id.is_(None),
+                    User.tenant_id == tenant_id,
+                ),
             )
         )
 
@@ -87,19 +89,19 @@ class ClassesService:
 
         all_classes: List[GymClass] = query.all()
 
-        # Post-filter draft schedules by publish_at vs tenant current time
+        # Post-filter draft classes by publish_at vs tenant current time
         result: List[GymClass] = []
         for gym_class in all_classes:
-            schedule: Optional[ClassSchedule] = gym_class.schedule
-            if not schedule:
+            status = (gym_class.status or "").lower()
+            if status == "draft":
+                publish_at = gym_class.publish_at
+                if publish_at is None:
+                    continue
+                if publish_at <= tenant_now:
+                    result.append(gym_class)
                 continue
 
-            if schedule.status == "published":
-                result.append(gym_class)
-            elif schedule.status == "draft" and schedule.publish_at is not None:
-                # publish_at assumed stored in tenant's timezone
-                if schedule.publish_at <= tenant_now:
-                    result.append(gym_class)
+            result.append(gym_class)
 
         return result
 
