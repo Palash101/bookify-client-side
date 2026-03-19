@@ -8,6 +8,11 @@ from typing import Optional
 from app.core.settings import settings
 from app.core.middleware import TenantMiddleware
 from app.api import api_router
+from app.core.db.session import SessionLocal
+from app.models.sales import Sale
+from app.models.sales_transactions import SalesTransactions
+from app.models.wallet_transactions import WalletTransaction
+from app.models.user import User
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -140,10 +145,66 @@ async def health_check():
 
 @app.get("/payment/success")
 async def payment_success(session_id: Optional[str] = None):
+    if not session_id:
+        return {
+            "success": False,
+            "message": "Payment success redirect received, but session_id is missing.",
+            "session_id": session_id,
+        }
+
+    sale = None
+    wallet_txn = None
+    wallet_credited = False
+
+    db = SessionLocal()
+    try:
+        sale = db.query(Sale).filter(Sale.gateway_transaction_id == session_id).first()
+        wallet_txn = db.query(WalletTransaction).filter(WalletTransaction.transaction_id == session_id).first()
+
+        if sale and sale.status != "succeeded":
+            sale.status = "succeeded"
+            sale_log = SalesTransactions(
+                order_id=sale.id,
+                tenant_id=sale.tenant_id,
+                type=sale.type or "package_gateway",
+                gateway=sale.gateway,
+                gateway_txn_id=session_id,
+                event_type="success_redirect",
+                status="succeeded",
+                amount=sale.amount,
+                currency=sale.currency,
+                raw_payload={"source": "payment_success_redirect", "session_id": session_id},
+            )
+            db.add(sale_log)
+
+        if (
+            wallet_txn
+            and wallet_txn.status != "succeeded"
+            and wallet_txn.direction == "credit"
+            and wallet_txn.transaction_type == "wallet_add"
+        ):
+            user = db.query(User).filter(User.id == wallet_txn.user_id).first()
+            if user:
+                before = float(user.wallet or 0)
+                credit_amount = float(wallet_txn.amount or 0)
+                after = before + credit_amount
+                user.wallet = after
+                wallet_txn.status = "succeeded"
+                wallet_txn.balance_before = before
+                wallet_txn.balance_after = after
+                wallet_credited = True
+
+        db.commit()
+    finally:
+        db.close()
+
     return {
         "success": True,
-        "message": "Payment success redirect received",
+        "message": "Payment success redirect received and records synced.",
         "session_id": session_id,
+        "sale_updated": bool(sale),
+        "wallet_transaction_updated": bool(wallet_txn),
+        "wallet_credited": wallet_credited,
     }
 
 

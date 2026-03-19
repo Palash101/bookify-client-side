@@ -22,6 +22,7 @@ from app.models.package_pricing import PackagePricing
 from app.models.package import Package
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
+from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
@@ -101,6 +102,36 @@ def get_tenant_id(tenant_id: UUID = Depends(get_current_tenant_id)) -> str:
     and return it as string for the payment factory.
     """
     return str(tenant_id)
+
+def _resolve_tenant_for_stripe_webhook(db: Session, raw_body: bytes, stripe_signature: str) -> Optional[str]:
+    """
+    Stripe webhooks do not include X-Tenant-Key. We resolve tenant by trying to
+    verify the signature against each tenant's configured webhook_secret.
+    Returns tenant_id as string if matched, else None.
+    """
+    try:
+        import stripe as stripe_lib  # type: ignore
+    except Exception:
+        return None
+
+    rows = (
+        db.query(TenantPaymentSettingsModel)
+        .filter(TenantPaymentSettingsModel.gateway_type == GatewayType.STRIPE.value)
+        .all()
+    )
+
+    for row in rows:
+        settings = row.payment_config or {}
+        secret = settings.get("webhook_secret")
+        if not secret:
+            continue
+        try:
+            stripe_lib.Webhook.construct_event(raw_body, stripe_signature, secret)
+            return str(row.tenant_id)
+        except Exception:
+            continue
+
+    return None
 
 
 @router.post("/package-purchase")
@@ -362,7 +393,6 @@ async def package_purchase_with_wallet(
 async def payment_callback(
     gateway_type: str,
     request: Request,
-    tenant_id: str = Depends(get_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -380,10 +410,27 @@ async def payment_callback(
     except Exception:
         pass  # Not a JSON request — that's fine
 
-    # For Stripe webhooks we need the raw body for signature verification
+    tenant_id: Optional[str] = None
+
+    # For Stripe webhooks we need the raw body for signature verification and tenant auto-resolve
     if gateway_type == GatewayType.STRIPE.value:
         payload["raw_body"] = await request.body()
         payload["stripe_signature"] = request.headers.get("stripe-signature", "")
+        tenant_id = _resolve_tenant_for_stripe_webhook(
+            db,
+            payload["raw_body"],
+            payload.get("stripe_signature", ""),
+        )
+        if tenant_id is None:
+            raise HTTPException(status_code=401, detail="Unable to resolve tenant for stripe webhook")
+    else:
+        # For non-stripe gateways, keep requiring tenant header/middleware
+        tenant_id = None
+        try:
+            tenant_uuid = await get_current_tenant_id(request)
+            tenant_id = str(tenant_uuid)
+        except Exception:
+            raise HTTPException(status_code=401, detail="X-Tenant-Key header is required")
 
     gateway = get_gateway(tenant_id, gateway_type)
     result = gateway.handle_callback(payload)
