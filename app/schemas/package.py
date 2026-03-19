@@ -74,9 +74,11 @@ class ActivePackageData(BaseModel):
     Combines package + basic order metadata.
     """
     order_id: UUID
-    package: PackageResponse
+    package_id: UUID
+    package_name: Optional[str] = None
     status: str
     purchased_at: datetime
+    expires_at: Optional[datetime] = None
 
 
 class ActivePackageResponse(BaseModel):

@@ -75,9 +75,11 @@ async def get_active_package(
         "message": "Active package fetched successfully",
         "data": ActivePackageData(
             order_id=package._active_order_id,
-            package=PackageResponse.model_validate(package),
+            package_id=package.id,
+            package_name=package.name,
             status=package._active_order_status,
             purchased_at=package._active_order_created_at,
+            expires_at=getattr(package, "_active_order_expires_at", None),
         ),
     }
 

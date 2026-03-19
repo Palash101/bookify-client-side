@@ -117,6 +117,7 @@ class PackagesService:
             package._active_order_id = order.id
             package._active_order_status = order.status
             package._active_order_created_at = order.created_at
+            package._active_order_expires_at = order.expires_at
 
         return package
 
