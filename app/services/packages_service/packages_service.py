@@ -87,7 +87,11 @@ class PackagesService:
             .filter(
                 Sale.tenant_id == tenant_id,
                 Sale.user_id == user_id,
-                Sale.status == "success",
+                # Only package purchases should be considered active plans
+                Sale.type.in_(["package_gateway", "package_wallet"]),
+                Sale.package_id.isnot(None),
+                # Current payment flow uses "succeeded" (legacy data may have "success")
+                Sale.status.in_(["succeeded", "success"]),
                 # Either no expiry set yet, or still in future
                 (Sale.expires_at.is_(None)) | (Sale.expires_at > sa_func.now()),
             )
