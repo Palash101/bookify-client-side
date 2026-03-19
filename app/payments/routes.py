@@ -418,8 +418,12 @@ async def payment_callback(
 
             if order:
                 # Update order status + gateway txn id
+                raw_status = result.status.value if hasattr(result.status, "value") else str(result.status)
+                # For wallet_add, keep status aligned with wallet mapping (succeeded/failed/cancelled)
                 order.status = (
-                    result.status.value if hasattr(result.status, "value") else str(result.status)
+                    _wallet_status_from_gateway(result.status)
+                    if getattr(order, "type", None) == "wallet_add"
+                    else raw_status
                 )
                 order.gateway_transaction_id = result.transaction_id or order.gateway_transaction_id
 
@@ -488,7 +492,11 @@ async def payment_callback(
         if wallet_txn.status != "succeeded":
             wallet_txn.status = new_status
 
-            if new_status == "succeeded":
+            if (
+                new_status == "succeeded"
+                and wallet_txn.direction == "credit"
+                and wallet_txn.transaction_type == "wallet_add"
+            ):
                 user = db.query(User).filter(User.id == wallet_txn.user_id).first()
                 if user:
                     before = float(user.wallet or 0)

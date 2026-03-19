@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.openapi.utils import get_openapi
+from typing import Optional
 from app.core.settings import settings
 from app.core.middleware import TenantMiddleware
 from app.api import api_router
@@ -129,6 +130,30 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+# ---------------------------------------------------------------------------
+# Payment redirect endpoints (no /api/v1 prefix)
+# Gateways may redirect users to /payment/success or /payment/cancel.
+# Webhooks/callbacks are handled under /api/v1/payment/callback/{gateway_type}.
+# ---------------------------------------------------------------------------
+
+@app.get("/payment/success")
+async def payment_success(session_id: Optional[str] = None):
+    return {
+        "success": True,
+        "message": "Payment success redirect received",
+        "session_id": session_id,
+    }
+
+
+@app.get("/payment/cancel")
+async def payment_cancel(session_id: Optional[str] = None):
+    return {
+        "success": False,
+        "message": "Payment cancelled redirect received",
+        "session_id": session_id,
+    }
 
 
 if __name__ == "__main__":
