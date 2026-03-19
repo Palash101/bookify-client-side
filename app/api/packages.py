@@ -49,24 +49,6 @@ async def get_all_packages(
     }
 
 
-@router.get("/{package_id}", response_model=PackageDetailResponse)
-async def get_package_detail(
-    package_id: uuid.UUID,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
-):
-    """
-    Get single package detail by ID. Package must belong to current tenant.
-    Requires X-Tenant-Key header.
-    """
-    package = PackagesService.get_package_detail(db, tenant_id=tenant_id, package_id=package_id)
-    return {
-        "success": True,
-        "message": "Package detail fetched successfully",
-        "data": PackageResponse.model_validate(package),
-    }
-
-
 @router.get("/active", response_model=ActivePackageResponse)
 async def get_active_package(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -97,4 +79,22 @@ async def get_active_package(
             status=package._active_order_status,
             purchased_at=package._active_order_created_at,
         ),
+    }
+
+
+@router.get("/{package_id}", response_model=PackageDetailResponse)
+async def get_package_detail(
+    package_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: Session = Depends(get_db),
+):
+    """
+    Get single package detail by ID. Package must belong to current tenant.
+    Requires X-Tenant-Key header.
+    """
+    package = PackagesService.get_package_detail(db, tenant_id=tenant_id, package_id=package_id)
+    return {
+        "success": True,
+        "message": "Package detail fetched successfully",
+        "data": PackageResponse.model_validate(package),
     }
