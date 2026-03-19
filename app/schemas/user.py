@@ -72,6 +72,7 @@ class UserInDB(UserBase):
     id: UUID
     tenant_id: UUID
     role_id: UUID
+    wallet: Optional[float] = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     

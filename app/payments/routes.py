@@ -85,13 +85,6 @@ class PackagePurchaseRequest(BaseModel):
     )
 
 
-class PackagePurchaseWalletRequest(BaseModel):
-    """Request body for package purchase paid from wallet (no gateway)."""
-    package_id: UUID
-    package_pricing_id: UUID
-    persons: Optional[int] = Field(default=1, gt=0)
-
-
 # ---------------------------------------------------------------------------
 # Dependency: extract tenant_id using existing TenantMiddleware + dependency
 # ---------------------------------------------------------------------------
@@ -363,29 +356,6 @@ async def initiate_package_purchase(
         "gateway":         response.gateway,
         "status":          response.status,
     }
-
-
-@router.post("/package-purchase-wallet")
-async def package_purchase_with_wallet(
-    body: PackagePurchaseWalletRequest,
-    tenant_id: str = Depends(get_tenant_id),
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Backward-compatible wrapper. Prefer POST /payment/package-purchase with payment_method='wallet'.
-    """
-    return await initiate_package_purchase(
-        body=PackagePurchaseRequest(
-            package_id=body.package_id,
-            package_pricing_id=body.package_pricing_id,
-            persons=body.persons,
-            payment_method="wallet",
-        ),
-        tenant_id=tenant_id,
-        current_user=current_user,
-        db=db,
-    )
 
 
 @router.get("/callback/{gateway_type}")
