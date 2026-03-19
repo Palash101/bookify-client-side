@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Text, Index
+from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Text, Index, Numeric
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -37,6 +37,9 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=True)
     # user_type: "member", "client", "admin" etc.
     user_type = Column(String(20), nullable=False, server_default="member")
+
+    # Wallet balance (amount available for purchases)
+    wallet = Column(Numeric(12, 2), nullable=True, server_default="0")
     
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)

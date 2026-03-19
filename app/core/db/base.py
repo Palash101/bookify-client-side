@@ -14,8 +14,9 @@ from app.models.package import Package
 from app.models.package_pricing import PackagePricing
 from app.models.fitness_program import FitnessProgram
 from app.models.tenant_payment_settings import TenantPaymentSettings
-from app.models.package_order import PackageOrder
-from app.models.package_purchase_transaction import PackagePurchaseTransaction
+from app.models.sales import Sale
+from app.models.sales_transactions import SalesTransactions
+from app.models.wallet_transactions import WalletTransaction
 
 __all__ = [
     "Base",
@@ -31,6 +32,7 @@ __all__ = [
     "PackagePricing",
     "FitnessProgram",
     "TenantPaymentSettings",
-    "PackageOrder",
-    "PackagePurchaseTransaction",
+    "Sale",
+    "SalesTransactions",
+    "WalletTransaction",
 ]

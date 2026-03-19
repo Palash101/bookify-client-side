@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.package import Package
 from app.models.package_pricing import PackagePricing
-from app.models.package_order import PackageOrder
+from app.models.sales import Sale
 
 
 class PackagesService:
@@ -81,17 +81,17 @@ class PackagesService:
         """
         from sqlalchemy.sql import func as sa_func
 
-        # Find latest successful, non-expired order
+        # Find latest successful, non-expired sale (order)
         order = (
-            db.query(PackageOrder)
+            db.query(Sale)
             .filter(
-                PackageOrder.tenant_id == tenant_id,
-                PackageOrder.user_id == user_id,
-                PackageOrder.status == "success",
+                Sale.tenant_id == tenant_id,
+                Sale.user_id == user_id,
+                Sale.status == "success",
                 # Either no expiry set yet, or still in future
-                (PackageOrder.expires_at.is_(None)) | (PackageOrder.expires_at > sa_func.now()),
+                (Sale.expires_at.is_(None)) | (Sale.expires_at > sa_func.now()),
             )
-            .order_by(PackageOrder.created_at.desc())
+            .order_by(Sale.created_at.desc())
             .first()
         )
 

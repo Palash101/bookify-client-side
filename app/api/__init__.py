@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api import auth, classes, packages, trainers, locations, fitness_programs, gym
+from app.api import auth, classes, packages, trainers, locations, fitness_programs, gym, wallet
 from app.payments import routes as payment_routes
 
 api_router = APIRouter()
@@ -16,6 +16,7 @@ api_router.include_router(
     tags=["training-programs"],
 )
 api_router.include_router(gym.router, prefix="/gym", tags=["gym"])
+api_router.include_router(wallet.router, prefix="")
 api_router.include_router(
     payment_routes.router,
     prefix="",

@@ -13,8 +13,8 @@ import uuid
 from app.core.db.session import Base
 
 
-class PackagePurchaseTransaction(Base):
-    __tablename__ = "package_purchase_transactions"
+class SalesTransactions(Base):
+    __tablename__ = "sales_transactions"
 
     id = Column(
         UUID(as_uuid=True),
@@ -25,7 +25,7 @@ class PackagePurchaseTransaction(Base):
 
     order_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("package_purchase.id", ondelete="CASCADE"),
+        ForeignKey("sales.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -36,6 +36,9 @@ class PackagePurchaseTransaction(Base):
         nullable=False,
         index=True,
     )
+
+    # wallet_add | package_gateway | package_wallet
+    type = Column(String(20), nullable=False, server_default="package_gateway", index=True)
 
     gateway = Column(String, nullable=False)
     # Can be NULL for initial "created" event before gateway returns an ID

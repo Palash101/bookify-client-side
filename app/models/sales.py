@@ -6,17 +6,30 @@ from app.core.db.session import Base
 import uuid
 
 
-class PackageOrder(Base):
-    # DB table has been renamed to "package_purchase"
-    __tablename__ = "package_purchase"
+class Sale(Base):
+    """
+    Represents a purchased package (sale) for a user.
+    """
+
+    __tablename__ = "sales"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
 
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    package_id = Column(UUID(as_uuid=True), ForeignKey("packages.id"), nullable=False, index=True)
+    package_id = Column(UUID(as_uuid=True), ForeignKey("packages.id"), nullable=True, index=True)
     # Selected pricing option for this purchase (session type, persons, etc.)
     pricing_id = Column(UUID(as_uuid=True), ForeignKey("package_pricing.id"), nullable=True, index=True)
+
+    # wallet_add | package_gateway | package_wallet
+    type = Column(String(20), nullable=False, server_default="package_gateway", index=True)
+
+    wallet_transaction_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("wallet_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     amount = Column(Numeric(10, 2), nullable=False)
     currency = Column(String(3), nullable=False)

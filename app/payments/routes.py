@@ -5,9 +5,9 @@ All payment operations go through these endpoints.
 The active gateway is resolved per-tenant via the factory.
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 from uuid import UUID
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
@@ -17,10 +17,11 @@ from .base import GatewayType, PaymentRequest
 from .factory import get_gateway, TenantPaymentSettings
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
 from app.models.user import User
-from app.models.package_order import PackageOrder
+from app.models.sales import Sale
 from app.models.package_pricing import PackagePricing
 from app.models.package import Package
-from app.models.package_purchase_transaction import PackagePurchaseTransaction
+from app.models.sales_transactions import SalesTransactions
+from app.models.wallet_transactions import WalletTransaction
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
@@ -73,10 +74,21 @@ class PackagePurchaseRequest(BaseModel):
         description="Number of persons for this purchase (e.g. 2 for partner training)",
         gt=0,
     )
+    payment_method: Literal["gateway", "wallet"] = Field(
+        default="gateway",
+        description="Use 'gateway' for online payment or 'wallet' for wallet deduction.",
+    )
     payment_gateway: Optional[str] = Field(
         default=None,
         description="Which gateway to use (e.g. 'stripe', 'paypal'). If omitted, tenant default is used.",
     )
+
+
+class PackagePurchaseWalletRequest(BaseModel):
+    """Request body for package purchase paid from wallet (no gateway)."""
+    package_id: UUID
+    package_pricing_id: UUID
+    persons: Optional[int] = Field(default=1, gt=0)
 
 
 # ---------------------------------------------------------------------------
@@ -101,13 +113,10 @@ async def initiate_package_purchase(
     """
     High-level API for package purchase.
 
-    - Creates a PackageOrder row for the current user + package.
+    - Creates a Sale row for the current user + package.
     - Resolves tenant's active payment gateway.
     - Creates a payment session and returns hosted payment URL.
     """
-    # Resolve gateway for this tenant (or override via payment_gateway)
-    gateway = get_gateway(tenant_id, body.payment_gateway)
-
     # Derive amount/currency from selected package pricing
     pricing_query = (
         db.query(PackagePricing, Package)
@@ -141,12 +150,115 @@ async def initiate_package_purchase(
     amount_value = float(pricing.price)
     currency_code = "QAR"  # TODO: if multi-currency later, derive from tenant/settings
 
-    # Create order in our DB
-    order = PackageOrder(
+    # --------------------------
+    # WALLET payment method
+    # --------------------------
+    if body.payment_method == "wallet":
+        balance_before = float(current_user.wallet or 0)
+        if balance_before < amount_value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Insufficient wallet balance. Required: {amount_value} {currency_code}, available: {balance_before}",
+            )
+
+        balance_after = balance_before - amount_value
+
+        wallet_txn = WalletTransaction(
+            user_id=current_user.id,
+            order_id=None,  # set after sale created
+            direction="debit",
+            transaction_type="package_wallet_purchase",
+            transaction_id=None,
+            status="succeeded",
+            metadata_={
+                "purpose": "package_purchase",
+                "tenant_id": tenant_id,
+                "package_id": str(body.package_id),
+                "package_pricing_id": str(pricing.id),
+            },
+            amount=amount_value,
+            currency=currency_code,
+            balance_before=balance_before,
+            balance_after=balance_after,
+            created_by=current_user.user_type or "member",
+            created_by_id=current_user.id,
+        )
+        db.add(wallet_txn)
+        db.flush()
+
+        current_user.wallet = balance_after
+
+        order = Sale(
+            tenant_id=UUID(tenant_id),
+            user_id=current_user.id,
+            package_id=body.package_id,
+            pricing_id=pricing.id,
+            type="package_wallet",
+            wallet_transaction_id=wallet_txn.id,
+            amount=amount_value,
+            currency=currency_code,
+            gateway="wallet",
+            gateway_transaction_id=None,
+            status="succeeded",
+            extra_metadata={
+                "persons": persons_requested,
+                "session_type": pricing.session_type,
+                "session_count": pricing.session_count,
+            },
+        )
+        db.add(order)
+        db.flush()
+
+        wallet_txn.order_id = str(order.id)
+
+        tz = timezone.utc
+        if package:
+            if package.validity_days is not None:
+                order.expires_at = datetime.now(tz) + timedelta(days=package.validity_days)
+            elif package.validity_end is not None:
+                order.expires_at = datetime.combine(
+                    package.validity_end,
+                    datetime.max.time(),
+                    tzinfo=tz,
+                )
+
+        sale_txn = SalesTransactions(
+            order_id=order.id,
+            tenant_id=order.tenant_id,
+            type="package_wallet",
+            gateway="wallet",
+            gateway_txn_id=None,
+            event_type="created",
+            status="succeeded",
+            amount=amount_value,
+            currency=currency_code,
+            raw_payload=None,
+        )
+        db.add(sale_txn)
+        db.commit()
+        db.refresh(order)
+
+        return {
+            "order_id": str(order.id),
+            "gateway": "wallet",
+            "status": "succeeded",
+            "amount": amount_value,
+            "currency": currency_code,
+        }
+
+    # --------------------------
+    # GATEWAY payment method
+    # --------------------------
+    gateway = get_gateway(tenant_id, body.payment_gateway)
+
+    # Create sale in our DB (type=package_gateway = payment via gateway)
+    order = Sale(
         tenant_id=UUID(tenant_id),
         user_id=current_user.id,
         package_id=body.package_id,
         pricing_id=pricing.id,
+        type="package_gateway",
+        wallet_transaction_id=None,
         amount=amount_value,
         currency=currency_code,
         gateway=gateway.GATEWAY_TYPE.value,
@@ -161,10 +273,11 @@ async def initiate_package_purchase(
     db.commit()
     db.refresh(order)
 
-    # Log initial transaction event (order created / payment initiated)
-    txn = PackagePurchaseTransaction(
+    # Log initial transaction event (sale created / payment initiated)
+    txn = SalesTransactions(
         order_id=order.id,
         tenant_id=order.tenant_id,
+        type="package_gateway",
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
         event_type="created",
@@ -221,6 +334,29 @@ async def initiate_package_purchase(
     }
 
 
+@router.post("/package-purchase-wallet")
+async def package_purchase_with_wallet(
+    body: PackagePurchaseWalletRequest,
+    tenant_id: str = Depends(get_tenant_id),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Backward-compatible wrapper. Prefer POST /payment/package-purchase with payment_method='wallet'.
+    """
+    return await initiate_package_purchase(
+        body=PackagePurchaseRequest(
+            package_id=body.package_id,
+            package_pricing_id=body.package_pricing_id,
+            persons=body.persons,
+            payment_method="wallet",
+        ),
+        tenant_id=tenant_id,
+        current_user=current_user,
+        db=db,
+    )
+
+
 @router.get("/callback/{gateway_type}")
 @router.post("/callback/{gateway_type}")
 async def payment_callback(
@@ -252,6 +388,19 @@ async def payment_callback(
     gateway = get_gateway(tenant_id, gateway_type)
     result = gateway.handle_callback(payload)
 
+    def _wallet_status_from_gateway(status_value: Any) -> str:
+        s = status_value.value if hasattr(status_value, "value") else str(status_value)
+        s = s.lower()
+        if s in ("success", "succeeded"):
+            return "succeeded"
+        if s in ("failed",):
+            return "failed"
+        if s in ("cancelled", "canceled"):
+            return "cancelled"
+        if s in ("refunded",):
+            return "reversed"
+        return s
+
     # ----------------------------------------------------------------
     # Persist result to orders + transaction log
     # ----------------------------------------------------------------
@@ -262,9 +411,9 @@ async def payment_callback(
             order_uuid = None
 
         if order_uuid is not None:
-            order = db.query(PackageOrder).filter(
-                PackageOrder.id == order_uuid,
-                PackageOrder.tenant_id == UUID(tenant_id),
+            order = db.query(Sale).filter(
+                Sale.id == order_uuid,
+                Sale.tenant_id == UUID(tenant_id),
             ).first()
 
             if order:
@@ -297,9 +446,10 @@ async def payment_callback(
                     if expires_at is not None:
                         order.expires_at = expires_at
 
-            txn = PackagePurchaseTransaction(
+            txn = SalesTransactions(
                 order_id=order.id if order else order_uuid,
                 tenant_id=UUID(tenant_id),
+                type=order.type if order and getattr(order, "type", None) else "package_gateway",
                 gateway=result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway),
                 gateway_txn_id=result.transaction_id or "",
                 event_type="callback",
@@ -309,6 +459,45 @@ async def payment_callback(
                 raw_payload=result.raw_payload,
             )
             db.add(txn)
+            db.commit()
+
+    # ----------------------------------------------------------------
+    # Persist result to wallet transactions (top-ups)
+    # ----------------------------------------------------------------
+    if result.transaction_id:
+        wallet_txn = (
+            db.query(WalletTransaction)
+            .filter(WalletTransaction.transaction_id == result.transaction_id)
+            .first()
+        )
+    else:
+        wallet_txn = None
+
+    if wallet_txn is None and result.order_id:
+        wallet_txn = (
+            db.query(WalletTransaction)
+            .filter(WalletTransaction.order_id == result.order_id)
+            .order_by(WalletTransaction.created_at.desc())
+            .first()
+        )
+
+    if wallet_txn:
+        new_status = _wallet_status_from_gateway(result.status)
+
+        # Idempotency: don't double-credit
+        if wallet_txn.status != "succeeded":
+            wallet_txn.status = new_status
+
+            if new_status == "succeeded":
+                user = db.query(User).filter(User.id == wallet_txn.user_id).first()
+                if user:
+                    before = float(user.wallet or 0)
+                    credited = float(wallet_txn.amount or 0)
+                    after = before + credited
+                    user.wallet = after
+                    wallet_txn.balance_before = before
+                    wallet_txn.balance_after = after
+
             db.commit()
 
     return {

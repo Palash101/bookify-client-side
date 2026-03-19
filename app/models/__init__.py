@@ -11,6 +11,7 @@ from app.models.package_discount import PackageDiscount
 from app.models.package import Package
 from app.models.package_pricing import PackagePricing
 from app.models.location import Location
+from app.models.wallet_transactions import WalletTransaction
 
 __all__ = [
     "Tenant",
@@ -24,4 +25,5 @@ __all__ = [
     "Package",
     "PackagePricing",
     "Location",
+    "WalletTransaction",
 ]
