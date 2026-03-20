@@ -8,6 +8,8 @@ from sqlalchemy import or_
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.models.tenant import Tenant
+from app.models.fitness_program import FitnessProgram
+from app.models.location import Location
 
 # Map common DB abbreviations to IANA timezone names (zoneinfo does not accept "IST" etc.)
 COMMON_TZ_ABBREVS = {
@@ -104,4 +106,142 @@ class ClassesService:
             result.append(gym_class)
 
         return result
+
+    @staticmethod
+    def get_class_details(
+        db: Session,
+        tenant_id,
+        class_id,
+        user_id,
+    ):
+        """
+        Returns a single class details payload.
+
+        Note: Seat layout/bookings tables are not present in current models, so
+        layout seats are synthesized from max_bookings/booking_counts and
+        user_booking is returned as empty.
+        """
+        # Bind class to tenant via trainer user
+        gym_class = (
+            db.query(GymClass)
+            .outerjoin(User, GymClass.trainer_id == User.id)
+            .filter(
+                GymClass.id == class_id,
+                or_(
+                    GymClass.trainer_id.is_(None),
+                    User.tenant_id == tenant_id,
+                ),
+            )
+            .first()
+        )
+
+        if not gym_class:
+            return None
+
+        trainer = None
+        if gym_class.trainer_id:
+            trainer = db.query(User).filter(User.id == gym_class.trainer_id).first()
+
+        program = None
+        if gym_class.training_programme_id and int(gym_class.training_programme_id) != 0:
+            program = (
+                db.query(FitnessProgram)
+                .filter(
+                    FitnessProgram.id == int(gym_class.training_programme_id),
+                    FitnessProgram.tenant_id == tenant_id,
+                )
+                .first()
+            )
+
+        location = None
+        if program and program.location_id:
+            location = (
+                db.query(Location)
+                .filter(Location.id == program.location_id, Location.tenant_id == tenant_id)
+                .first()
+            )
+
+        total = int(gym_class.max_bookings or 0)
+        booked = int(gym_class.booking_counts or 0)
+        max_waitings = int(gym_class.max_waitings or 0)
+        available = max(0, total - booked)
+        waiting = max_waitings
+
+        columns = 5
+        rows = 0
+        if total > 0:
+            rows = (total + columns - 1) // columns
+
+        # Synthesize seat grid: first `booked` seats are booked, rest available.
+        seats = []
+        row_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for i in range(rows):
+            row_letter = row_letters[i] if i < len(row_letters) else f"R{i+1}"
+            for col in range(1, columns + 1):
+                seat_index = i * columns + (col - 1)
+                if seat_index >= total:
+                    break
+                status = "booked" if seat_index < booked else "available"
+                seats.append(
+                    {
+                        "id": f"{row_letter}{col}",
+                        "row": row_letter,
+                        "col": col,
+                        "status": status,
+                        "type": "mat",
+                        "booking_id": None,
+                    }
+                )
+        # If there are no layout seats configured, return empty.
+
+        # Prepare response payload expected by schema
+        payload = {
+            "class_id": str(gym_class.id),
+            "name": gym_class.title or gym_class.theme_name or None,
+            "booking_type": gym_class.booking_type,
+            "program": {
+                "id": int(program.id) if program else 0,
+                "name": program.name if program else None,
+            },
+            "trainer": {
+                "id": str(trainer.id) if trainer else "",
+                "name": f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() if trainer else None,
+                "avatar": trainer.avatar if trainer else None,
+            },
+            "location": {
+                "id": str(location.id) if location else "",
+                "name": location.name if location else None,
+            },
+            "schedule": {
+                "date": gym_class.class_date,
+                "start_time": gym_class.start_time,
+                "end_time": gym_class.end_time,
+            },
+            "capacity": {
+                "total": total,
+                "booked": booked,
+                "waiting": waiting,
+                "max_waiting": max_waitings,
+                "available": available,
+            },
+            "pricing": {
+                "drop_in_price": float(gym_class.price) if gym_class.price is not None else None,
+                "wallet_credits_required": None,
+                "currency": "QAR",
+            },
+            "layout": {
+                "rows": rows,
+                "columns": columns,
+                "seats": seats,
+            },
+            "user_booking": {
+                "has_booked": False,
+                "booking_id": None,
+                "seat_id": None,
+                "status": None,
+                "payment_method": None,
+                "package_id": None,
+            },
+        }
+        return payload
 

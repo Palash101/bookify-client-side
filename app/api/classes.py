@@ -3,10 +3,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db
-from app.dependencies import get_current_tenant_id
-from app.schemas.gym_class import GymClassResponse, ClassesListResponse
+from app.dependencies import get_current_tenant_id, get_current_active_user
+from app.schemas.gym_class import (
+    GymClassResponse,
+    ClassesListResponse,
+    ClassDetailsOuterResponse,
+)
 from app.services.classes_service.classes_service import ClassesService
 import uuid
+from app.models.user import User
 
 router = APIRouter()
 
@@ -50,4 +55,33 @@ async def get_classes_by_date(
         "message": "Classes fetched successfully",
         "data": [GymClassResponse.model_validate(c) for c in classes],
         "count": len(classes),
+    }
+
+
+@router.get("/{class_id}", response_model=ClassDetailsOuterResponse)
+async def get_class_details(
+    class_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    payload = ClassesService.get_class_details(
+        db=db,
+        tenant_id=tenant_id,
+        class_id=class_id,
+        user_id=current_user.id,
+    )
+
+    if payload is None:
+        return {
+            "success": True,
+            "message": "Class not found",
+            "data": None,
+        }
+
+    # payload already matches schema fields expected by ClassDetailsResponse
+    return {
+        "success": True,
+        "message": "Class details fetched successfully",
+        "data": payload,
     }
