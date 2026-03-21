@@ -9,7 +9,7 @@ from typing import Any, Optional, Literal
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.models.package import Package
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
+from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
@@ -435,13 +436,9 @@ async def payment_callback(
 
             if order:
                 # Update order status + gateway txn id
-                raw_status = result.status.value if hasattr(result.status, "value") else str(result.status)
-                # For wallet_add, keep status aligned with wallet mapping (succeeded/failed/cancelled)
-                order.status = (
-                    _wallet_status_from_gateway(result.status)
-                    if getattr(order, "type", None) == "wallet_add"
-                    else raw_status
-                )
+                # Normalize statuses so app can rely on one spelling.
+                # Stripe returns "success" but app expects "succeeded".
+                order.status = _wallet_status_from_gateway(result.status)
                 order.gateway_transaction_id = result.transaction_id or order.gateway_transaction_id
 
                 # Calculate expiry based on package validity (if available)
@@ -474,7 +471,7 @@ async def payment_callback(
                 gateway=result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway),
                 gateway_txn_id=result.transaction_id or "",
                 event_type="callback",
-                status=result.status.value if hasattr(result.status, "value") else str(result.status),
+                status=_wallet_status_from_gateway(result.status),
                 amount=result.amount,
                 currency=result.currency,
                 raw_payload=result.raw_payload,
@@ -533,6 +530,65 @@ async def payment_callback(
         "gateway":        result.gateway,
         "amount":         result.amount,
         "currency":       result.currency,
+    }
+
+
+@router.get("/sales-transactions", response_model=SalesTransactionsListResponse)
+async def get_sales_transactions(
+    limit: int = Query(20, ge=1, le=100),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    include_wallet_add: bool = Query(False, description="Include wallet top-ups in results"),
+):
+    """
+    Current user's sales transaction history (package gateway/wallet payments).
+    """
+    type_filter = ["package_gateway", "package_wallet"]
+    if include_wallet_add:
+        type_filter.append("wallet_add")
+
+    txns = (
+        db.query(SalesTransactions, Sale)
+        .join(Sale, SalesTransactions.order_id == Sale.id)
+        .filter(
+            Sale.user_id == current_user.id,
+            SalesTransactions.tenant_id == tenant_id,
+            Sale.type.in_(type_filter),
+        )
+        .order_by(SalesTransactions.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "success": True,
+        "message": "Sales transactions fetched successfully",
+        "data": [
+            {
+                "id": str(st.id),
+                "order_id": st.order_id,
+                "type": sale.type,
+                "payment_method": "wallet" if sale.type == "package_wallet" else "gateway",
+                "purchase_source": (
+                    "wallet_topup"
+                    if sale.type == "wallet_add"
+                    else ("wallet_purchase" if sale.type == "package_wallet" else "gateway_purchase")
+                ),
+                "is_package_purchase": sale.type in ("package_gateway", "package_wallet"),
+                "gateway": st.gateway,
+                "gateway_txn_id": st.gateway_txn_id,
+                "status": st.status,
+                "amount": st.amount,
+                "currency": st.currency,
+                "package_id": sale.package_id,
+                "pricing_id": sale.pricing_id,
+                "wallet_transaction_id": sale.wallet_transaction_id,
+                "created_at": st.created_at,
+            }
+            for st, sale in txns
+        ],
+        "count": len(txns),
     }
 
 
