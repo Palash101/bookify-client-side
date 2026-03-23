@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db
 from app.schemas.user import (
@@ -35,7 +35,9 @@ async def login(
     Tenant is resolved from X-Tenant-Key header.
     """
     AuthService.authenticate_user(db, user_credentials.email, user_credentials.password, tenant_id)
-    otp_code, verification_token = await AuthService.send_otp(user_credentials.email, "login")
+    otp_code, verification_token = await AuthService.send_otp(
+        user_credentials.email, "login", tenant_id=tenant_id
+    )
     
     return {
         "success": True,
@@ -59,7 +61,9 @@ async def register(
     AuthService.check_user_exists(db, user_data.email, tenant_id)
     
     user_data_dict = AuthService.prepare_registration_data(user_data, tenant_id)
-    otp_code, verification_token = await AuthService.send_otp(user_data.email, "register", user_data=user_data_dict)
+    otp_code, verification_token = await AuthService.send_otp(
+        user_data.email, "register", tenant_id=tenant_id, user_data=user_data_dict
+    )
     
     return {
         "success": True,
@@ -81,14 +85,30 @@ async def verify_otp_endpoint(
     Works for both login and register OTPs.
     """
     authorization = request.headers.get("Authorization")
-    email = AuthService.extract_and_validate_token(authorization)
-    purpose, cached_user_data = AuthService.verify_otp(email, otp_data.otp)
-    
+    email, otp_tenant_id = AuthService.extract_verification_context(authorization)
+    purpose, cached_user_data = AuthService.verify_otp(
+        email, otp_data.otp, otp_tenant_id=otp_tenant_id
+    )
+
     if purpose == "register":
+        if (
+            cached_user_data
+            and otp_tenant_id is not None
+            and str(cached_user_data.get("tenant_id")) != str(otp_tenant_id)
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Registration data does not match verification tenant.",
+            )
         user = AuthService.create_user_from_cache(db, cached_user_data)
         message = "Registration successful. Your account has been created and activated."
     else:
-        user = AuthService.get_user_for_login(db, email)
+        if otp_tenant_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Verification token missing tenant. Log in again: use X-Tenant-Key on /auth/login, then verify OTP with the new token.",
+            )
+        user = AuthService.get_user_for_login(db, email, otp_tenant_id)
         message = "Login successful. OTP verified."
     
     access_token, refresh_token = AuthService.generate_tokens(user)
@@ -114,7 +134,9 @@ async def forgot_password(
     User must exist and be active. Same as request-password-reset.
     """
     AuthService.get_user_for_login(db, reset_data.email, tenant_id)
-    otp_code, verification_token = await AuthService.send_otp(reset_data.email, "password_reset")
+    otp_code, verification_token = await AuthService.send_otp(
+        reset_data.email, "password_reset", tenant_id=tenant_id
+    )
     return {
         "success": True,
         "message": "OTP sent to your email. Please verify to reset your password.",
@@ -135,14 +157,29 @@ async def reset_password(
     Token is sent in Authorization header as "Bearer <token>".
     """
     authorization = request.headers.get("Authorization")
-    email = AuthService.extract_and_validate_token(authorization)
-    AuthService.verify_otp(email, reset_data.otp, expected_purpose="password_reset")
+    email, otp_tenant_id = AuthService.extract_verification_context(authorization)
+    AuthService.verify_otp(
+        email,
+        reset_data.otp,
+        expected_purpose="password_reset",
+        otp_tenant_id=otp_tenant_id,
+    )
+    if otp_tenant_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verification token missing tenant. Request password reset again with X-Tenant-Key.",
+        )
+    if otp_tenant_id != tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-Tenant-Key does not match the tenant on your reset session.",
+        )
     AuthService.reset_password(
         db,
         email,
         reset_data.new_password,
         reset_data.confirm_password,
-        tenant_id,
+        otp_tenant_id,
     )
     
     return {

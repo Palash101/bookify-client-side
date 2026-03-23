@@ -61,30 +61,49 @@ def verify_token(token: str) -> Optional[dict]:
         return None
 
 
-def create_verification_token(email: str, purpose: str, expiry_minutes: int = 10) -> str:
+def create_verification_token(
+    email: str,
+    purpose: str,
+    tenant_id: Optional[str] = None,
+    expiry_minutes: int = 10,
+) -> str:
     """
-    Create a temporary verification token containing email and purpose.
-    Used for OTP verification flow.
+    Create a temporary verification token containing email, purpose, and optional tenant_id.
+    tenant_id ties OTP to one gym when the same email exists on multiple tenants.
     """
-    to_encode = {
+    to_encode: dict = {
         "email": email,
         "purpose": purpose,
-        "type": "verification"
+        "type": "verification",
     }
+    if tenant_id:
+        to_encode["tenant_id"] = tenant_id
     expire = datetime.utcnow() + timedelta(minutes=expiry_minutes)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
 
 
+def extract_verification_claims(token: str) -> Optional[dict]:
+    """
+    Decode verification JWT: email, purpose, tenant_id (if present).
+    """
+    payload = verify_token(token)
+    if not payload or payload.get("type") != "verification":
+        return None
+    return {
+        "email": payload.get("email"),
+        "purpose": payload.get("purpose"),
+        "tenant_id": payload.get("tenant_id"),
+    }
+
+
 def extract_email_from_token(token: str) -> Optional[str]:
     """
     Extract email from verification token.
     """
-    payload = verify_token(token)
-    if payload and payload.get("type") == "verification":
-        return payload.get("email")
-    return None
+    claims = extract_verification_claims(token)
+    return claims.get("email") if claims else None
 
 
 def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -95,7 +114,7 @@ def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) 
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(days=7)
+        expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     
     to_encode.update({"exp": expire, "type": "refresh"})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)

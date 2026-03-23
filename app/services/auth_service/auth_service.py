@@ -8,6 +8,7 @@ from app.core.security import (
     create_access_token,
     create_verification_token,
     extract_email_from_token,
+    extract_verification_claims,
     create_refresh_token,
     verify_refresh_token,
 )
@@ -128,13 +129,24 @@ class AuthService:
         }
     
     @staticmethod
-    async def send_otp(email: str, purpose: str, user_data: Optional[Dict] = None) -> Tuple[str, str]:
+    async def send_otp(
+        email: str,
+        purpose: str,
+        tenant_id: Optional[uuid.UUID] = None,
+        user_data: Optional[Dict] = None,
+    ) -> Tuple[str, str]:
         """
         Generate OTP, send email, and return (otp_code, verification_token).
+        tenant_id scopes OTP + verification JWT to one gym (same email on multiple tenants).
         """
-        otp_code = create_otp(email, purpose, user_data=user_data)
+        tid_str: Optional[str] = None
+        if tenant_id is not None:
+            tid_str = str(tenant_id)
+        elif user_data and user_data.get("tenant_id"):
+            tid_str = str(user_data["tenant_id"])
+        otp_code = create_otp(email, purpose, user_data=user_data, tenant_id=tid_str)
         await email_service.send_otp_email(email, otp_code, purpose)
-        verification_token = create_verification_token(email, purpose)
+        verification_token = create_verification_token(email, purpose, tenant_id=tid_str)
         return otp_code, verification_token
     
     @staticmethod
@@ -168,13 +180,61 @@ class AuthService:
             )
         
         return email
+
+    @staticmethod
+    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[uuid.UUID]]:
+        """
+        Email + tenant_id from Bearer verification JWT (OTP flow).
+        """
+        if not authorization:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization header missing",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            scheme, token = authorization.split()
+            if scheme.lower() != "bearer":
+                raise ValueError("Invalid scheme")
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization header format. Use 'Bearer <token>'",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        claims = extract_verification_claims(token)
+        if not claims or not claims.get("email"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification token",
+            )
+        email = claims["email"]
+        tid_raw = claims.get("tenant_id")
+        otp_tenant_id: Optional[uuid.UUID] = None
+        if tid_raw:
+            try:
+                otp_tenant_id = uuid.UUID(str(tid_raw))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid verification token (tenant_id)",
+                )
+        return email, otp_tenant_id
     
     @staticmethod
-    def verify_otp(email: str, otp: str, expected_purpose: Optional[str] = None) -> Tuple[str, Optional[Dict]]:
+    def verify_otp(
+        email: str,
+        otp: str,
+        expected_purpose: Optional[str] = None,
+        otp_tenant_id: Optional[uuid.UUID] = None,
+    ) -> Tuple[str, Optional[Dict]]:
         """
         Verify OTP and return (purpose, cached_user_data).
         """
-        is_valid, purpose, cached_user_data = verify_otp_any_purpose(email, otp)
+        tid_str = str(otp_tenant_id) if otp_tenant_id else None
+        is_valid, purpose, cached_user_data = verify_otp_any_purpose(
+            email, otp, tenant_id=tid_str
+        )
         
         if not is_valid:
             raise HTTPException(
@@ -271,11 +331,19 @@ class AuthService:
         """
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         access_token = create_access_token(
-            data={"sub": str(user.id), "email": user.email},
-            expires_delta=access_token_expires
+            data={
+                "sub": str(user.id),
+                "email": user.email,
+                "tenant_id": str(user.tenant_id),
+            },
+            expires_delta=access_token_expires,
         )
         refresh_token = create_refresh_token(
-            data={"sub": str(user.id), "email": user.email}
+            data={
+                "sub": str(user.id),
+                "email": user.email,
+                "tenant_id": str(user.tenant_id),
+            }
         )
         return access_token, refresh_token
     
@@ -307,6 +375,22 @@ class AuthService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
+
+        tid = payload.get("tenant_id")
+        if tid is not None:
+            try:
+                if uuid.UUID(str(tid)) != uuid.UUID(str(user.tenant_id)):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Refresh token tenant mismatch",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid refresh token",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
         
         if not user.is_active:
             raise HTTPException(

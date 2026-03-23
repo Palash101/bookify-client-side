@@ -2,11 +2,14 @@ from typing import List, Optional
 import uuid
 
 from fastapi import HTTPException, status
+from sqlalchemy import func as sa_func_sql
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.class_booking import ClassBooking
 from app.models.package import Package
 from app.models.package_pricing import PackagePricing
 from app.models.sales import Sale
+from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
 
 
 class PackagesService:
@@ -104,9 +107,6 @@ class PackagesService:
 
         package = (
             db.query(Package)
-            .options(
-                joinedload(Package.pricing_list).joinedload(PackagePricing.discount)
-            )
             .filter(Package.id == order.package_id, Package.tenant_id == tenant_id)
             .first()
         )
@@ -118,6 +118,68 @@ class PackagesService:
             package._active_order_status = order.status
             package._active_order_created_at = order.created_at
             package._active_order_expires_at = order.expires_at
+            package._active_order_amount = order.amount
+            package._active_order_currency = order.currency
+            package._active_sale_type = order.type
+
+            # --- session / class quantity (sale metadata + pricing + bookings) ---
+            sessions_used_raw = (
+                db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
+                .filter(
+                    ClassBooking.user_package_purchase_id == order.id,
+                    ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
+                )
+                .scalar()
+            )
+            try:
+                sessions_used = int(sessions_used_raw or 0)
+            except (TypeError, ValueError):
+                sessions_used = 0
+
+            meta = order.extra_metadata if isinstance(order.extra_metadata, dict) else {}
+            pricing_row = None
+            if order.pricing_id:
+                pricing_row = (
+                    db.query(PackagePricing)
+                    .filter(PackagePricing.id == order.pricing_id)
+                    .first()
+                )
+
+            is_unlimited = bool(
+                pricing_row.is_unlimited
+                if pricing_row is not None and pricing_row.is_unlimited is not None
+                else False
+            )
+
+            session_type = meta.get("session_type")
+            if not session_type and pricing_row is not None:
+                session_type = pricing_row.session_type
+
+            total_raw = meta.get("session_count")
+            if total_raw is None and pricing_row is not None and pricing_row.session_count is not None:
+                total_raw = pricing_row.session_count
+            total_sessions: Optional[int] = None
+            if not is_unlimited and total_raw is not None:
+                try:
+                    total_sessions = int(total_raw)
+                except (TypeError, ValueError):
+                    total_sessions = None
+
+            sessions_remaining: Optional[int] = None
+            if is_unlimited:
+                sessions_remaining = None
+            else:
+                rem_meta = _sessions_remaining_from_sale(order)
+                if rem_meta is not None:
+                    sessions_remaining = max(0, int(rem_meta))
+                elif total_sessions is not None:
+                    sessions_remaining = max(0, total_sessions - sessions_used)
+
+            package._active_session_type = session_type
+            package._active_is_unlimited = is_unlimited
+            package._active_session_count = total_sessions
+            package._active_sessions_remaining = sessions_remaining
+            package._active_sessions_used = sessions_used
 
         return package
 

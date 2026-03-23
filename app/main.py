@@ -61,7 +61,11 @@ def custom_openapi():
                 if isinstance(method, dict):
                     security = [{"TenantKey": []}]
                     
-                    if path in endpoints_needing_bearer or path.endswith("/profile"):
+                    if (
+                        path in endpoints_needing_bearer
+                        or path.endswith("/profile")
+                        or "/bookings" in path
+                    ):
                         security.append({"BearerAuth": []})
                     
                     existing_security = method.get("security", [])

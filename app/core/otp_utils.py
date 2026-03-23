@@ -11,7 +11,13 @@ def generate_otp() -> str:
     return str(random.randint(100000, 999999))
 
 
-def create_otp(email: str, purpose: str, expiry_minutes: int = 10, user_data: Optional[Dict] = None) -> str:
+def create_otp(
+    email: str,
+    purpose: str,
+    expiry_minutes: int = 10,
+    user_data: Optional[Dict] = None,
+    tenant_id: Optional[str] = None,
+) -> str:
     """
     Create and store an OTP in session cache.
     
@@ -28,12 +34,16 @@ def create_otp(email: str, purpose: str, expiry_minutes: int = 10, user_data: Op
     otp_code = generate_otp()
     
     # Store in cache (automatically replaces existing OTP for same email+purpose)
-    otp_cache.store_otp(email, purpose, otp_code, expiry_minutes, user_data)
+    otp_cache.store_otp(
+        email, purpose, otp_code, expiry_minutes, user_data, tenant_id=tenant_id
+    )
     
     return otp_code
 
 
-def verify_otp(email: str, otp_code: str, purpose: str) -> bool:
+def verify_otp(
+    email: str, otp_code: str, purpose: str, tenant_id: Optional[str] = None
+) -> bool:
     """
     Verify an OTP from session cache.
     
@@ -45,10 +55,12 @@ def verify_otp(email: str, otp_code: str, purpose: str) -> bool:
     Returns:
         bool: True if OTP is valid, False otherwise
     """
-    return otp_cache.verify_otp(email, otp_code, purpose)
+    return otp_cache.verify_otp(email, otp_code, purpose, tenant_id=tenant_id)
 
 
-def verify_otp_any_purpose(email: str, otp_code: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
+def verify_otp_any_purpose(
+    email: str, otp_code: str, tenant_id: Optional[str] = None
+) -> Tuple[bool, Optional[str], Optional[Dict]]:
     """
     Verify an OTP for any purpose (login or register) from session cache.
     
@@ -60,4 +72,4 @@ def verify_otp_any_purpose(email: str, otp_code: str) -> Tuple[bool, Optional[st
         tuple: (is_valid, purpose, user_data) where purpose is 'login' or 'register' or None,
                and user_data is stored user data (for registration) or None
     """
-    return otp_cache.verify_otp_any_purpose(email, otp_code)
+    return otp_cache.verify_otp_any_purpose(email, otp_code, tenant_id=tenant_id)

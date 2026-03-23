@@ -19,8 +19,13 @@ class OTPCache:
         self._cleanup_interval = 300  # Cleanup every 5 minutes
         self._last_cleanup = time.time()
     
-    def _get_key(self, email: str, purpose: str) -> str:
-        """Generate cache key from email and purpose."""
+    def _get_key(self, email: str, purpose: str, tenant_id: Optional[str] = None) -> str:
+        """
+        Cache key. When tenant_id is set, same email on different gyms has separate OTPs.
+        Legacy key (tenant_id None) kept for backward compatibility only.
+        """
+        if tenant_id:
+            return f"{tenant_id}\x1f{email}\x1f{purpose}"
         return f"{email}:{purpose}"
     
     def _cleanup_expired(self):
@@ -40,7 +45,15 @@ class OTPCache:
             self._cleanup_expired()
             self._last_cleanup = current_time
     
-    def store_otp(self, email: str, purpose: str, otp_code: str, expiry_minutes: int = 10, user_data: Optional[Dict] = None) -> None:
+    def store_otp(
+        self,
+        email: str,
+        purpose: str,
+        otp_code: str,
+        expiry_minutes: int = 10,
+        user_data: Optional[Dict] = None,
+        tenant_id: Optional[str] = None,
+    ) -> None:
         """
         Store OTP in cache.
         
@@ -53,7 +66,7 @@ class OTPCache:
         """
         with self._lock:
             self._auto_cleanup()
-            key = self._get_key(email, purpose)
+            key = self._get_key(email, purpose, tenant_id)
             expires_at = datetime.utcnow() + timedelta(minutes=expiry_minutes)
             
             cache_data = {
@@ -69,7 +82,7 @@ class OTPCache:
             
             self._cache[key] = cache_data
     
-    def get_otp(self, email: str, purpose: str) -> Optional[dict]:
+    def get_otp(self, email: str, purpose: str, tenant_id: Optional[str] = None) -> Optional[dict]:
         """
         Get OTP from cache.
         
@@ -82,7 +95,7 @@ class OTPCache:
         """
         with self._lock:
             self._auto_cleanup()
-            key = self._get_key(email, purpose)
+            key = self._get_key(email, purpose, tenant_id)
             
             if key not in self._cache:
                 return None
@@ -96,7 +109,9 @@ class OTPCache:
             
             return otp_data
     
-    def verify_otp(self, email: str, otp_code: str, purpose: str) -> bool:
+    def verify_otp(
+        self, email: str, otp_code: str, purpose: str, tenant_id: Optional[str] = None
+    ) -> bool:
         """
         Verify OTP and remove it if valid.
         
@@ -110,7 +125,7 @@ class OTPCache:
         """
         with self._lock:
             self._auto_cleanup()
-            key = self._get_key(email, purpose)
+            key = self._get_key(email, purpose, tenant_id)
             
             if key not in self._cache:
                 return False
@@ -130,7 +145,9 @@ class OTPCache:
             del self._cache[key]
             return True
     
-    def verify_otp_any_purpose(self, email: str, otp_code: str) -> Tuple[bool, Optional[str], Optional[Dict]]:
+    def verify_otp_any_purpose(
+        self, email: str, otp_code: str, tenant_id: Optional[str] = None
+    ) -> Tuple[bool, Optional[str], Optional[Dict]]:
         """
         Verify OTP for any purpose (login or register).
         
@@ -145,31 +162,40 @@ class OTPCache:
         with self._lock:
             self._auto_cleanup()
             
-            # Try all purposes
-            for purpose in ['login', 'register', 'password_reset']:
-                key = self._get_key(email, purpose)
-                
+            # Tenant-scoped keys (current behaviour for new OTPs)
+            if tenant_id:
+                for purpose in ["login", "register", "password_reset"]:
+                    key = self._get_key(email, purpose, tenant_id)
+                    if key not in self._cache:
+                        continue
+                    otp_data = self._cache[key]
+                    if otp_data["expires_at"] < datetime.utcnow():
+                        del self._cache[key]
+                        continue
+                    if otp_data["otp_code"] == otp_code:
+                        user_data = otp_data.get("user_data")
+                        del self._cache[key]
+                        return True, purpose, user_data
+                return False, None, None
+
+            # Legacy: no tenant in token — try old keys only
+            for purpose in ["login", "register", "password_reset"]:
+                key = self._get_key(email, purpose, None)
                 if key not in self._cache:
                     continue
-                
                 otp_data = self._cache[key]
-                
-                # Check if expired
-                if otp_data['expires_at'] < datetime.utcnow():
+                if otp_data["expires_at"] < datetime.utcnow():
                     del self._cache[key]
                     continue
-                
-                # Verify OTP code
-                if otp_data['otp_code'] == otp_code:
-                    # Get user_data if exists
-                    user_data = otp_data.get('user_data')
-                    # Remove OTP after successful verification
+                if otp_data["otp_code"] == otp_code:
+                    user_data = otp_data.get("user_data")
                     del self._cache[key]
                     return True, purpose, user_data
-            
             return False, None, None
     
-    def remove_otp(self, email: str, purpose: str) -> None:
+    def remove_otp(
+        self, email: str, purpose: str, tenant_id: Optional[str] = None
+    ) -> None:
         """
         Remove OTP from cache.
         
@@ -178,7 +204,7 @@ class OTPCache:
             purpose: Purpose of OTP ('login' or 'register')
         """
         with self._lock:
-            key = self._get_key(email, purpose)
+            key = self._get_key(email, purpose, tenant_id)
             if key in self._cache:
                 del self._cache[key]
     

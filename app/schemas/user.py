@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, Dict, Any
+from typing import Optional, Any
 from datetime import datetime, date
 from uuid import UUID
 
@@ -14,7 +14,8 @@ class UserBase(BaseModel):
     gender: Optional[str] = None
     dob: Optional[date] = None
     designation: Optional[str] = None
-    skills: Optional[Dict[str, Any]] = None
+    # JSONB: may be {}, [] or null in DB
+    skills: Optional[Any] = None
     is_active: bool = True
 
 
@@ -63,7 +64,7 @@ class UserUpdate(BaseModel):
     gender: Optional[str] = None
     dob: Optional[date] = None
     designation: Optional[str] = None
-    skills: Optional[Dict[str, Any]] = None
+    skills: Optional[Any] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None
 

@@ -17,6 +17,7 @@ from app.models.tenant_payment_settings import TenantPaymentSettings
 from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
+from app.models.class_booking import ClassBooking
 
 __all__ = [
     "Base",
@@ -35,4 +36,5 @@ __all__ = [
     "Sale",
     "SalesTransactions",
     "WalletTransaction",
+    "ClassBooking",
 ]

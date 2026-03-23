@@ -56,7 +56,16 @@ async def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if user is None:
         raise credentials_exception
-    
+
+    # Session gym must match JWT (same email can exist on multiple tenants)
+    tid_claim = payload.get("tenant_id")
+    if tid_claim is not None:
+        try:
+            if UUID(str(tid_claim)) != UUID(str(user.tenant_id)):
+                raise credentials_exception
+        except (ValueError, TypeError):
+            raise credentials_exception
+
     return user
 
 

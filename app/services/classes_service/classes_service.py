@@ -3,7 +3,7 @@ from typing import Optional, List
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import and_, exists, or_
 
 from app.models.gym_class import GymClass
 from app.models.user import User
@@ -36,7 +36,7 @@ class ClassesService:
         """
         List classes for a tenant in a date range, with optional search and sorting.
         Rules:
-          - Only classes for this tenant (via trainer_id -> users.tenant_id).
+          - Classes for this tenant: trainer belongs to tenant, OR training programme belongs to tenant.
           - Status/publish gating is based on gym_classes.status + gym_classes.publish_at.
           - Always include status != 'draft'.
           - For status = 'draft', include only when publish_at <= tenant's current time.
@@ -53,7 +53,12 @@ class ClassesService:
             tz = ZoneInfo("UTC")
         tenant_now: datetime = datetime.now(tz)
 
-        # Tenant bind is via trainer user. This matches typical data where classes are owned by tenant trainers.
+        programme_for_tenant = exists().where(
+            and_(
+                FitnessProgram.id == GymClass.training_programme_id,
+                FitnessProgram.tenant_id == tenant_id,
+            )
+        )
         query = (
             db.query(GymClass)
             .outerjoin(User, GymClass.trainer_id == User.id)
@@ -63,6 +68,7 @@ class ClassesService:
                 or_(
                     GymClass.trainer_id.is_(None),
                     User.tenant_id == tenant_id,
+                    programme_for_tenant,
                 ),
             )
         )
@@ -121,15 +127,22 @@ class ClassesService:
         layout seats are synthesized from max_bookings/booking_counts and
         user_booking is returned as empty.
         """
-        # Bind class to tenant via trainer user
         gym_class = (
             db.query(GymClass)
             .outerjoin(User, GymClass.trainer_id == User.id)
+            .outerjoin(
+                FitnessProgram,
+                and_(
+                    FitnessProgram.id == GymClass.training_programme_id,
+                    FitnessProgram.tenant_id == tenant_id,
+                ),
+            )
             .filter(
                 GymClass.id == class_id,
                 or_(
                     GymClass.trainer_id.is_(None),
                     User.tenant_id == tenant_id,
+                    FitnessProgram.id.isnot(None),
                 ),
             )
             .first()

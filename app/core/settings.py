@@ -32,7 +32,18 @@ class Settings(BaseSettings):
     # Security
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+    # Access JWT lifetime (login / Bearer). Override via ACCESS_TOKEN_EXPIRE_MINUTES in .env
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=1440,
+        ge=1,
+        description="Access token expiry in minutes (default 24h). Use lower values in production if you prefer short-lived tokens + refresh.",
+    )
+    # Refresh JWT lifetime
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(
+        default=30,
+        ge=1,
+        description="Refresh token expiry in days",
+    )
     
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
