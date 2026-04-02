@@ -12,6 +12,7 @@ from typing import Any, Optional, Union
 import logging
 
 from sqlalchemy.orm import Session
+from uuid import UUID
 
 from .base import BasePaymentGateway, GatewayType
 from .stripe_gateway import StripePaymentGateway
@@ -81,11 +82,16 @@ class TenantPaymentSettings:
         Load tenant payment settings from the database.
         Returns the full tenant payment settings dict expected by the factory.
         """
+        try:
+            tenant_uuid = UUID(str(tenant_id))
+        except Exception as exc:
+            raise ValueError(f"Invalid tenant_id '{tenant_id}'") from exc
+
         db: Session = SessionLocal()
         try:
             rows: list[TenantPaymentSettingsModel] = (
                 db.query(TenantPaymentSettingsModel)
-                .filter(TenantPaymentSettingsModel.tenant_id == tenant_id)
+                .filter(TenantPaymentSettingsModel.tenant_id == tenant_uuid)
                 .all()
             )
 

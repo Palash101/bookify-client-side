@@ -274,7 +274,15 @@ async def initiate_package_purchase(
     # --------------------------
     # GATEWAY payment method
     # --------------------------
-    gateway = get_gateway(tenant_id, body.payment_gateway)
+    try:
+        gateway = get_gateway(tenant_id, body.payment_gateway)
+    except (ValueError, KeyError, ImportError) as exc:
+        # Most common reasons: tenant has no gateway config, invalid gateway type,
+        # or provider SDK is missing in the deployed image.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
 
     # Create sale in our DB (type=package_gateway = payment via gateway)
     order = Sale(
@@ -332,7 +340,15 @@ async def initiate_package_purchase(
         },
     )
 
-    response = gateway.create_payment(payment_request)
+    try:
+        response = gateway.create_payment(payment_request)
+    except Exception as exc:
+        # Defensive: gateways should return PaymentResponse on provider errors,
+        # but we still guard against unexpected exceptions so the API doesn't 500.
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Payment gateway error. Please try again later.",
+        ) from exc
 
     if not response.success:
         # Mark order as failed to initiate
