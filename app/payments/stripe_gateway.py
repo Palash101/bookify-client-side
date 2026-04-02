@@ -11,6 +11,7 @@ Required settings keys:
 
 from typing import Any
 import logging
+from uuid import uuid4
 
 try:
     import stripe as stripe_lib
@@ -80,10 +81,10 @@ class StripePaymentGateway(BasePaymentGateway):
             return PaymentResponse(
                 success=True,
                 gateway=self.GATEWAY_TYPE,
-                payment_url=session.url,
-                transaction_id=session.id,
+                payment_url=getattr(session, "url", None) or (session.get("url") if isinstance(session, dict) else None),
+                transaction_id=getattr(session, "id", None) or (session.get("id") if isinstance(session, dict) else None),
                 status=PaymentStatus.PENDING,
-                raw_response=dict(session),
+                raw_response=dict(session) if isinstance(session, dict) else getattr(session, "to_dict", lambda: {})(),
             )
         except stripe_lib.error.StripeError as exc:
             self._log_error("create_payment failed", exc)
@@ -91,6 +92,14 @@ class StripePaymentGateway(BasePaymentGateway):
                 success=False,
                 gateway=self.GATEWAY_TYPE,
                 error_message=str(exc),
+            )
+        except Exception as exc:
+            error_id = str(uuid4())
+            logger.exception("[stripe] create_payment unexpected error (error_id=%s)", error_id)
+            return PaymentResponse(
+                success=False,
+                gateway=self.GATEWAY_TYPE,
+                error_message=f"Stripe create_payment error (error_id={error_id}): {type(exc).__name__}: {exc}",
             )
 
     def handle_callback(self, payload: dict[str, Any]) -> CallbackResult:
