@@ -13,6 +13,8 @@ from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.models.user import User
+import logging
+import uuid
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -20,6 +22,8 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     swagger_ui_parameters={"persistAuthorization": True}
 )
+
+logger = logging.getLogger(__name__)
 
 
 def custom_openapi():
@@ -94,6 +98,22 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "message": exc.detail,
             "detail": exc.detail
         }
+    )
+
+# Catch-all handler so server never returns plain-text 500.
+# We log a unique error_id so it can be matched in Cloud Run logs.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    error_id = str(uuid.uuid4())
+    logger.exception("Unhandled error_id=%s path=%s", error_id, request.url.path, exc_info=exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "message": "Internal Server Error",
+            "detail": "Internal Server Error",
+            "error_id": error_id,
+        },
     )
 
 # Custom exception handler for validation errors
