@@ -108,14 +108,20 @@ class TenantPaymentSettings:
                 if not gt or not row.payment_config:
                     continue
                 gateways[gt] = row.payment_config
-                # Pehli row ko default active_gateway bana dete hain (simple rule)
-                if active_gateway is None:
-                    active_gateway = gt
+                # We'll decide active gateway after we load all rows.
 
             if not gateways:
                 raise ValueError(
                     f"Tenant '{tenant_id}' has no gateway configurations."
                 )
+
+            # Deterministic default gateway:
+            # - Prefer Stripe if configured (most common default)
+            # - Else pick first gateway name sorted alphabetically
+            if "stripe" in gateways:
+                active_gateway = "stripe"
+            else:
+                active_gateway = sorted(gateways.keys())[0]
 
             return {
                 "tenant_id": tenant_id,
