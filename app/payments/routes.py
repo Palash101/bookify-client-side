@@ -274,14 +274,7 @@ async def initiate_package_purchase(
     # --------------------------
     # GATEWAY payment method
     # --------------------------
-    try:
-        gateway = get_gateway(tenant_id, body.payment_gateway)
-    except (ValueError, KeyError, ImportError) as exc:
-        # Common cause: tenant has no gateway config, or stripe lib missing
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        )
+    gateway = get_gateway(tenant_id, body.payment_gateway)
 
     # Create sale in our DB (type=package_gateway = payment via gateway)
     order = Sale(

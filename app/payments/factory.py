@@ -11,7 +11,6 @@ It is responsible for:
 from typing import Any, Optional, Union
 import logging
 
-from uuid import UUID
 from sqlalchemy.orm import Session
 
 from .base import BasePaymentGateway, GatewayType
@@ -84,14 +83,9 @@ class TenantPaymentSettings:
         """
         db: Session = SessionLocal()
         try:
-            try:
-                tenant_uuid = UUID(str(tenant_id))
-            except Exception as exc:
-                raise ValueError(f"Invalid tenant_id '{tenant_id}'") from exc
-
             rows: list[TenantPaymentSettingsModel] = (
                 db.query(TenantPaymentSettingsModel)
-                .filter(TenantPaymentSettingsModel.tenant_id == tenant_uuid)
+                .filter(TenantPaymentSettingsModel.tenant_id == tenant_id)
                 .all()
             )
 
