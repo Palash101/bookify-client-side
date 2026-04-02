@@ -12,7 +12,6 @@ from typing import Any, Optional, Union
 import logging
 
 from uuid import UUID
-import time
 from sqlalchemy.orm import Session
 
 from .base import BasePaymentGateway, GatewayType
@@ -65,25 +64,17 @@ class TenantPaymentSettings:
 
     # Simple in-process cache: tenant_id -> settings dict
     _cache: dict[str, dict[str, Any]] = {}
-    _cache_loaded_at: dict[str, float] = {}
-    # Keep this small to avoid “worked earlier, now stuck” due to stale config in long-lived processes.
-    _cache_ttl_seconds: int = 60
 
     @classmethod
     def get(cls, tenant_id: str) -> dict[str, Any]:
-        now = time.time()
-        loaded_at = cls._cache_loaded_at.get(tenant_id, 0)
-        is_stale = (now - loaded_at) > cls._cache_ttl_seconds
-        if tenant_id not in cls._cache or is_stale:
+        if tenant_id not in cls._cache:
             cls._cache[tenant_id] = cls._load_from_db(tenant_id)
-            cls._cache_loaded_at[tenant_id] = now
         return cls._cache[tenant_id]
 
     @classmethod
     def invalidate(cls, tenant_id: str) -> None:
         """Call this whenever a tenant updates their gateway config."""
         cls._cache.pop(tenant_id, None)
-        cls._cache_loaded_at.pop(tenant_id, None)
 
     @staticmethod
     def _load_from_db(tenant_id: str) -> dict[str, Any]:
