@@ -12,10 +12,13 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
+import logging
+from uuid import uuid4
 
 from .base import GatewayType, PaymentRequest
 from .factory import get_gateway, TenantPaymentSettings
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
+from app.core.settings import settings
 from app.models.user import User
 from app.models.sales import Sale
 from app.models.package_pricing import PackagePricing
@@ -27,6 +30,7 @@ from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -343,11 +347,20 @@ async def initiate_package_purchase(
     try:
         response = gateway.create_payment(payment_request)
     except Exception as exc:
-        # Defensive: gateways should return PaymentResponse on provider errors,
-        # but we still guard against unexpected exceptions so the API doesn't 500.
+        error_id = str(uuid4())
+        logger.exception(
+            "package-purchase gateway.create_payment crashed (error_id=%s, tenant_id=%s, gateway=%s, order_id=%s)",
+            error_id,
+            tenant_id,
+            getattr(gateway, "GATEWAY_TYPE", None),
+            str(order.id),
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Payment gateway error. Please try again later.",
+            detail=(
+                f"Payment gateway error (error_id={error_id}). "
+                + (f"{type(exc).__name__}: {exc}" if settings.DEBUG else "Please try again later.")
+            ),
         ) from exc
 
     if not response.success:
