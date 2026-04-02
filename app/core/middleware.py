@@ -7,7 +7,6 @@ from app.models.tenant_api_key import TenantAPIKey
 from app.models.tenant import Tenant
 import time
 import logging
-import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +53,12 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 }
             )
         
-        x_tenant_key = x_tenant_key.strip()
-        # Some environments store raw API key, others store a hash in `api_key_hash`.
-        # Support both to avoid config drift between local and server.
-        x_tenant_key_sha256 = hashlib.sha256(x_tenant_key.encode("utf-8")).hexdigest()
-
         db: Session = SessionLocal()
         try:
             api_key = (
                 db.query(TenantAPIKey)
                 .filter(
-                    TenantAPIKey.api_key_hash.in_([x_tenant_key, x_tenant_key_sha256]),
+                    TenantAPIKey.api_key_hash == x_tenant_key,
                     TenantAPIKey.is_active.is_(True),
                 )
                 .first()
