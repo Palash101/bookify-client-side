@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, time as time_type, timezone as dt_timezone
+from datetime import date, datetime, time as time_type, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from typing import Any, Optional, Sequence, Tuple
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session, attributes
+from sqlalchemy import String as SAString, and_, cast, func, or_
+from sqlalchemy.orm import Session, aliased, attributes
 
 from app.models.class_booking import ClassBooking
 from app.models.fitness_program import FitnessProgram
@@ -44,10 +44,11 @@ ACTIVE_USER_BOOKING_STATUSES: Tuple[str, ...] = (
     "pending_payment",
 )
 
-# Confirmed + pending (holds a regular slot, not waitlist)
-OCCUPYING_SLOT_STATUSES: Tuple[str, ...] = ("confirmed", "pending")
+# Statuses that hold a regular slot (not waitlist).
+OCCUPYING_SLOT_STATUSES: Tuple[str, ...] = ("confirmed", "pending", "pending_payment")
 
 WAITING_STATUS = "waiting"
+CANCELLED_STATUS = "cancelled"
 
 
 def _tenant_tz(db: Session, tenant_id: UUID) -> ZoneInfo:
@@ -108,6 +109,9 @@ def _normalize_seat_label(raw: Optional[str]) -> Optional[str]:
 
 
 def _class_has_layout(gym_class: GymClass) -> bool:
+    layouts = getattr(gym_class, "layouts", None)
+    if layouts not in (None, "", [], {}):
+        return True
     lid = gym_class.layout_id
     if lid is None:
         return False
@@ -117,11 +121,84 @@ def _class_has_layout(gym_class: GymClass) -> bool:
         return True
 
 
+def _layout_total_seats(gym_class: GymClass) -> Optional[int]:
+    layouts = getattr(gym_class, "layouts", None)
+    if not isinstance(layouts, dict):
+        return None
+    raw = layouts.get("totalSeats")
+    if raw is None:
+        return None
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def _effective_capacity(gym_class: GymClass) -> int:
+    """
+    Final slot capacity for booking checks:
+    - layout classes: layouts.totalSeats (if present)
+    - fallback: gym_classes.max_bookings
+    - <=0 means unlimited
+    """
+    layout_seats = _layout_total_seats(gym_class) if _class_has_layout(gym_class) else None
+    if layout_seats is not None:
+        return int(layout_seats)
+    return int(gym_class.max_bookings or 0)
+
+
+def _layout_seat_status(gym_class: GymClass, seat_id: str) -> tuple[Optional[str], Optional[str]]:
+    """
+    Returns (status, error). status is lower-cased if seat exists.
+    """
+    layouts = getattr(gym_class, "layouts", None)
+    if layouts in (None, "", [], {}):
+        return None, "Class layout is not configured"
+    if not isinstance(layouts, dict):
+        return None, "Invalid class layout format"
+    seats = layouts.get("seats")
+    if not isinstance(seats, list):
+        return None, "Invalid class layout seats data"
+    for seat in seats:
+        if not isinstance(seat, dict):
+            continue
+        if str(seat.get("id")) == seat_id:
+            st = seat.get("status")
+            return (str(st).lower() if st is not None else None), None
+    return None, "Seat id not found in class layout"
+
+
+def _set_layout_seat_status(gym_class: GymClass, seat_id: str, status_value: str) -> bool:
+    """
+    Mutates gym_class.layouts seat status in-memory. Caller commits session.
+    """
+    layouts = getattr(gym_class, "layouts", None)
+    if not isinstance(layouts, dict):
+        return False
+    seats = layouts.get("seats")
+    if not isinstance(seats, list):
+        return False
+    changed = False
+    for seat in seats:
+        if not isinstance(seat, dict):
+            continue
+        if str(seat.get("id")) == seat_id:
+            seat["status"] = status_value
+            changed = True
+            break
+    if changed:
+        gym_class.layouts = layouts
+        attributes.flag_modified(gym_class, "layouts")
+    return changed
+
+
 def _sessions_remaining_from_sale(sale: Sale) -> Optional[int]:
     meta = sale.extra_metadata or {}
     if not isinstance(meta, dict):
         return None
-    for key in ("sessions_remaining", "remaining_sessions", "sessions_left"):
+    # Accept multiple historical key names for compatibility.
+    for key in ("sessions_remaining", "remaining_sessions", "remaining_session", "sessions_left"):
         if key not in meta:
             continue
         v = meta[key]
@@ -132,6 +209,18 @@ def _sessions_remaining_from_sale(sale: Sale) -> Optional[int]:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _restore_sessions_to_sale(sale: Sale, qty: int) -> None:
+    if qty <= 0:
+        return
+    rem = _sessions_remaining_from_sale(sale)
+    if rem is None:
+        return
+    meta: dict[str, Any] = dict(sale.extra_metadata or {})
+    meta["sessions_remaining"] = max(0, rem + qty)
+    sale.extra_metadata = meta
+    attributes.flag_modified(sale, "extra_metadata")
 
 
 def _finalize_booking_validation(outcome: "BookingValidationOutcome", payment_method: str) -> None:
@@ -205,6 +294,118 @@ class BookingValidationOutcome:
 
 
 class BookingsService:
+    @staticmethod
+    def list_member_bookings(
+        db: Session,
+        tenant_id: UUID,
+        user: User,
+    ) -> dict[str, list[dict[str, Any]]]:
+        tz = _tenant_tz(db, tenant_id)
+        now = datetime.now(tz)
+        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        cancel_hours = int(cfg.booking_settings.cancellation_window_hours or 0)
+        allow_late = bool(cfg.booking_settings.allow_late_cancellations)
+
+        trainer_user = aliased(User)
+        rows = (
+            db.query(ClassBooking, GymClass, trainer_user)
+            .join(GymClass, ClassBooking.class_id == GymClass.id)
+            .outerjoin(trainer_user, GymClass.trainer_id == trainer_user.id)
+            .filter(
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.user_id == user.id,
+                ClassBooking.status != CANCELLED_STATUS,
+            )
+            .order_by(GymClass.class_date.desc(), GymClass.start_time.desc(), ClassBooking.created_at.desc())
+            .all()
+        )
+
+        out: dict[str, list[dict[str, Any]]] = {"upcoming": [], "past": [], "waiting": []}
+        for booking, gym_class, trainer in rows:
+            starts_at = _class_starts_at(gym_class, tz)
+            class_name = gym_class.title or gym_class.theme_name
+            trainer_name: Optional[str] = None
+            if trainer:
+                trainer_name = f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() or trainer.email
+
+            if booking.status == WAITING_STATUS:
+                out["waiting"].append(
+                    {
+                        "booking_id": str(booking.id),
+                        "class_name": class_name,
+                        "status": booking.status,
+                        "waiting_position": booking.waiting_position,
+                    }
+                )
+                continue
+
+            cancel_deadline_iso: Optional[str] = None
+            can_cancel = False
+            if starts_at is not None:
+                cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
+                cancel_deadline_iso = cutoff.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
+                if allow_late:
+                    can_cancel = booking.status not in (CANCELLED_STATUS, "completed")
+                else:
+                    can_cancel = now <= cutoff and booking.status not in (CANCELLED_STATUS, "completed")
+
+            item = {
+                "booking_id": str(booking.id),
+                "class_id": str(gym_class.id),
+                "class_name": class_name,
+                "booking_type": booking.booking_type,
+                "status": booking.status,
+                "seat_id": booking.seat_id,
+                "date": gym_class.class_date.isoformat() if gym_class.class_date else None,
+                "start_time": gym_class.start_time.strftime("%H:%M") if gym_class.start_time else None,
+                "trainer": trainer_name,
+                "can_cancel": can_cancel,
+                "cancel_deadline": cancel_deadline_iso,
+            }
+            if starts_at is not None and starts_at > now:
+                out["upcoming"].append(item)
+            else:
+                out["past"].append(item)
+        return out
+
+    @staticmethod
+    def _promote_next_waiting(
+        db: Session,
+        tenant_id: UUID,
+        gym_class: GymClass,
+        now: datetime,
+    ) -> None:
+        """
+        Promote oldest waiting booking to an occupying status when a slot is freed.
+        """
+        waiting_booking = (
+            db.query(ClassBooking)
+            .filter(
+                ClassBooking.class_id == gym_class.id,
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.status == WAITING_STATUS,
+            )
+            .order_by(ClassBooking.booked_at.asc(), ClassBooking.created_at.asc())
+            .first()
+        )
+        if not waiting_booking:
+            return
+
+        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        target_status = "confirmed" if cfg.booking_settings.auto_confirm_booking else "pending"
+        promoted_status = target_status
+
+        # Gateway booking should go to payment step after promotion.
+        if waiting_booking.payment_method == "gateway" and target_status in ("confirmed", "pending"):
+            promoted_status = "pending_payment"
+
+        waiting_booking.status = promoted_status
+        waiting_booking.waiting_position = None
+        waiting_booking.promoted_from_waiting_at = now
+        if promoted_status == "confirmed":
+            waiting_booking.confirmed_at = now
+            gym_class.booking_counts = int(gym_class.booking_counts or 0) + 1
+
     @staticmethod
     def _load_class_for_tenant(
         db: Session, tenant_id: UUID, class_id: UUID
@@ -473,7 +674,7 @@ class BookingsService:
 
         occupying = BookingsService._count_by_statuses(db, class_id, OCCUPYING_SLOT_STATUSES)
         waiting_n = BookingsService._count_by_statuses(db, class_id, (WAITING_STATUS,))
-        max_bookings = int(gym_class.max_bookings or 0)
+        max_bookings = _effective_capacity(gym_class)
         max_waitings = int(gym_class.max_waitings or 0)
         has_slot = max_bookings <= 0 or occupying < max_bookings
         waitlist_ok = (
@@ -645,11 +846,24 @@ class BookingsService:
                     message='This class has a layout — send seat_id as the seat label (e.g. "A1").',
                 )
             else:
+                seat_status, seat_err = _layout_seat_status(gym_class, seat_label)
+                if seat_err:
+                    outcome.set_check("seat_selection", False, message=seat_err)
+                    _finalize_booking_validation(outcome, pm)
+                    return outcome
+                if seat_status and seat_status != "available":
+                    outcome.set_check(
+                        "seat_selection",
+                        False,
+                        message=f"Seat {seat_label} is not available",
+                    )
+                    _finalize_booking_validation(outcome, pm)
+                    return outcome
                 taken = (
                     db.query(ClassBooking)
                     .filter(
                         ClassBooking.class_id == class_id,
-                        ClassBooking.seat_id == seat_label,
+                        cast(ClassBooking.seat_id, SAString) == seat_label,
                         ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
                     )
                     .first()
@@ -673,7 +887,7 @@ class BookingsService:
                 outcome.set_check(
                     "seat_selection",
                     True,
-                    message="Seat not required (class has no layout_id)",
+                    message="Seat not required (class has no layout configured)",
                 )
 
         if outcome.ok:
@@ -698,6 +912,7 @@ class BookingsService:
         user_package_purchase_id: Optional[UUID],
         seat_id: Optional[str],
         notes: Optional[str],
+        force_waiting: bool = False,
     ) -> ClassBooking:
         outcome = BookingsService.validate(
             db,
@@ -716,6 +931,11 @@ class BookingsService:
                         msg = v["message"]
                         break
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
+        if force_waiting and outcome.proposed_status != WAITING_STATUS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Class has available slot; use regular booking API.",
+            )
 
         gym_class = outcome.gym_class
         status_str = outcome.proposed_status
@@ -744,8 +964,8 @@ class BookingsService:
 
         if payment_method == "wallet":
             price = Decimal(str(gym_class.price or 0))
-            # Only charge when slot is confirmed; not waitlist / pending approval / gateway hold
-            if price > 0 and status_str == "confirmed":
+            # Charge upfront for confirmed + waiting bookings.
+            if price > 0 and status_str in ("confirmed", WAITING_STATUS):
                 bal_before = Decimal(str(user.wallet or 0))
                 if bal_before < price:
                     raise HTTPException(
@@ -795,8 +1015,162 @@ class BookingsService:
         )
         db.add(booking)
 
-        if status_str in ("confirmed", "pending") and payment_method != "gateway":
-            gym_class.booking_counts = int(gym_class.booking_counts or 0) + 1
+        has_layout = _class_has_layout(gym_class)
+        seat_label = _normalize_seat_label(seat_id)
+        if has_layout and seat_label and status_str in OCCUPYING_SLOT_STATUSES:
+            _set_layout_seat_status(gym_class, seat_label, "booked")
+
+        if status_str == "confirmed":
+            cap = _effective_capacity(gym_class)
+            current_count = int(gym_class.booking_counts or 0)
+            if cap > 0 and current_count >= cap:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Class is full",
+                )
+            gym_class.booking_counts = (
+                min(cap, current_count + 1) if cap > 0 else current_count + 1
+            )
+
+        db.commit()
+        db.refresh(booking)
+        return booking
+
+    @staticmethod
+    def cancel(
+        db: Session,
+        tenant_id: UUID,
+        user: User,
+        class_id: UUID,
+        booking_id: UUID,
+        reason: Optional[str],
+    ) -> ClassBooking:
+        booking = (
+            db.query(ClassBooking)
+            .filter(
+                ClassBooking.id == booking_id,
+                ClassBooking.class_id == class_id,
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.user_id == user.id,
+            )
+            .first()
+        )
+        if not booking:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+        if booking.status in (CANCELLED_STATUS, "completed"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Booking already {booking.status}",
+            )
+
+        gym_class = (
+            db.query(GymClass)
+            .filter(GymClass.id == class_id)
+            .first()
+        )
+        if not gym_class:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
+
+        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        tz = _tenant_tz(db, tenant_id)
+        now = datetime.now(tz)
+        starts_at = _class_starts_at(gym_class, tz)
+
+        if starts_at is not None:
+            if not cfg.booking_settings.allow_late_cancellations:
+                if starts_at <= now:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Cancellation window closed: class already started",
+                    )
+                cancel_hours = int(cfg.booking_settings.cancellation_window_hours or 0)
+                if cancel_hours > 0:
+                    cutoff = starts_at - timedelta(hours=cancel_hours)
+                    if now > cutoff:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=(
+                                f"Cancellation allowed only {cancel_hours}h before class start"
+                            ),
+                        )
+
+        previous_status = booking.status
+        seat_label = _normalize_seat_label(booking.seat_id)
+
+        # Refund wallet payment on cancellation (only if amount was actually deducted).
+        if booking.payment_method == "wallet":
+            refund_amount = Decimal(str(booking.credits_deducted or 0))
+            if refund_amount > 0:
+                bal_before = Decimal(str(user.wallet or 0))
+                bal_after = bal_before + refund_amount
+                refund_txn = WalletTransaction(
+                    user_id=user.id,
+                    order_id=None,
+                    direction="credit",
+                    transaction_type="class_booking_refund",
+                    transaction_id=None,
+                    status="succeeded",
+                    metadata_={
+                        "class_id": str(class_id),
+                        "tenant_id": str(tenant_id),
+                        "booking_id": str(booking.id),
+                        "refund_for_wallet_txn_id": (
+                            str(booking.wallet_txn_id) if booking.wallet_txn_id else None
+                        ),
+                    },
+                    amount=refund_amount,
+                    currency=(
+                        GymConfigService.get_gym_config(db, tenant_id).payment_pricing.currency
+                        or "QAR"
+                    ).upper(),
+                    balance_before=bal_before,
+                    balance_after=bal_after,
+                    created_by=user.user_type or "member",
+                    created_by_id=user.id,
+                )
+                db.add(refund_txn)
+                user.wallet = bal_after
+
+        # Return package session on cancellation if one was deducted.
+        if (
+            booking.payment_method == "package"
+            and booking.user_package_purchase_id is not None
+            and int(booking.sessions_deducted or 0) > 0
+        ):
+            sale = (
+                db.query(Sale)
+                .filter(
+                    Sale.id == booking.user_package_purchase_id,
+                    Sale.tenant_id == tenant_id,
+                    Sale.user_id == user.id,
+                )
+                .first()
+            )
+            if sale:
+                _restore_sessions_to_sale(sale, int(booking.sessions_deducted or 0))
+
+        booking.status = CANCELLED_STATUS
+        booking.cancelled_at = now
+        booking.cancelled_by_user_id = user.id
+        booking.cancellation_reason = (reason or "").strip() or None
+
+        if previous_status == "confirmed":
+            gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
+            BookingsService._promote_next_waiting(db, tenant_id, gym_class, now)
+        if seat_label:
+            seat_still_taken = (
+                db.query(ClassBooking)
+                .filter(
+                    ClassBooking.class_id == class_id,
+                    cast(ClassBooking.seat_id, SAString) == seat_label,
+                    ClassBooking.id != booking.id,
+                    ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
+                )
+                .first()
+            )
+            if not seat_still_taken:
+                _set_layout_seat_status(gym_class, seat_label, "available")
 
         db.commit()
         db.refresh(booking)

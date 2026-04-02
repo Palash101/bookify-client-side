@@ -1,10 +1,12 @@
+from copy import deepcopy
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Optional, List, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, exists, or_
 
+from app.models.class_booking import ClassBooking
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.models.tenant import Tenant
@@ -21,8 +23,46 @@ COMMON_TZ_ABBREVS = {
     "UTC": "UTC",
 }
 
+ACTIVE_LAYOUT_SEAT_STATUSES = ("confirmed", "pending", "pending_payment", "waiting")
+
 
 class ClassesService:
+    @staticmethod
+    def _with_live_layout_status(db: Session, gym_class: GymClass) -> Any:
+        """
+        Returns class layouts payload with seats status reconciled against active bookings.
+        """
+        raw = getattr(gym_class, "layouts", None)
+        if not isinstance(raw, dict):
+            return raw
+        seats = raw.get("seats")
+        if not isinstance(seats, list):
+            return raw
+
+        occupied_rows = (
+            db.query(ClassBooking.seat_id)
+            .filter(
+                ClassBooking.class_id == gym_class.id,
+                ClassBooking.status.in_(list(ACTIVE_LAYOUT_SEAT_STATUSES)),
+                ClassBooking.seat_id.isnot(None),
+            )
+            .all()
+        )
+        occupied = {str(r[0]) for r in occupied_rows if r and r[0] is not None}
+
+        layout = deepcopy(raw)
+        out_seats = layout.get("seats")
+        if not isinstance(out_seats, list):
+            return raw
+        for seat in out_seats:
+            if not isinstance(seat, dict):
+                continue
+            sid = seat.get("id")
+            if sid is None:
+                continue
+            seat["status"] = "booked" if str(sid) in occupied else "available"
+        return layout
+
     @staticmethod
     def list_classes(
         db: Session,
@@ -212,6 +252,8 @@ class ClassesService:
             "class_id": str(gym_class.id),
             "name": gym_class.title or gym_class.theme_name or None,
             "booking_type": gym_class.booking_type,
+            "layout_id": gym_class.layout_id,
+            "layouts": ClassesService._with_live_layout_status(db, gym_class),
             "program": {
                 "id": int(program.id) if program else 0,
                 "name": program.name if program else None,

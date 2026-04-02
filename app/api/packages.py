@@ -90,6 +90,7 @@ async def get_active_package(
             is_unlimited=getattr(package, "_active_is_unlimited", False),
             session_count=getattr(package, "_active_session_count", None),
             sessions_remaining=getattr(package, "_active_sessions_remaining", None),
+            remaining_session=getattr(package, "_active_sessions_remaining", None),
             sessions_used=getattr(package, "_active_sessions_used", 0),
         ),
     }

@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, BigInteger, Date, Time, DateTime, ForeignKey, Text, Numeric, Integer
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.db.session import Base
@@ -30,8 +30,10 @@ class GymClass(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
     schedule_id = Column(BigInteger, ForeignKey("class_schedules.id"), nullable=True, index=True)
-    # Database column is layout_id (bigint), not JSON layout
+    # Legacy layout pointer
     layout_id = Column(BigInteger, nullable=True)
+    # Optional inline layout payload (newer schema)
+    layouts = Column(JSONB, nullable=True)
 
     # Relationships
     schedule = relationship("ClassSchedule", back_populates="gym_classes", lazy="select", foreign_keys=[schedule_id])

@@ -17,9 +17,13 @@ class BookingRequestBody(BaseModel):
     )
     seat_id: Optional[str] = Field(
         default=None,
-        description='Layout seat label when gym_classes.layout_id is set, e.g. "A1" (same id as class details layout.seats[].id)',
+        description='Layout seat label when gym_classes has layout configured (layout_id or layouts), e.g. "A1" (same id as class details layout.seats[].id)',
     )
     notes: Optional[str] = None
+
+
+class BookingCancelRequestBody(BaseModel):
+    reason: Optional[str] = None
 
 
 class BookingValidateData(BaseModel):
@@ -55,3 +59,57 @@ class BookingCreateResponse(BaseModel):
     success: bool = True
     message: str
     data: BookingCreatedData
+
+
+class BookingCancelledData(BaseModel):
+    booking_id: UUID
+    status: str
+    cancelled_at: Optional[str] = None
+    booking_counts: Optional[int] = None
+
+
+class BookingCancelResponse(BaseModel):
+    success: bool = True
+    message: str
+    data: BookingCancelledData
+
+
+class MemberUpcomingBookingItem(BaseModel):
+    booking_id: str
+    class_id: str
+    class_name: Optional[str] = None
+    booking_type: Optional[str] = None
+    status: str
+    seat_id: Optional[str] = None
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    trainer: Optional[str] = None
+    can_cancel: bool = False
+    cancel_deadline: Optional[str] = None
+
+
+class MemberPastBookingItem(BaseModel):
+    booking_id: str
+    class_id: str
+    class_name: Optional[str] = None
+    booking_type: Optional[str] = None
+    status: str
+    seat_id: Optional[str] = None
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    trainer: Optional[str] = None
+    can_cancel: bool = False
+    cancel_deadline: Optional[str] = None
+
+
+class MemberWaitingBookingItem(BaseModel):
+    booking_id: str
+    class_name: Optional[str] = None
+    status: str
+    waiting_position: Optional[int] = None
+
+
+class MemberBookingsResponse(BaseModel):
+    upcoming: list[MemberUpcomingBookingItem] = Field(default_factory=list)
+    past: list[MemberPastBookingItem] = Field(default_factory=list)
+    waiting: list[MemberWaitingBookingItem] = Field(default_factory=list)

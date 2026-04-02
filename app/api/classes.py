@@ -50,10 +50,15 @@ async def get_classes_by_date(
         sort_by=sort_by,
         sort_order=sort_order,
     )
+    data = []
+    for c in classes:
+        item = GymClassResponse.model_validate(c).model_dump()
+        item["layouts"] = ClassesService._with_live_layout_status(db, c)
+        data.append(GymClassResponse.model_validate(item))
     return {
         "success": True,
         "message": "Classes fetched successfully",
-        "data": [GymClassResponse.model_validate(c) for c in classes],
+        "data": data,
         "count": len(classes),
     }
 

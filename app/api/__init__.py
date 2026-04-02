@@ -6,8 +6,8 @@ api_router = APIRouter()
 
 # Include routers
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
-api_router.include_router(classes.router, prefix="/classes", tags=["classes"])
 api_router.include_router(class_bookings.router, prefix="/classes", tags=["bookings"])
+api_router.include_router(classes.router, prefix="/classes", tags=["classes"])
 api_router.include_router(packages.router, prefix="/packages", tags=["packages"])
 api_router.include_router(trainers.router, prefix="/trainers", tags=["trainers"])
 api_router.include_router(locations.router, prefix="/locations", tags=["locations"])
