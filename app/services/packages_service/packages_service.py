@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from fastapi import HTTPException, status
@@ -73,113 +73,124 @@ class PackagesService:
         return package
 
     @staticmethod
-    def get_active_package_for_user(
+    def _active_package_entry_for_order(
         db: Session,
         tenant_id: uuid.UUID,
-        user_id: uuid.UUID,
-    ) -> Optional[Package]:
+        order: Sale,
+    ) -> Optional[Dict[str, Any]]:
         """
-        Return the latest successful & non-expired package for this user+tenant.
-        If no active order, returns None.
+        Build one active-package payload dict for a single sale (order).
         """
-        from sqlalchemy.sql import func as sa_func
-
-        # Find latest successful, non-expired sale (order)
-        order = (
-            db.query(Sale)
-            .filter(
-                Sale.tenant_id == tenant_id,
-                Sale.user_id == user_id,
-                # Only package purchases should be considered active plans
-                Sale.type.in_(["package_gateway", "package_wallet"]),
-                Sale.package_id.isnot(None),
-                # Current payment flow uses "succeeded" (legacy data may have "success")
-                Sale.status.in_(["succeeded", "success"]),
-                # Either no expiry set yet, or still in future
-                (Sale.expires_at.is_(None)) | (Sale.expires_at > sa_func.now()),
-            )
-            .order_by(Sale.created_at.desc())
-            .first()
-        )
-
-        if not order:
-            return None
-
         package = (
             db.query(Package)
             .filter(Package.id == order.package_id, Package.tenant_id == tenant_id)
             .first()
         )
+        if package is None:
+            return None
 
-        # Attach order metadata to package instance for schema mapping if needed
-        if package is not None:
-            # non-persistent attrs just for response
-            package._active_order_id = order.id
-            package._active_order_status = order.status
-            package._active_order_created_at = order.created_at
-            package._active_order_expires_at = order.expires_at
-            package._active_order_amount = order.amount
-            package._active_order_currency = order.currency
-            package._active_sale_type = order.type
-
-            # --- session / class quantity (sale metadata + pricing + bookings) ---
-            sessions_used_raw = (
-                db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
-                .filter(
-                    ClassBooking.user_package_purchase_id == order.id,
-                    ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
-                )
-                .scalar()
+        sessions_used_raw = (
+            db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
+            .filter(
+                ClassBooking.user_package_purchase_id == order.id,
+                ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
             )
+            .scalar()
+        )
+        try:
+            sessions_used = int(sessions_used_raw or 0)
+        except (TypeError, ValueError):
+            sessions_used = 0
+
+        meta = order.extra_metadata if isinstance(order.extra_metadata, dict) else {}
+        pricing_row = None
+        if order.pricing_id:
+            pricing_row = (
+                db.query(PackagePricing)
+                .filter(PackagePricing.id == order.pricing_id)
+                .first()
+            )
+
+        is_unlimited = bool(
+            pricing_row.is_unlimited
+            if pricing_row is not None and pricing_row.is_unlimited is not None
+            else False
+        )
+
+        session_type = meta.get("session_type")
+        if not session_type and pricing_row is not None:
+            session_type = pricing_row.session_type
+
+        total_raw = meta.get("session_count")
+        if total_raw is None and pricing_row is not None and pricing_row.session_count is not None:
+            total_raw = pricing_row.session_count
+        total_sessions: Optional[int] = None
+        if not is_unlimited and total_raw is not None:
             try:
-                sessions_used = int(sessions_used_raw or 0)
+                total_sessions = int(total_raw)
             except (TypeError, ValueError):
-                sessions_used = 0
+                total_sessions = None
 
-            meta = order.extra_metadata if isinstance(order.extra_metadata, dict) else {}
-            pricing_row = None
-            if order.pricing_id:
-                pricing_row = (
-                    db.query(PackagePricing)
-                    .filter(PackagePricing.id == order.pricing_id)
-                    .first()
-                )
+        sessions_remaining: Optional[int] = None
+        if is_unlimited:
+            sessions_remaining = None
+        else:
+            rem_meta = _sessions_remaining_from_sale(order)
+            if rem_meta is not None:
+                sessions_remaining = max(0, int(rem_meta))
+            elif total_sessions is not None:
+                sessions_remaining = max(0, total_sessions - sessions_used)
 
-            is_unlimited = bool(
-                pricing_row.is_unlimited
-                if pricing_row is not None and pricing_row.is_unlimited is not None
-                else False
+        return {
+            "id": order.id,
+            "package_id": package.id,
+            "package_name": package.name,
+            "package_description": package.description,
+            "validity_days": package.validity_days,
+            "validity_end": package.validity_end,
+            "status": order.status,
+            "purchased_at": order.created_at,
+            "expires_at": order.expires_at,
+            "sale_type": order.type,
+            "amount": order.amount,
+            "currency": order.currency,
+            "session_type": session_type,
+            "is_unlimited": is_unlimited,
+            "session_count": total_sessions,
+            "sessions_remaining": sessions_remaining,
+            "sessions_used": sessions_used,
+        }
+
+    @staticmethod
+    def get_active_packages_for_user(
+        db: Session,
+        tenant_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> List[Dict[str, Any]]:
+        """
+        All successful, non-expired package purchases for this user+tenant.
+        Newest purchase first.
+        """
+        from sqlalchemy.sql import func as sa_func
+
+        orders = (
+            db.query(Sale)
+            .filter(
+                Sale.tenant_id == tenant_id,
+                Sale.user_id == user_id,
+                Sale.type.in_(["package_gateway", "package_wallet"]),
+                Sale.package_id.isnot(None),
+                Sale.status.in_(["succeeded", "success"]),
+                (Sale.expires_at.is_(None)) | (Sale.expires_at > sa_func.now()),
             )
+            .order_by(Sale.created_at.desc())
+            .all()
+        )
 
-            session_type = meta.get("session_type")
-            if not session_type and pricing_row is not None:
-                session_type = pricing_row.session_type
-
-            total_raw = meta.get("session_count")
-            if total_raw is None and pricing_row is not None and pricing_row.session_count is not None:
-                total_raw = pricing_row.session_count
-            total_sessions: Optional[int] = None
-            if not is_unlimited and total_raw is not None:
-                try:
-                    total_sessions = int(total_raw)
-                except (TypeError, ValueError):
-                    total_sessions = None
-
-            sessions_remaining: Optional[int] = None
-            if is_unlimited:
-                sessions_remaining = None
-            else:
-                rem_meta = _sessions_remaining_from_sale(order)
-                if rem_meta is not None:
-                    sessions_remaining = max(0, int(rem_meta))
-                elif total_sessions is not None:
-                    sessions_remaining = max(0, total_sessions - sessions_used)
-
-            package._active_session_type = session_type
-            package._active_is_unlimited = is_unlimited
-            package._active_session_count = total_sessions
-            package._active_sessions_remaining = sessions_remaining
-            package._active_sessions_used = sessions_used
-
-        return package
+        out: List[Dict[str, Any]] = []
+        for order in orders:
+            entry = PackagesService._active_package_entry_for_order(db, tenant_id, order)
+            if entry:
+                out.append(entry)
+        return out
 

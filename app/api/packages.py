@@ -8,7 +8,7 @@ from app.schemas.package import (
     PackageResponse,
     AllPackagesListResponse,
     PackageDetailResponse,
-    ActivePackageResponse,
+    ActivePackagesListResponse,
     ActivePackageData,
 )
 from app.services.packages_service.packages_service import PackagesService
@@ -49,50 +49,33 @@ async def get_all_packages(
     }
 
 
-@router.get("/active", response_model=ActivePackageResponse)
-async def get_active_package(
+@router.get("/active", response_model=ActivePackagesListResponse)
+async def get_active_packages(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
     """
-    Get current user's latest successful package for this tenant.
-    Returns null data if user has no active package.
+    All successful, non-expired package purchases for the current user on this tenant.
+    Newest first. Use each item's `id` (sale id) as `user_package_purchase_id` when booking.
     """
-    package = PackagesService.get_active_package_for_user(
+    entries = PackagesService.get_active_packages_for_user(
         db, tenant_id=tenant_id, user_id=current_user.id
     )
 
-    if not package or not hasattr(package, "_active_order_id"):
+    if not entries:
         return {
             "success": True,
-            "message": "No active package found",
-            "data": None,
+            "message": "No active packages found",
+            "data": [],
+            "count": 0,
         }
 
     return {
         "success": True,
-        "message": "Active package fetched successfully",
-        "data": ActivePackageData(
-            id=package._active_order_id,
-            package_id=package.id,
-            package_name=package.name,
-            package_description=package.description,
-            validity_days=package.validity_days,
-            validity_end=package.validity_end,
-            status=package._active_order_status,
-            purchased_at=package._active_order_created_at,
-            expires_at=getattr(package, "_active_order_expires_at", None),
-            sale_type=getattr(package, "_active_sale_type", None),
-            amount=getattr(package, "_active_order_amount", None),
-            currency=getattr(package, "_active_order_currency", None),
-            session_type=getattr(package, "_active_session_type", None),
-            is_unlimited=getattr(package, "_active_is_unlimited", False),
-            session_count=getattr(package, "_active_session_count", None),
-            sessions_remaining=getattr(package, "_active_sessions_remaining", None),
-            remaining_session=getattr(package, "_active_sessions_remaining", None),
-            sessions_used=getattr(package, "_active_sessions_used", 0),
-        ),
+        "message": "Active packages fetched successfully",
+        "data": [ActivePackageData.model_validate(e) for e in entries],
+        "count": len(entries),
     }
 
 

@@ -94,12 +94,11 @@ class ActivePackageData(BaseModel):
     is_unlimited: bool = False
     session_count: Optional[int] = None  # total included; null if unlimited or unknown
     sessions_remaining: Optional[int] = None  # null if unlimited; else left on this sale
-    # Backward-compat: some clients expect singular key name
-    remaining_session: Optional[int] = None
     sessions_used: int = 0  # sum of sessions deducted on active bookings for this sale
 
 
-class ActivePackageResponse(BaseModel):
+class ActivePackagesListResponse(BaseModel):
     success: bool = True
-    message: str = "Active package fetched successfully"
-    data: Optional[ActivePackageData] = None
+    message: str = "Active packages fetched successfully"
+    data: List[ActivePackageData]
+    count: int
