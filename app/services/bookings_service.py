@@ -335,6 +335,7 @@ class BookingsService:
                 out["waiting"].append(
                     {
                         "booking_id": str(booking.id),
+                        "order_id": booking.order_id,
                         "class_name": class_name,
                         "status": booking.status,
                         "waiting_position": booking.waiting_position,
@@ -362,6 +363,7 @@ class BookingsService:
 
             item: dict[str, Any] = {
                 "booking_id": str(booking.id),
+                "order_id": booking.order_id,
                 "class_id": str(gym_class.id),
                 "class_name": class_name,
                 "booking_type": booking.booking_type,
@@ -1029,6 +1031,9 @@ class BookingsService:
             notes=notes,
         )
         db.add(booking)
+        db.flush()
+        if not booking.order_id:
+            booking.order_id = f"ORD{str(booking.id).split('-')[0].upper()}"
 
         has_layout = _class_has_layout(gym_class)
         seat_label = _normalize_seat_label(seat_id)

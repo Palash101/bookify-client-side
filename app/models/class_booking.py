@@ -40,6 +40,9 @@ class ClassBooking(Base):
     package_id = Column(UUID(as_uuid=True), ForeignKey("packages.id", ondelete="SET NULL"), nullable=True)
     user_package_purchase_id = Column(UUID(as_uuid=True), ForeignKey("sales.id", ondelete="SET NULL"), nullable=True)
 
+    # Human-readable booking order reference e.g. ORD1A2B3C4D
+    order_id = Column(String(50), nullable=True, index=True)
+
     gateway_order_id = Column(String(255), nullable=True)
     gateway_payment_id = Column(String(255), nullable=True)
 
