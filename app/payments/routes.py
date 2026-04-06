@@ -26,6 +26,7 @@ from app.models.package import Package
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
+from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
@@ -470,28 +471,10 @@ async def payment_callback(
                 order.status = _wallet_status_from_gateway(result.status)
                 order.gateway_transaction_id = result.transaction_id or order.gateway_transaction_id
 
-                # Calculate expiry based on package validity (if available)
-                package = (
-                    db.query(Package)
-                    .filter(Package.id == order.package_id, Package.tenant_id == UUID(tenant_id))
-                    .first()
-                )
-                if package:
-                    expires_at: Optional[datetime] = None
-
-                    # 1) If validity_days set, use created_at + days
-                    if package.validity_days is not None and order.created_at is not None:
-                        expires_at = order.created_at + timedelta(days=package.validity_days)
-                    # 2) Else, if validity_end date set, use that day's end
-                    elif package.validity_end is not None:
-                        expires_at = datetime.combine(
-                            package.validity_end,
-                            datetime.max.time(),
-                            tzinfo=order.created_at.tzinfo if order.created_at else None,
-                        )
-
-                    if expires_at is not None:
-                        order.expires_at = expires_at
+                if order.package_id is not None:
+                    apply_package_expiry_to_sale(
+                        db, order, UUID(tenant_id), overwrite=True
+                    )
 
             txn = SalesTransactions(
                 order_id=order.id if order else order_uuid,

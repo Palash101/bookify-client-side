@@ -83,9 +83,11 @@ class MemberUpcomingBookingItem(BaseModel):
     seat_id: Optional[str] = None
     date: Optional[str] = None
     start_time: Optional[str] = None
+    end_time: Optional[str] = None
     trainer: Optional[str] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
+    cancelled_at: Optional[str] = None
 
 
 class MemberPastBookingItem(BaseModel):
@@ -97,9 +99,11 @@ class MemberPastBookingItem(BaseModel):
     seat_id: Optional[str] = None
     date: Optional[str] = None
     start_time: Optional[str] = None
+    end_time: Optional[str] = None
     trainer: Optional[str] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
+    cancelled_at: Optional[str] = None
 
 
 class MemberWaitingBookingItem(BaseModel):

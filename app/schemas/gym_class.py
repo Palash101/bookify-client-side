@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Any, List, Union
 from datetime import date as DateType, time, datetime
 from uuid import UUID
@@ -32,6 +32,10 @@ class GymClassResponse(GymClassBase):
     schedule_id: Optional[int] = None
     layout_id: Optional[Union[int, UUID, str]] = None
     layouts: Optional[Any] = None
+    fully_booked: bool = Field(
+        default=False,
+        description="No regular spots left (all layout seats booked, or booking_counts >= capacity).",
+    )
 
     class Config:
         from_attributes = True

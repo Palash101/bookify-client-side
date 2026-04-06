@@ -12,6 +12,7 @@ from app.models.user import User
 from app.models.tenant import Tenant
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
+from app.services.bookings_service import _effective_capacity
 
 # Map common DB abbreviations to IANA timezone names (zoneinfo does not accept "IST" etc.)
 COMMON_TZ_ABBREVS = {
@@ -62,6 +63,37 @@ class ClassesService:
                 continue
             seat["status"] = "booked" if str(sid) in occupied else "available"
         return layout
+
+    @staticmethod
+    def fully_booked_for_class(gym_class: GymClass, live_layout: Any) -> bool:
+        """
+        Whether the class should be treated as full for UI (disable booking).
+
+        - If layouts.seats has entries with ids, all such seats must be ``booked``
+          (uses live_layout from _with_live_layout_status).
+        - Else capacity from ``_effective_capacity`` (totalSeats or max_bookings);
+          unlimited (<=0) => not fully_booked.
+        """
+        if isinstance(live_layout, dict):
+            seats = live_layout.get("seats")
+            if isinstance(seats, list):
+                with_id = [
+                    s
+                    for s in seats
+                    if isinstance(s, dict) and s.get("id") is not None
+                ]
+                if with_id:
+                    for s in with_id:
+                        st = str(s.get("status") or "").lower()
+                        if st != "booked":
+                            return False
+                    return True
+
+        cap = _effective_capacity(gym_class)
+        if cap <= 0:
+            return False
+        booked = int(gym_class.booking_counts or 0)
+        return booked >= cap
 
     @staticmethod
     def list_classes(

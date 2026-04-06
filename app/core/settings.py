@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = Field(default="Bookify", env="SMTP_FROM_NAME")
     SMTP_USE_TLS: bool = Field(default=True, env="SMTP_USE_TLS")
     
+    # After Stripe (etc.) hits /payment/success on this server, user is redirected here (mobile deep link).
+    PAYMENT_SUCCESS_DEEP_LINK: str = Field(
+        default="bookify://payment/success",
+        env="PAYMENT_SUCCESS_DEEP_LINK",
+    )
+
     # Environment
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"

@@ -10,6 +10,7 @@ from app.models.package import Package
 from app.models.package_pricing import PackagePricing
 from app.models.sales import Sale
 from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
+from app.services.sale_expiry import compute_sale_expires_at
 
 
 class PackagesService:
@@ -141,6 +142,8 @@ class PackagesService:
             elif total_sessions is not None:
                 sessions_remaining = max(0, total_sessions - sessions_used)
 
+        expires_at = order.expires_at or compute_sale_expires_at(order, package)
+
         return {
             "id": order.id,
             "package_id": package.id,
@@ -150,7 +153,7 @@ class PackagesService:
             "validity_end": package.validity_end,
             "status": order.status,
             "purchased_at": order.created_at,
-            "expires_at": order.expires_at,
+            "expires_at": expires_at,
             "sale_type": order.type,
             "amount": order.amount,
             "currency": order.currency,

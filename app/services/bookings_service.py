@@ -314,13 +314,16 @@ class BookingsService:
             .filter(
                 ClassBooking.tenant_id == tenant_id,
                 ClassBooking.user_id == user.id,
-                ClassBooking.status != CANCELLED_STATUS,
             )
             .order_by(GymClass.class_date.desc(), GymClass.start_time.desc(), ClassBooking.created_at.desc())
             .all()
         )
 
-        out: dict[str, list[dict[str, Any]]] = {"upcoming": [], "past": [], "waiting": []}
+        out: dict[str, list[dict[str, Any]]] = {
+            "upcoming": [],
+            "past": [],
+            "waiting": [],
+        }
         for booking, gym_class, trainer in rows:
             starts_at = _class_starts_at(gym_class, tz)
             class_name = gym_class.title or gym_class.theme_name
@@ -341,15 +344,23 @@ class BookingsService:
 
             cancel_deadline_iso: Optional[str] = None
             can_cancel = False
-            if starts_at is not None:
+            if booking.status != CANCELLED_STATUS and starts_at is not None:
                 cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
                 cancel_deadline_iso = cutoff.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
                 if allow_late:
-                    can_cancel = booking.status not in (CANCELLED_STATUS, "completed")
+                    can_cancel = booking.status not in ("completed",)
                 else:
-                    can_cancel = now <= cutoff and booking.status not in (CANCELLED_STATUS, "completed")
+                    can_cancel = now <= cutoff and booking.status not in ("completed",)
 
-            item = {
+            cancelled_at_iso: Optional[str] = None
+            if booking.status == CANCELLED_STATUS and booking.cancelled_at is not None:
+                cancelled_at_iso = (
+                    booking.cancelled_at.astimezone(dt_timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                )
+
+            item: dict[str, Any] = {
                 "booking_id": str(booking.id),
                 "class_id": str(gym_class.id),
                 "class_name": class_name,
@@ -358,10 +369,14 @@ class BookingsService:
                 "seat_id": booking.seat_id,
                 "date": gym_class.class_date.isoformat() if gym_class.class_date else None,
                 "start_time": gym_class.start_time.strftime("%H:%M") if gym_class.start_time else None,
+                "end_time": gym_class.end_time.strftime("%H:%M") if gym_class.end_time else None,
                 "trainer": trainer_name,
                 "can_cancel": can_cancel,
                 "cancel_deadline": cancel_deadline_iso,
             }
+            if cancelled_at_iso is not None:
+                item["cancelled_at"] = cancelled_at_iso
+
             if starts_at is not None and starts_at > now:
                 out["upcoming"].append(item)
             else:
