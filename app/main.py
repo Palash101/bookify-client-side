@@ -171,12 +171,14 @@ async def payment_success(session_id: Optional[str] = None):
 
     sale = None
     wallet_txn = None
+    debug: dict[str, str] = {}
 
     if session_id:
         db = SessionLocal()
         try:
             try:
                 sale = db.query(Sale).filter(Sale.gateway_transaction_id == session_id).first()
+                debug["sale_found_by_session"] = "1" if sale is not None else "0"
 
                 # If we didn't create Sale at initiation, derive it from the initiation SalesTransactions row.
                 if sale is None and (session_id or "").startswith("cs_"):
@@ -189,6 +191,9 @@ async def payment_success(session_id: Optional[str] = None):
                         .order_by(SalesTransactions.created_at.desc())
                         .first()
                     )
+                    debug["init_txn_found_by_gateway_txn_id"] = "1" if init_txn is not None else "0"
+                    if init_txn is not None:
+                        debug["init_txn_id"] = str(getattr(init_txn, "id", "") or "")
                     if init_txn and init_txn.user_id and isinstance(init_txn.extra_metadata, dict):
                         meta = init_txn.extra_metadata or {}
                         client_order_id = meta.get("client_order_id")
@@ -221,10 +226,20 @@ async def payment_success(session_id: Optional[str] = None):
                             db.add(sale)
                             db.flush()
                             init_txn.order_id = sale.id
+                            debug["sale_created_from_init_txn"] = "1"
+                            debug["sale_id"] = str(sale.id)
+                    # If there's no initiation row, we can't create Sale/UserPackage in this flow.
+                    if sale is None and debug.get("init_txn_found_by_gateway_txn_id") == "0":
+                        db.rollback()
+                        return _respond(
+                            error="missing_initiation_sales_transaction",
+                            session_id=session_id,
+                            **debug,
+                        )
             except Exception:
                 logger.exception("payment_success reconciliation failed (session_id=%s)", session_id)
                 db.rollback()
-                return _respond(error="payment_success_failed", session_id=session_id)
+                return _respond(error="payment_success_failed", session_id=session_id, **debug)
             # Stripe Checkout session ids (cs_…) live on the sale for packages; wallet ledger uses the same id only for wallet top-ups.
             wallet_txn = None
             if sale is None or (sale.type or "") == "wallet_add":
@@ -304,7 +319,10 @@ async def payment_success(session_id: Optional[str] = None):
         finally:
             db.close()
 
-        return _respond(session_id=session_id)
+        if sale is not None:
+            debug.setdefault("sale_id", str(sale.id))
+            debug.setdefault("sale_status", str(sale.status))
+        return _respond(session_id=session_id, **debug)
 
     return _respond(error="missing_session_id")
 
