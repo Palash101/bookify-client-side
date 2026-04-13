@@ -611,8 +611,8 @@ async def payment_callback(
             sale = Sale(
                 tenant_id=init_wallet_txn.tenant_id,
                 user_id=init_wallet_txn.user_id,
-                package_id=None,
-                product_item_type=None,
+                package_id=wallet_txn.id,
+                product_item_type="wallet",
                 type="wallet_add",
                 created_by_type=init_wallet_txn.created_by_type,
                 created_by_id=init_wallet_txn.created_by_id,
@@ -635,24 +635,23 @@ async def payment_callback(
             db.flush()
             init_wallet_txn.order_id = sale.id
 
-            callback_txn = SalesTransactions(
-                order_id=sale.id,
-                tenant_id=sale.tenant_id,
-                payment_method="gateway",
-                gateway=(result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)),
-                gateway_txn_id=result.transaction_id or "",
-                source="wallet",
-                status=("success" if _wallet_status_from_gateway(result.status) == "succeeded" else "failed"),
-                amount=result.amount or sale.amount,
-                currency=(result.currency or init_wallet_txn.currency or "QAR"),
-                user_id=sale.user_id,
-                created_by_type=sale.created_by_type or "member",
-                created_by_id=sale.created_by_id or sale.user_id,
-                extra_metadata={"event": "callback"},
+            # Update the initiation row instead of inserting a second sales_transactions row.
+            init_wallet_txn.order_id = sale.id
+            init_wallet_txn.status = (
+                "success"
+                if _wallet_status_from_gateway(result.status) == "succeeded"
+                else "failed"
             )
-            db.add(callback_txn)
-            db.flush()
-            sale.provider_numeric_transaction_id = callback_txn.id
+            init_wallet_txn.gateway = (
+                result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)
+            )
+            init_wallet_txn.currency = (result.currency or init_wallet_txn.currency or "QAR")
+            init_wallet_txn.amount = result.amount or init_wallet_txn.amount or sale.amount
+            meta = dict(init_wallet_txn.extra_metadata or {})
+            meta.setdefault("event", "created")
+            meta["resolved_by"] = "callback"
+            init_wallet_txn.extra_metadata = meta
+            sale.provider_numeric_transaction_id = init_wallet_txn.id
 
             # Credit user wallet only on success.
             if user and _wallet_status_from_gateway(result.status) == "succeeded":

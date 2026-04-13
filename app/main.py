@@ -266,8 +266,8 @@ async def payment_success(session_id: Optional[str] = None):
                             sale = Sale(
                                 tenant_id=init_wallet.tenant_id,
                                 user_id=init_wallet.user_id,
-                                package_id=None,
-                                product_item_type=None,
+                                package_id=wtxn.id,
+                                product_item_type="wallet",
                                 type="wallet_add",
                                 created_by_type=init_wallet.created_by_type,
                                 created_by_id=init_wallet.created_by_id,
@@ -289,6 +289,12 @@ async def payment_success(session_id: Optional[str] = None):
                             db.add(sale)
                             db.flush()
                             init_wallet.order_id = sale.id
+                            init_wallet.status = "success"
+                            m = dict(init_wallet.extra_metadata or {})
+                            m.setdefault("event", "created")
+                            m["resolved_by"] = "success_redirect"
+                            init_wallet.extra_metadata = m
+                            sale.provider_numeric_transaction_id = init_wallet.id
                             if user:
                                 user.wallet = after
                             debug["sale_created_from_init_wallet_txn"] = "1"
