@@ -1,5 +1,10 @@
 from typing import List, Optional
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig
+try:
+    from fastapi_mail import FastMail, MessageSchema, ConnectionConfig  # type: ignore
+except Exception:  # pragma: no cover
+    FastMail = None  # type: ignore[assignment]
+    MessageSchema = None  # type: ignore[assignment]
+    ConnectionConfig = None  # type: ignore[assignment]
 from app.core.settings import settings
 import logging
 
@@ -12,6 +17,10 @@ class EmailService:
     """
     
     def __init__(self):
+        if ConnectionConfig is None or FastMail is None:
+            self.conf = None
+            self.fastmail = None
+            return
         self.conf = ConnectionConfig(
             MAIL_USERNAME=settings.SMTP_USER,
             MAIL_PASSWORD=settings.SMTP_PASSWORD,
@@ -45,6 +54,8 @@ class EmailService:
             bool: True if email sent successfully, False otherwise
         """
         try:
+            if MessageSchema is None or self.fastmail is None:
+                raise RuntimeError("fastapi_mail is not installed (email disabled)")
             message = MessageSchema(
                 subject=subject,
                 recipients=recipients,
