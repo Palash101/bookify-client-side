@@ -185,8 +185,9 @@ async def payment_success(session_id: Optional[str] = None):
                     init_txn = (
                         db.query(SalesTransactions)
                         .filter(
-                            SalesTransactions.source == "created",
+                            SalesTransactions.source == "package",
                             SalesTransactions.gateway_txn_id == session_id,
+                            SalesTransactions.extra_metadata["event"].astext == "created",
                         )
                         .order_by(SalesTransactions.created_at.desc())
                         .first()

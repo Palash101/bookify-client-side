@@ -469,8 +469,9 @@ async def payment_callback(
                     db.query(SalesTransactions)
                     .filter(
                         SalesTransactions.tenant_id == UUID(tenant_id),
-                        SalesTransactions.source == "created",
+                        SalesTransactions.source == "package",
                         SalesTransactions.extra_metadata["client_order_id"].astext == str(order_uuid),
+                        SalesTransactions.extra_metadata["event"].astext == "created",
                     )
                     .order_by(SalesTransactions.created_at.desc())
                     .first()
