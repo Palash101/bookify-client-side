@@ -111,7 +111,7 @@ class PaymentSuccessService:
                     user_id=init_wallet.user_id,
                     package_id=wtxn.id,
                     product_item_type="wallet",
-                    type="wallet_add",
+                    type="gateway",
                     created_by_type=init_wallet.created_by_type,
                     created_by_id=init_wallet.created_by_id,
                     wallet_transaction_id=wtxn.id,

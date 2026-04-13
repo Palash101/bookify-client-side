@@ -613,7 +613,7 @@ async def payment_callback(
                 user_id=init_wallet_txn.user_id,
                 package_id=wallet_txn.id,
                 product_item_type="wallet",
-                type="wallet_add",
+                type="gateway",
                 created_by_type=init_wallet_txn.created_by_type,
                 created_by_id=init_wallet_txn.created_by_id,
                 wallet_transaction_id=wallet_txn.id,
@@ -718,8 +718,6 @@ async def get_sales_transactions(
     Current user's sales transaction history (package gateway/wallet payments).
     """
     type_filter = ["package_gateway", "package_wallet"]
-    if include_wallet_add:
-        type_filter.append("wallet_add")
 
     # Sale is source of truth; package_wallet rows may have no sales_transactions (by design).
     sales = (
@@ -727,7 +725,12 @@ async def get_sales_transactions(
         .filter(
             Sale.user_id == current_user.id,
             Sale.tenant_id == tenant_id,
-            Sale.type.in_(type_filter),
+            (Sale.type.in_(type_filter))
+            | (
+                include_wallet_add
+                & (Sale.product_item_type == "wallet")
+                & (Sale.type == "gateway")
+            ),
         )
         .order_by(Sale.created_at.desc())
         .limit(limit)
@@ -755,7 +758,7 @@ async def get_sales_transactions(
             "payment_method": "wallet" if sale.type == "package_wallet" else "gateway",
             "purchase_source": (
                 "wallet_topup"
-                if sale.type == "wallet_add"
+                if (sale.product_item_type == "wallet")
                 else ("wallet_purchase" if sale.type == "package_wallet" else "gateway_purchase")
             ),
             "is_package_purchase": sale.type in ("package_gateway", "package_wallet"),

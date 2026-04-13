@@ -254,7 +254,7 @@ async def get_purchases_history(
             wallet_transaction_id=sale.wallet_transaction_id,
         )
 
-        if sale.type == "wallet_add":
+        if (sale.product_item_type or "") == "wallet":
             data.wallet_adds.append(item)
         elif sale.type == "package_gateway":
             data.package_gateway_purchases.append(item)
