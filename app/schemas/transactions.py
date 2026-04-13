@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Union
 from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
@@ -50,7 +50,8 @@ class SalesTransactionItemResponse(BaseModel):
     (No raw_payload, no tenant_id, to keep response light.)
     """
 
-    id: UUID
+    # sales_transactions.id is bigint; wallet-only sales rows use sale id (UUID).
+    id: Union[int, UUID]
     order_id: UUID
 
     # wallet_add | package_gateway | package_wallet

@@ -45,10 +45,14 @@ class Settings(BaseSettings):
         description="Refresh token expiry in days",
     )
     
-    # CORS
+    # CORS (include 127.0.0.1 variants — browser treats localhost vs 127.0.0.1 as different origins)
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
         "http://localhost:8000",
+        "http://127.0.0.1:8000",
     ]
     
     # Email

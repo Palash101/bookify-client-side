@@ -10,11 +10,16 @@ from app.core.settings import settings
 from app.core.middleware import TenantMiddleware
 from app.api import api_router
 from app.core.db.session import SessionLocal
-from app.models.sales import Sale
+from app.models.sales import Sale, backfill_sale_checkout_metadata
 from app.services.sale_expiry import apply_package_expiry_to_sale
+from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.models.user import User
+from uuid import UUID
+import logging
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -82,6 +87,7 @@ def custom_openapi():
 
 
 app.openapi = custom_openapi
+
 
 # Custom exception handler for HTTPException
 @app.exception_handler(HTTPException)
@@ -163,28 +169,111 @@ async def payment_success(session_id: Optional[str] = None):
     if session_id:
         db = SessionLocal()
         try:
-            sale = db.query(Sale).filter(Sale.gateway_transaction_id == session_id).first()
-            wallet_txn = db.query(WalletTransaction).filter(
-                WalletTransaction.transaction_id == session_id
-            ).first()
+            try:
+                sale = db.query(Sale).filter(Sale.gateway_transaction_id == session_id).first()
 
-            if sale and sale.status != "succeeded":
-                sale.status = "succeeded"
+                # If we didn't create Sale at initiation, derive it from the initiation SalesTransactions row.
+                if sale is None and (session_id or "").startswith("cs_"):
+                    init_txn = (
+                        db.query(SalesTransactions)
+                        .filter(
+                            SalesTransactions.source == "created",
+                            SalesTransactions.gateway_txn_id == session_id,
+                        )
+                        .order_by(SalesTransactions.created_at.desc())
+                        .first()
+                    )
+                    if init_txn and init_txn.user_id and isinstance(init_txn.extra_metadata, dict):
+                        meta = init_txn.extra_metadata or {}
+                        client_order_id = meta.get("client_order_id")
+                        if client_order_id:
+                            order_uuid = UUID(str(client_order_id))
+                            pkg_raw = meta.get("package_id")
+                            pricing_raw = meta.get("package_pricing_id")
+                            sale = Sale(
+                                id=order_uuid,
+                                tenant_id=init_txn.tenant_id,
+                                user_id=init_txn.user_id,
+                                package_id=UUID(str(pkg_raw)) if pkg_raw else None,
+                                product_item_type="package",
+                                type="package_gateway",
+                                created_by_type=init_txn.created_by_type,
+                                created_by_id=init_txn.created_by_id,
+                                wallet_transaction_id=None,
+                                amount=init_txn.amount or 0,
+                                extra_metadata={
+                                    "persons": meta.get("persons"),
+                                    "session_type": meta.get("session_type"),
+                                    "session_count": meta.get("session_count"),
+                                    "package_pricing_id": str(pricing_raw) if pricing_raw else None,
+                                    "currency": init_txn.currency or "QAR",
+                                    "gateway": "stripe",
+                                    "status": "succeeded",
+                                    "gateway_transaction_id": session_id,
+                                },
+                            )
+                            db.add(sale)
+                            db.flush()
+                            init_txn.order_id = sale.id
+            except Exception:
+                logger.exception("payment_success reconciliation failed (session_id=%s)", session_id)
+                db.rollback()
+                return _redirect_to_app(error="payment_success_failed", session_id=session_id)
+            # Stripe Checkout session ids (cs_…) live on the sale for packages; wallet ledger uses the same id only for wallet top-ups.
+            wallet_txn = None
+            if sale is None or (sale.type or "") == "wallet_add":
+                wallet_txn = (
+                    db.query(WalletTransaction)
+                    .filter(WalletTransaction.transaction_id == session_id)
+                    .first()
+                )
+
+            if sale:
+                backfill_sale_checkout_metadata(sale, session_id)
+                st = (sale.status or "").lower()
+                if st not in ("succeeded", "success"):
+                    sale.status = "succeeded"
+                    st = "succeeded"
                 if sale.package_id is not None:
                     apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
-                sale_log = SalesTransactions(
-                    order_id=sale.id,
-                    tenant_id=sale.tenant_id,
-                    type=sale.type or "package_gateway",
-                    gateway=sale.gateway,
-                    gateway_txn_id=session_id,
-                    event_type="success_redirect",
-                    status="succeeded",
-                    amount=sale.amount,
-                    currency=sale.currency,
-                    raw_payload={"source": "payment_success_redirect", "session_id": session_id},
-                )
-                db.add(sale_log)
+                if st in ("succeeded", "success"):
+                    ensure_user_package_for_completed_package_sale(
+                        db,
+                        sale,
+                        created_by=sale.created_by_type or "member",
+                        created_by_id=sale.created_by_id or sale.user_id,
+                    )
+                    # Webhook may complete the sale first; still record redirect once (no duplicate rows).
+                    if not (
+                        db.query(SalesTransactions)
+                        .filter(
+                            SalesTransactions.order_id == sale.id,
+                            SalesTransactions.source == ("wallet" if (sale.type or "") == "wallet_add" else "package"),
+                        )
+                        .first()
+                    ):
+                        src = "wallet" if (sale.type or "") == "wallet_add" else "package"
+                        pay_method = "gateway" if src == "wallet" else "gateway"
+                        st_norm = "success" if (sale.status or "").lower() in ("succeeded", "success") else "failed"
+                        db.add(
+                            SalesTransactions(
+                                order_id=sale.id,
+                                tenant_id=sale.tenant_id,
+                                payment_method=pay_method,
+                                gateway=sale.gateway
+                                or (sale.extra_metadata or {}).get("gateway")
+                                or ("stripe" if (session_id or "").startswith("cs_") else ""),
+                                gateway_txn_id=session_id,
+                                source=src,
+                                status=st_norm,
+                                amount=sale.amount,
+                                currency=sale.currency,
+                                user_id=sale.user_id,
+                                created_by_type=sale.created_by_type or "member",
+                                created_by_id=sale.created_by_id or sale.user_id,
+                                extra_metadata={"event": "success_redirect"},
+                            )
+                        )
 
             if (
                 wallet_txn
@@ -201,6 +290,9 @@ async def payment_success(session_id: Optional[str] = None):
                     wallet_txn.status = "succeeded"
                     wallet_txn.balance_before = before
                     wallet_txn.balance_after = after
+                    ls = wallet_txn.linked_sale
+                    if ls:
+                        ls.status = "succeeded"
 
             db.commit()
         finally:

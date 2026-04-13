@@ -31,7 +31,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
         
-        if path in EXCLUDED_PATHS or path.startswith("/docs") or path.startswith("/redoc"):
+        if (
+            path in EXCLUDED_PATHS
+            or path.startswith("/docs")
+            or path.startswith("/redoc")
+        ):
             return await call_next(request)
 
         # Webhook/callback endpoints are called by payment providers (no tenant header).

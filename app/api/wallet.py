@@ -17,7 +17,7 @@ from app.schemas.transactions import (
     PurchaseHistoryItemResponse,
     PurchasesHistoryDataResponse,
 )
-from app.models.sales import Sale
+from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_meta
 from app.models.sales_transactions import SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
@@ -58,15 +58,8 @@ async def add_wallet_balance(
 
     txn = WalletTransaction(
         user_id=current_user.id,
-        order_id=None,
         direction="credit",
-        transaction_type="wallet_add",
         transaction_id=None,
-        status="pending",
-        metadata_={
-            "purpose": "wallet_add",
-            "tenant_id": str(tenant_id),
-        },
         amount=body.amount,
         currency=str(currency_code).upper(),
         balance_before=balance_before,
@@ -83,36 +76,44 @@ async def add_wallet_balance(
         tenant_id=tenant_id,
         user_id=current_user.id,
         package_id=None,
-        pricing_id=None,
+        product_item_type=None,
         type="wallet_add",
+        created_by_type=current_user.user_type or "member",
+        created_by_id=current_user.id,
         wallet_transaction_id=txn.id,
         amount=body.amount,
-        currency=str(currency_code).upper(),
-        gateway=gateway.GATEWAY_TYPE.value,
-        status="pending",
         extra_metadata={
             "purpose": "wallet_add",
+            "currency": str(currency_code).upper(),
+            "gateway": gateway.GATEWAY_TYPE.value,
+            "status": "pending",
+            SALE_WALLET_TXN_KEY: {
+                "transaction_type": "wallet_add",
+                "status": "pending",
+                "tenant_id": str(tenant_id),
+            },
         },
     )
     db.add(sale)
     db.commit()
     db.refresh(sale)
 
-    # Link wallet transaction to this sales record for callback correlation
-    txn.order_id = str(sale.id)
     db.commit()
 
     sale_txn = SalesTransactions(
         order_id=sale.id,
         tenant_id=tenant_id,
-        type="wallet_add",
+        payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
-        event_type="created",
+        source="wallet",
         status="pending",
         amount=body.amount,
         currency=str(currency_code).upper(),
-        raw_payload=None,
+        user_id=current_user.id,
+        created_by_type=current_user.user_type or "member",
+        created_by_id=current_user.id,
+        extra_metadata={"event": "created"},
     )
     db.add(sale_txn)
     db.commit()
@@ -134,7 +135,7 @@ async def add_wallet_balance(
 
     response = gateway.create_payment(payment_request)
     if not response.success:
-        txn.status = "failed"
+        merge_sale_wallet_txn_meta(sale, status="failed")
         sale.status = "failed"
         db.commit()
         raise HTTPException(

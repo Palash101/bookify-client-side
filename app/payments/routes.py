@@ -20,13 +20,14 @@ from .factory import get_gateway, TenantPaymentSettings
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
 from app.core.settings import settings
 from app.models.user import User
-from app.models.sales import Sale
+from app.models.sales import SALE_WALLET_TXN_KEY, Sale, backfill_sale_checkout_metadata
 from app.models.package_pricing import PackagePricing
 from app.models.package import Package
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
 from app.services.sale_expiry import apply_package_expiry_to_sale
+from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
@@ -141,11 +142,10 @@ async def initiate_package_purchase(
     db: Session = Depends(get_db),
 ):
     """
-    High-level API for package purchase.
+    Package purchase.
 
-    - Creates a Sale row for the current user + package.
-    - Resolves tenant's active payment gateway.
-    - Creates a payment session and returns hosted payment URL.
+    - **Gateway package:** `sales` + `sales_transactions` (+ `user_packages` when payment succeeds).
+    - **Wallet balance package:** `wallet_transactions` (debit) + `sales` + `sales_transactions` + `user_packages`.
     """
     # Derive amount/currency from selected package pricing
     pricing_query = (
@@ -195,17 +195,8 @@ async def initiate_package_purchase(
 
         wallet_txn = WalletTransaction(
             user_id=current_user.id,
-            order_id=None,  # set after sale created
             direction="debit",
-            transaction_type="package_wallet_purchase",
             transaction_id=None,
-            status="succeeded",
-            metadata_={
-                "purpose": "package_purchase",
-                "tenant_id": tenant_id,
-                "package_id": str(body.package_id),
-                "package_pricing_id": str(pricing.id),
-            },
             amount=amount_value,
             currency=currency_code,
             balance_before=balance_before,
@@ -222,24 +213,32 @@ async def initiate_package_purchase(
             tenant_id=UUID(tenant_id),
             user_id=current_user.id,
             package_id=body.package_id,
-            pricing_id=pricing.id,
+            product_item_type="package",
             type="package_wallet",
+            created_by_type=current_user.user_type or "member",
+            created_by_id=current_user.id,
             wallet_transaction_id=wallet_txn.id,
             amount=amount_value,
-            currency=currency_code,
-            gateway="wallet",
-            gateway_transaction_id=None,
-            status="succeeded",
             extra_metadata={
                 "persons": persons_requested,
                 "session_type": pricing.session_type,
                 "session_count": pricing.session_count,
+                "package_pricing_id": str(pricing.id),
+                "currency": currency_code,
+                "gateway": "wallet",
+                "status": "succeeded",
+                SALE_WALLET_TXN_KEY: {
+                    "transaction_type": "package_wallet_purchase",
+                    "status": "succeeded",
+                    "purpose": "package_purchase",
+                    "tenant_id": tenant_id,
+                    "package_id": str(body.package_id),
+                    "package_pricing_id": str(pricing.id),
+                },
             },
         )
         db.add(order)
         db.flush()
-
-        wallet_txn.order_id = str(order.id)
 
         tz = timezone.utc
         if package:
@@ -255,16 +254,25 @@ async def initiate_package_purchase(
         sale_txn = SalesTransactions(
             order_id=order.id,
             tenant_id=order.tenant_id,
-            type="package_wallet",
+            payment_method="cash",
             gateway="wallet",
             gateway_txn_id=None,
-            event_type="created",
-            status="succeeded",
+            source="package",
+            status="success",
             amount=amount_value,
             currency=currency_code,
-            raw_payload=None,
+            user_id=current_user.id,
+            created_by_type=current_user.user_type or "member",
+            created_by_id=current_user.id,
+            extra_metadata={"event": "created"},
         )
         db.add(sale_txn)
+        ensure_user_package_for_completed_package_sale(
+            db,
+            order,
+            created_by=current_user.user_type or "member",
+            created_by_id=current_user.id,
+        )
         db.commit()
         db.refresh(order)
 
@@ -289,40 +297,33 @@ async def initiate_package_purchase(
             detail=str(exc),
         )
 
-    # Create sale in our DB (type=package_gateway = payment via gateway)
-    order = Sale(
+    # Create a client-side order UUID for the gateway callback correlation.
+    # We will create the Sale + UserPackage only after gateway reports success.
+    client_order_id = uuid4()
+
+    # Log initial transaction event (payment initiated; no Sale yet)
+    txn = SalesTransactions(
+        order_id=None,
         tenant_id=UUID(tenant_id),
-        user_id=current_user.id,
-        package_id=body.package_id,
-        pricing_id=pricing.id,
-        type="package_gateway",
-        wallet_transaction_id=None,
+        payment_method="gateway",
+        gateway=gateway.GATEWAY_TYPE.value,
+        gateway_txn_id=None,
+        source="package",
+        status="pending",
         amount=amount_value,
         currency=currency_code,
-        gateway=gateway.GATEWAY_TYPE.value,
-        status="pending",
+        user_id=current_user.id,
+        created_by_type=current_user.user_type or "member",
+        created_by_id=current_user.id,
         extra_metadata={
+            "event": "created",
+            "client_order_id": str(client_order_id),
+            "package_id": str(body.package_id),
+            "package_pricing_id": str(pricing.id),
             "persons": persons_requested,
             "session_type": pricing.session_type,
             "session_count": pricing.session_count,
         },
-    )
-    db.add(order)
-    db.commit()
-    db.refresh(order)
-
-    # Log initial transaction event (sale created / payment initiated)
-    txn = SalesTransactions(
-        order_id=order.id,
-        tenant_id=order.tenant_id,
-        type="package_gateway",
-        gateway=gateway.GATEWAY_TYPE.value,
-        gateway_txn_id=None,
-        event_type="created",
-        status="pending",
-        amount=amount_value,
-        currency=currency_code,
-        raw_payload=None,
     )
     db.add(txn)
     db.commit()
@@ -331,7 +332,7 @@ async def initiate_package_purchase(
     payment_request = PaymentRequest(
         amount=amount_value,
         currency=currency_code,
-        order_id=str(order.id),
+        order_id=str(client_order_id),
         customer_email=current_user.email or "",
         customer_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
         or "Customer",
@@ -354,7 +355,7 @@ async def initiate_package_purchase(
             error_id,
             tenant_id,
             getattr(gateway, "GATEWAY_TYPE", None),
-            str(order.id),
+            str(client_order_id),
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -365,23 +366,21 @@ async def initiate_package_purchase(
         ) from exc
 
     if not response.success:
-        # Mark order as failed to initiate
-        order.status = "failed"
+        # Mark initiation log as failed
+        txn.status = "failed"
+        txn.gateway_txn_id = response.transaction_id or txn.gateway_txn_id or ""
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=response.error_message or "Payment initiation failed.",
         )
 
-    # Store gateway transaction ID on the order
-    order.gateway_transaction_id = response.transaction_id
-
-    # Also update the "created" transaction with gateway_txn_id, or insert new record
+    # Update the "created" transaction with gateway_txn_id
     txn.gateway_txn_id = response.transaction_id or ""
     db.commit()
 
     return {
-        "order_id":        str(order.id),
+        "order_id":        str(client_order_id),
         "payment_url":     response.payment_url,
         "transaction_id":  response.transaction_id,
         "gateway":         response.gateway,
@@ -464,6 +463,56 @@ async def payment_callback(
                 Sale.tenant_id == UUID(tenant_id),
             ).first()
 
+            # When we only log initiation in sales_transactions, the Sale is created here on success.
+            if order is None:
+                init_txn = (
+                    db.query(SalesTransactions)
+                    .filter(
+                        SalesTransactions.tenant_id == UUID(tenant_id),
+                        SalesTransactions.source == "created",
+                        SalesTransactions.extra_metadata["client_order_id"].astext == str(order_uuid),
+                    )
+                    .order_by(SalesTransactions.created_at.desc())
+                    .first()
+                )
+                if init_txn and init_txn.user_id:
+                    meta = init_txn.extra_metadata or {}
+                    pkg_raw = meta.get("package_id")
+                    pricing_raw = meta.get("package_pricing_id")
+                    order = Sale(
+                        id=order_uuid,
+                        tenant_id=UUID(tenant_id),
+                        user_id=init_txn.user_id,
+                        package_id=UUID(str(pkg_raw)) if pkg_raw else None,
+                        product_item_type="package",
+                        type="package_gateway",
+                        created_by_type=init_txn.created_by_type,
+                        created_by_id=init_txn.created_by_id,
+                        wallet_transaction_id=None,
+                        amount=init_txn.amount or 0,
+                        extra_metadata={
+                            "persons": meta.get("persons"),
+                            "session_type": meta.get("session_type"),
+                            "session_count": meta.get("session_count"),
+                            "package_pricing_id": str(pricing_raw) if pricing_raw else None,
+                            "currency": init_txn.currency or (result.currency or "QAR"),
+                            "gateway": (
+                                result.gateway.value
+                                if hasattr(result.gateway, "value")
+                                else str(result.gateway)
+                            ),
+                            "status": _wallet_status_from_gateway(result.status),
+                            "gateway_transaction_id": result.transaction_id,
+                        },
+                    )
+                    db.add(order)
+                    db.flush()
+                    init_txn.order_id = order.id
+
+            audit_sale = order or db.query(Sale).filter(Sale.id == order_uuid).first()
+            if audit_sale:
+                backfill_sale_checkout_metadata(audit_sale, result.transaction_id)
+
             if order:
                 # Update order status + gateway txn id
                 # Normalize statuses so app can rely on one spelling.
@@ -476,17 +525,35 @@ async def payment_callback(
                         db, order, UUID(tenant_id), overwrite=True
                     )
 
+                if (order.status or "").lower() in ("succeeded", "success"):
+                    ensure_user_package_for_completed_package_sale(
+                        db,
+                        order,
+                        created_by=order.created_by_type or "member",
+                        created_by_id=order.created_by_id or order.user_id,
+                    )
+
             txn = SalesTransactions(
                 order_id=order.id if order else order_uuid,
                 tenant_id=UUID(tenant_id),
-                type=order.type if order and getattr(order, "type", None) else "package_gateway",
-                gateway=result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway),
+                payment_method="gateway",
+                gateway=(
+                    (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway))
+                    or (order.gateway if order else (audit_sale.gateway if audit_sale else ""))
+                ),
                 gateway_txn_id=result.transaction_id or "",
-                event_type="callback",
-                status=_wallet_status_from_gateway(result.status),
+                source="package",
+                status=("success" if _wallet_status_from_gateway(result.status) == "succeeded" else "failed" if _wallet_status_from_gateway(result.status) in ("failed","cancelled","reversed") else _wallet_status_from_gateway(result.status)),
                 amount=result.amount,
                 currency=result.currency,
-                raw_payload=result.raw_payload,
+                user_id=order.user_id if order else (audit_sale.user_id if audit_sale else None),
+                created_by_type=(
+                    (audit_sale.created_by_type or "member") if audit_sale else "gateway"
+                ),
+                created_by_id=(
+                    (audit_sale.created_by_id or audit_sale.user_id) if audit_sale else None
+                ),
+                extra_metadata={"event": "callback"},
             )
             db.add(txn)
             db.commit()
@@ -504,12 +571,16 @@ async def payment_callback(
         wallet_txn = None
 
     if wallet_txn is None and result.order_id:
-        wallet_txn = (
-            db.query(WalletTransaction)
-            .filter(WalletTransaction.order_id == result.order_id)
-            .order_by(WalletTransaction.created_at.desc())
-            .first()
-        )
+        try:
+            sale_for_wallet = db.query(Sale).filter(Sale.id == UUID(str(result.order_id))).first()
+        except ValueError:
+            sale_for_wallet = None
+        if sale_for_wallet and sale_for_wallet.wallet_transaction_id:
+            wallet_txn = (
+                db.query(WalletTransaction)
+                .filter(WalletTransaction.id == sale_for_wallet.wallet_transaction_id)
+                .first()
+            )
 
     if wallet_txn:
         new_status = _wallet_status_from_gateway(result.status)
@@ -517,6 +588,9 @@ async def payment_callback(
         # Idempotency: don't double-credit
         if wallet_txn.status != "succeeded":
             wallet_txn.status = new_status
+            ls = wallet_txn.linked_sale
+            if ls:
+                ls.status = new_status
 
             if (
                 new_status == "succeeded"
@@ -560,47 +634,60 @@ async def get_sales_transactions(
     if include_wallet_add:
         type_filter.append("wallet_add")
 
-    txns = (
-        db.query(SalesTransactions, Sale)
-        .join(Sale, SalesTransactions.order_id == Sale.id)
+    # Sale is source of truth; package_wallet rows may have no sales_transactions (by design).
+    sales = (
+        db.query(Sale)
         .filter(
             Sale.user_id == current_user.id,
-            SalesTransactions.tenant_id == tenant_id,
+            Sale.tenant_id == tenant_id,
             Sale.type.in_(type_filter),
         )
-        .order_by(SalesTransactions.created_at.desc())
+        .order_by(Sale.created_at.desc())
         .limit(limit)
         .all()
     )
+    sale_ids = [s.id for s in sales]
+    latest_st_by_order: dict = {}
+    if sale_ids:
+        st_rows = (
+            db.query(SalesTransactions)
+            .filter(SalesTransactions.order_id.in_(sale_ids))
+            .order_by(SalesTransactions.created_at.desc())
+            .all()
+        )
+        for st in st_rows:
+            if st.order_id not in latest_st_by_order:
+                latest_st_by_order[st.order_id] = st
+
+    def _row(sale: Sale) -> dict[str, Any]:
+        st = latest_st_by_order.get(sale.id)
+        return {
+            "id": st.id if st else sale.id,
+            "order_id": sale.id,
+            "type": sale.type,
+            "payment_method": "wallet" if sale.type == "package_wallet" else "gateway",
+            "purchase_source": (
+                "wallet_topup"
+                if sale.type == "wallet_add"
+                else ("wallet_purchase" if sale.type == "package_wallet" else "gateway_purchase")
+            ),
+            "is_package_purchase": sale.type in ("package_gateway", "package_wallet"),
+            "gateway": st.gateway if st else sale.gateway,
+            "gateway_txn_id": st.gateway_txn_id if st else sale.gateway_transaction_id,
+            "status": st.status if st else sale.status,
+            "amount": st.amount if st is not None and st.amount is not None else sale.amount,
+            "currency": st.currency if st is not None and st.currency is not None else sale.currency,
+            "package_id": sale.package_id,
+            "pricing_id": sale.pricing_id,
+            "wallet_transaction_id": sale.wallet_transaction_id,
+            "created_at": st.created_at if st else sale.created_at,
+        }
 
     return {
         "success": True,
         "message": "Sales transactions fetched successfully",
-        "data": [
-            {
-                "id": str(st.id),
-                "order_id": st.order_id,
-                "type": sale.type,
-                "payment_method": "wallet" if sale.type == "package_wallet" else "gateway",
-                "purchase_source": (
-                    "wallet_topup"
-                    if sale.type == "wallet_add"
-                    else ("wallet_purchase" if sale.type == "package_wallet" else "gateway_purchase")
-                ),
-                "is_package_purchase": sale.type in ("package_gateway", "package_wallet"),
-                "gateway": st.gateway,
-                "gateway_txn_id": st.gateway_txn_id,
-                "status": st.status,
-                "amount": st.amount,
-                "currency": st.currency,
-                "package_id": sale.package_id,
-                "pricing_id": sale.pricing_id,
-                "wallet_transaction_id": sale.wallet_transaction_id,
-                "created_at": st.created_at,
-            }
-            for st, sale in txns
-        ],
-        "count": len(txns),
+        "data": [_row(sale) for sale in sales],
+        "count": len(sales),
     }
 
 

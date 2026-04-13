@@ -14,6 +14,7 @@ from app.models.location import Location
 from app.models.wallet_transactions import WalletTransaction
 from app.models.tenant_setting import TenantSetting
 from app.models.class_booking import ClassBooking
+from app.models.user_package import UserPackage
 
 __all__ = [
     "Tenant",
@@ -30,4 +31,5 @@ __all__ = [
     "WalletTransaction",
     "TenantSetting",
     "ClassBooking",
+    "UserPackage",
 ]

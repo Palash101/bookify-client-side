@@ -27,6 +27,18 @@ from app.services.gym_config_service import GymConfigService
 
 logger = logging.getLogger(__name__)
 
+
+def _append_bfy_wtxn_note(existing: Optional[str], txn_id: UUID, kind: str) -> str:
+    """Machine-readable marker for wallet txns without a linked Sale row."""
+    tag = f"__bfy_wtxn:{txn_id}:{kind}"
+    base = (existing or "").strip()
+    if not base:
+        return tag
+    if tag in base:
+        return base
+    return f"{base}\n{tag}"
+
+
 COMMON_TZ_ABBREVS = {
     "IST": "Asia/Kolkata",
     "GST": "Asia/Dubai",
@@ -992,12 +1004,8 @@ class BookingsService:
                 bal_after = bal_before - price
                 txn = WalletTransaction(
                     user_id=user.id,
-                    order_id=None,
                     direction="debit",
-                    transaction_type="class_booking",
                     transaction_id=None,
-                    status="succeeded",
-                    metadata_={"class_id": str(class_id), "tenant_id": str(tenant_id)},
                     amount=price,
                     currency=(GymConfigService.get_gym_config(db, tenant_id).payment_pricing.currency or "QAR").upper(),
                     balance_before=bal_before,
@@ -1034,6 +1042,8 @@ class BookingsService:
         db.flush()
         if not booking.order_id:
             booking.order_id = f"ORD{str(booking.id).split('-')[0].upper()}"
+        if wallet_txn_id is not None:
+            booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
 
         has_layout = _class_has_layout(gym_class)
         seat_label = _normalize_seat_label(seat_id)
@@ -1126,19 +1136,8 @@ class BookingsService:
                 bal_after = bal_before + refund_amount
                 refund_txn = WalletTransaction(
                     user_id=user.id,
-                    order_id=None,
                     direction="credit",
-                    transaction_type="class_booking_refund",
                     transaction_id=None,
-                    status="succeeded",
-                    metadata_={
-                        "class_id": str(class_id),
-                        "tenant_id": str(tenant_id),
-                        "booking_id": str(booking.id),
-                        "refund_for_wallet_txn_id": (
-                            str(booking.wallet_txn_id) if booking.wallet_txn_id else None
-                        ),
-                    },
                     amount=refund_amount,
                     currency=(
                         GymConfigService.get_gym_config(db, tenant_id).payment_pricing.currency
@@ -1150,6 +1149,8 @@ class BookingsService:
                     created_by_id=user.id,
                 )
                 db.add(refund_txn)
+                db.flush()
+                booking.notes = _append_bfy_wtxn_note(booking.notes, refund_txn.id, "refund")
                 user.wallet = bal_after
 
         # Return package session on cancellation if one was deducted.

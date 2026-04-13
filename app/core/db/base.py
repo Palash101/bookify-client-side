@@ -18,6 +18,7 @@ from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.models.class_booking import ClassBooking
+from app.models.user_package import UserPackage
 
 __all__ = [
     "Base",
@@ -37,4 +38,5 @@ __all__ = [
     "SalesTransactions",
     "WalletTransaction",
     "ClassBooking",
+    "UserPackage",
 ]
