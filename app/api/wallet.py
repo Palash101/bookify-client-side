@@ -116,6 +116,9 @@ async def add_wallet_balance(
         extra_metadata={"event": "created"},
     )
     db.add(sale_txn)
+    db.flush()
+    # Mirror latest sales_transactions.id onto sales.transaction_id (bigint) for reporting.
+    sale.provider_numeric_transaction_id = sale_txn.id
     db.commit()
 
     payment_request = PaymentRequest(

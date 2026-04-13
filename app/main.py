@@ -277,25 +277,26 @@ async def payment_success(session_id: Optional[str] = None):
                         src = "wallet" if (sale.type or "") == "wallet_add" else "package"
                         pay_method = "gateway" if src == "wallet" else "gateway"
                         st_norm = "success" if (sale.status or "").lower() in ("succeeded", "success") else "failed"
-                        db.add(
-                            SalesTransactions(
-                                order_id=sale.id,
-                                tenant_id=sale.tenant_id,
-                                payment_method=pay_method,
-                                gateway=sale.gateway
-                                or (sale.extra_metadata or {}).get("gateway")
-                                or ("stripe" if (session_id or "").startswith("cs_") else ""),
-                                gateway_txn_id=session_id,
-                                source=src,
-                                status=st_norm,
-                                amount=sale.amount,
-                                currency=sale.currency,
-                                user_id=sale.user_id,
-                                created_by_type=sale.created_by_type or "member",
-                                created_by_id=sale.created_by_id or sale.user_id,
-                                extra_metadata={"event": "success_redirect"},
-                            )
+                        sale_txn = SalesTransactions(
+                            order_id=sale.id,
+                            tenant_id=sale.tenant_id,
+                            payment_method=pay_method,
+                            gateway=sale.gateway
+                            or (sale.extra_metadata or {}).get("gateway")
+                            or ("stripe" if (session_id or "").startswith("cs_") else ""),
+                            gateway_txn_id=session_id,
+                            source=src,
+                            status=st_norm,
+                            amount=sale.amount,
+                            currency=sale.currency,
+                            user_id=sale.user_id,
+                            created_by_type=sale.created_by_type or "member",
+                            created_by_id=sale.created_by_id or sale.user_id,
+                            extra_metadata={"event": "success_redirect"},
                         )
+                        db.add(sale_txn)
+                        db.flush()
+                        sale.provider_numeric_transaction_id = sale_txn.id
 
             if (
                 wallet_txn

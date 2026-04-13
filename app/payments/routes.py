@@ -267,6 +267,8 @@ async def initiate_package_purchase(
             extra_metadata={"event": "created"},
         )
         db.add(sale_txn)
+        db.flush()
+        order.provider_numeric_transaction_id = sale_txn.id
         ensure_user_package_for_completed_package_sale(
             db,
             order,
@@ -557,6 +559,9 @@ async def payment_callback(
                 extra_metadata={"event": "callback"},
             )
             db.add(txn)
+            db.flush()
+            if order is not None:
+                order.provider_numeric_transaction_id = txn.id
             db.commit()
 
     # ----------------------------------------------------------------
