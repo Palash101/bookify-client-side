@@ -56,52 +56,11 @@ async def add_wallet_balance(
 
     balance_before = float(current_user.wallet or 0)
 
-    txn = WalletTransaction(
-        user_id=current_user.id,
-        direction="credit",
-        transaction_id=None,
-        amount=body.amount,
-        currency=str(currency_code).upper(),
-        balance_before=balance_before,
-        balance_after=None,
-        created_by=current_user.user_type or "member",
-        created_by_id=current_user.id,
-    )
-    db.add(txn)
-    db.commit()
-    db.refresh(txn)
-
-    # Create a Sales row too (wallet top-up should appear in sales)
-    sale = Sale(
-        tenant_id=tenant_id,
-        user_id=current_user.id,
-        package_id=None,
-        product_item_type=None,
-        type="wallet_add",
-        created_by_type=current_user.user_type or "member",
-        created_by_id=current_user.id,
-        wallet_transaction_id=txn.id,
-        amount=body.amount,
-        extra_metadata={
-            "purpose": "wallet_add",
-            "currency": str(currency_code).upper(),
-            "gateway": gateway.GATEWAY_TYPE.value,
-            "status": "pending",
-            SALE_WALLET_TXN_KEY: {
-                "transaction_type": "wallet_add",
-                "status": "pending",
-                "tenant_id": str(tenant_id),
-            },
-        },
-    )
-    db.add(sale)
-    db.commit()
-    db.refresh(sale)
-
-    db.commit()
-
-    sale_txn = SalesTransactions(
-        order_id=sale.id,
+    # Wallet top-up via gateway: at initiation time we only log sales_transactions.
+    # Sale + wallet_transactions will be created on callback/success redirect.
+    client_order_id = uuid.uuid4()
+    init_txn = SalesTransactions(
+        order_id=None,
         tenant_id=tenant_id,
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
@@ -113,24 +72,26 @@ async def add_wallet_balance(
         user_id=current_user.id,
         created_by_type=current_user.user_type or "member",
         created_by_id=current_user.id,
-        extra_metadata={"event": "created"},
+        extra_metadata={
+            "event": "created",
+            "client_order_id": str(client_order_id),
+            "purpose": "wallet_add",
+            "direction": "credit",
+            "balance_before": str(balance_before),
+        },
     )
-    db.add(sale_txn)
-    db.flush()
-    # Mirror latest sales_transactions.id onto sales.transaction_id (bigint) for reporting.
-    sale.provider_numeric_transaction_id = sale_txn.id
+    db.add(init_txn)
     db.commit()
 
     payment_request = PaymentRequest(
         amount=body.amount,
         currency=str(currency_code).upper(),
-        order_id=str(sale.id),
+        order_id=str(client_order_id),
         customer_email=current_user.email or "",
         customer_name=f"{current_user.first_name or ''} {current_user.last_name or ''}".strip()
         or "Customer",
         description="Wallet top-up",
         metadata={
-            "wallet_transaction_id": str(txn.id),
             "user_id": str(current_user.id),
             "purpose": "wallet_add",
         },
@@ -138,25 +99,21 @@ async def add_wallet_balance(
 
     response = gateway.create_payment(payment_request)
     if not response.success:
-        merge_sale_wallet_txn_meta(sale, status="failed")
-        sale.status = "failed"
+        init_txn.status = "failed"
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=response.error_message or "Payment initiation failed.",
         )
 
-    txn.transaction_id = response.transaction_id
-    sale.gateway_transaction_id = response.transaction_id
-    sale_txn.gateway_txn_id = response.transaction_id or ""
+    init_txn.gateway_txn_id = response.transaction_id or ""
     db.commit()
 
     return {
         "success": True,
         "message": "Wallet top-up initiated",
         "data": {
-            "wallet_transaction_id": str(txn.id),
-            "order_id": str(sale.id),
+            "order_id": str(client_order_id),
             "payment_url": response.payment_url,
             "transaction_id": response.transaction_id,
             "gateway": response.gateway,

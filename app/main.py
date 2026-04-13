@@ -10,7 +10,7 @@ from app.core.settings import settings
 from app.core.middleware import TenantMiddleware
 from app.api import api_router
 from app.core.db.session import SessionLocal
-from app.models.sales import Sale, backfill_sale_checkout_metadata
+from app.models.sales import Sale, backfill_sale_checkout_metadata, SALE_WALLET_TXN_KEY
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.models.sales_transactions import SalesTransactions
@@ -231,12 +231,75 @@ async def payment_success(session_id: Optional[str] = None):
                             debug["sale_id"] = str(sale.id)
                     # If there's no initiation row, we can't create Sale/UserPackage in this flow.
                     if sale is None and debug.get("init_txn_found_by_gateway_txn_id") == "0":
-                        db.rollback()
-                        return _respond(
-                            error="missing_initiation_sales_transaction",
-                            session_id=session_id,
-                            **debug,
+                        # Try wallet top-up initiation lookup too.
+                        init_wallet = (
+                            db.query(SalesTransactions)
+                            .filter(
+                                SalesTransactions.source == "wallet",
+                                SalesTransactions.gateway_txn_id == session_id,
+                                SalesTransactions.extra_metadata["event"].astext == "created",
+                            )
+                            .order_by(SalesTransactions.created_at.desc())
+                            .first()
                         )
+                        debug["init_wallet_txn_found_by_gateway_txn_id"] = "1" if init_wallet is not None else "0"
+                        if init_wallet and init_wallet.user_id and isinstance(init_wallet.extra_metadata, dict):
+                            user = db.query(User).filter(User.id == init_wallet.user_id).first()
+                            before = float(user.wallet or 0) if user else 0.0
+                            credited = float(init_wallet.amount or 0)
+                            after = before + credited
+
+                            wtxn = WalletTransaction(
+                                user_id=init_wallet.user_id,
+                                direction="credit",
+                                transaction_id=session_id,
+                                amount=init_wallet.amount or 0,
+                                currency=(init_wallet.currency or "QAR").upper(),
+                                balance_before=before,
+                                balance_after=after,
+                                created_by=init_wallet.created_by_type,
+                                created_by_id=init_wallet.created_by_id,
+                            )
+                            db.add(wtxn)
+                            db.flush()
+
+                            sale = Sale(
+                                tenant_id=init_wallet.tenant_id,
+                                user_id=init_wallet.user_id,
+                                package_id=None,
+                                product_item_type=None,
+                                type="wallet_add",
+                                created_by_type=init_wallet.created_by_type,
+                                created_by_id=init_wallet.created_by_id,
+                                wallet_transaction_id=wtxn.id,
+                                amount=init_wallet.amount or 0,
+                                extra_metadata={
+                                    "purpose": "wallet_add",
+                                    "currency": (init_wallet.currency or "QAR").upper(),
+                                    "gateway": "stripe",
+                                    "status": "succeeded",
+                                    "gateway_transaction_id": session_id,
+                                    SALE_WALLET_TXN_KEY: {
+                                        "transaction_type": "wallet_add",
+                                        "status": "succeeded",
+                                        "tenant_id": str(init_wallet.tenant_id),
+                                    },
+                                },
+                            )
+                            db.add(sale)
+                            db.flush()
+                            init_wallet.order_id = sale.id
+                            if user:
+                                user.wallet = after
+                            debug["sale_created_from_init_wallet_txn"] = "1"
+                            debug["sale_id"] = str(sale.id)
+                        if sale is None:
+                            db.rollback()
+                            return _respond(
+                                error="missing_initiation_sales_transaction",
+                                session_id=session_id,
+                                **debug,
+                            )
             except Exception:
                 logger.exception("payment_success reconciliation failed (session_id=%s)", session_id)
                 db.rollback()

@@ -576,6 +576,88 @@ async def payment_callback(
     else:
         wallet_txn = None
 
+    # If wallet top-up initiation only logged sales_transactions, create wallet_transactions + sales here.
+    if wallet_txn is None and result.transaction_id:
+        init_wallet_txn = (
+            db.query(SalesTransactions)
+            .filter(
+                SalesTransactions.source == "wallet",
+                SalesTransactions.gateway_txn_id == result.transaction_id,
+                SalesTransactions.extra_metadata["event"].astext == "created",
+            )
+            .order_by(SalesTransactions.created_at.desc())
+            .first()
+        )
+        if init_wallet_txn and init_wallet_txn.user_id:
+            user = db.query(User).filter(User.id == init_wallet_txn.user_id).first()
+            before = float(user.wallet or 0) if user else 0.0
+            credited = float(init_wallet_txn.amount or 0)
+            after = before + credited
+
+            wallet_txn = WalletTransaction(
+                user_id=init_wallet_txn.user_id,
+                direction="credit",
+                transaction_id=result.transaction_id,
+                amount=init_wallet_txn.amount or 0,
+                currency=(init_wallet_txn.currency or (result.currency or "QAR")).upper(),
+                balance_before=before,
+                balance_after=after if _wallet_status_from_gateway(result.status) == "succeeded" else None,
+                created_by=init_wallet_txn.created_by_type,
+                created_by_id=init_wallet_txn.created_by_id,
+            )
+            db.add(wallet_txn)
+            db.flush()
+
+            sale = Sale(
+                tenant_id=init_wallet_txn.tenant_id,
+                user_id=init_wallet_txn.user_id,
+                package_id=None,
+                product_item_type=None,
+                type="wallet_add",
+                created_by_type=init_wallet_txn.created_by_type,
+                created_by_id=init_wallet_txn.created_by_id,
+                wallet_transaction_id=wallet_txn.id,
+                amount=init_wallet_txn.amount or 0,
+                extra_metadata={
+                    "purpose": "wallet_add",
+                    "currency": (init_wallet_txn.currency or (result.currency or "QAR")).upper(),
+                    "gateway": (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)),
+                    "status": _wallet_status_from_gateway(result.status),
+                    "gateway_transaction_id": result.transaction_id,
+                    SALE_WALLET_TXN_KEY: {
+                        "transaction_type": "wallet_add",
+                        "status": _wallet_status_from_gateway(result.status),
+                        "tenant_id": str(init_wallet_txn.tenant_id),
+                    },
+                },
+            )
+            db.add(sale)
+            db.flush()
+            init_wallet_txn.order_id = sale.id
+
+            callback_txn = SalesTransactions(
+                order_id=sale.id,
+                tenant_id=sale.tenant_id,
+                payment_method="gateway",
+                gateway=(result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)),
+                gateway_txn_id=result.transaction_id or "",
+                source="wallet",
+                status=("success" if _wallet_status_from_gateway(result.status) == "succeeded" else "failed"),
+                amount=result.amount or sale.amount,
+                currency=(result.currency or init_wallet_txn.currency or "QAR"),
+                user_id=sale.user_id,
+                created_by_type=sale.created_by_type or "member",
+                created_by_id=sale.created_by_id or sale.user_id,
+                extra_metadata={"event": "callback"},
+            )
+            db.add(callback_txn)
+            db.flush()
+            sale.provider_numeric_transaction_id = callback_txn.id
+
+            # Credit user wallet only on success.
+            if user and _wallet_status_from_gateway(result.status) == "succeeded":
+                user.wallet = after
+
     if wallet_txn is None and result.order_id:
         try:
             sale_for_wallet = db.query(Sale).filter(Sale.id == UUID(str(result.order_id))).first()
