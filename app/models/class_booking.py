@@ -38,7 +38,13 @@ class ClassBooking(Base):
 
     payment_method = Column(String(20), nullable=True)
     package_id = Column(UUID(as_uuid=True), ForeignKey("packages.id", ondelete="SET NULL"), nullable=True)
-    user_package_purchase_id = Column(UUID(as_uuid=True), ForeignKey("sales.id", ondelete="SET NULL"), nullable=True)
+    # DB column name is user_package_id (legacy). Keep Python API name stable.
+    user_package_purchase_id = Column(
+        "user_package_id",
+        UUID(as_uuid=True),
+        ForeignKey("sales.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     # Human-readable booking order reference e.g. ORD1A2B3C4D
     order_id = Column(String(50), nullable=True, index=True)
