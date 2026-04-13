@@ -154,7 +154,8 @@ class PaymentSuccessService:
             sale.status = "succeeded"
             st = "succeeded"
 
-        if sale.package_id is not None:
+        is_package_sale = (sale.type or "") in ("package_gateway", "package_wallet")
+        if is_package_sale and sale.package_id is not None:
             apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
             if st in ("succeeded", "success"):
                 ensure_user_package_for_completed_package_sale(
