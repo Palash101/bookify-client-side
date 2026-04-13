@@ -157,11 +157,17 @@ async def health_check():
 
 @app.get("/payment/success")
 async def payment_success(session_id: Optional[str] = None):
-    def _redirect_to_app(**query: Optional[str]) -> RedirectResponse:
-        base = settings.PAYMENT_SUCCESS_DEEP_LINK.rstrip("/")
-        q = {k: str(v) for k, v in query.items() if v is not None and str(v) != ""}
-        url = f"{base}?{urlencode(q)}" if q else base
-        return RedirectResponse(url=url, status_code=302)
+    # Temporarily disable deep-link redirect (PAYMENT_SUCCESS_DEEP_LINK) and return JSON instead.
+    def _respond(**payload: Optional[str]) -> JSONResponse:
+        clean = {k: str(v) for k, v in payload.items() if v is not None and str(v) != ""}
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": "error" not in clean,
+                "message": clean.get("error") or "Payment success received",
+                **clean,
+            },
+        )
 
     sale = None
     wallet_txn = None
@@ -218,7 +224,7 @@ async def payment_success(session_id: Optional[str] = None):
             except Exception:
                 logger.exception("payment_success reconciliation failed (session_id=%s)", session_id)
                 db.rollback()
-                return _redirect_to_app(error="payment_success_failed", session_id=session_id)
+                return _respond(error="payment_success_failed", session_id=session_id)
             # Stripe Checkout session ids (cs_…) live on the sale for packages; wallet ledger uses the same id only for wallet top-ups.
             wallet_txn = None
             if sale is None or (sale.type or "") == "wallet_add":
@@ -298,9 +304,9 @@ async def payment_success(session_id: Optional[str] = None):
         finally:
             db.close()
 
-        return _redirect_to_app(session_id=session_id)
+        return _respond(session_id=session_id)
 
-    return _redirect_to_app(error="missing_session_id")
+    return _respond(error="missing_session_id")
 
 
 @app.get("/payment/cancel")
