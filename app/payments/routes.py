@@ -536,33 +536,73 @@ async def payment_callback(
                         created_by_id=order.created_by_id or order.user_id,
                     )
 
-            txn = SalesTransactions(
-                order_id=order.id if order else order_uuid,
-                tenant_id=UUID(tenant_id),
-                payment_method="gateway",
-                gateway=(
-                    (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway))
-                    or (order.gateway if order else (audit_sale.gateway if audit_sale else ""))
-                ),
-                gateway_txn_id=result.transaction_id or "",
-                source="package",
-                status=("success" if _wallet_status_from_gateway(result.status) == "succeeded" else "failed" if _wallet_status_from_gateway(result.status) in ("failed","cancelled","reversed") else _wallet_status_from_gateway(result.status)),
-                amount=result.amount,
-                currency=result.currency,
-                user_id=order.user_id if order else (audit_sale.user_id if audit_sale else None),
-                created_by_type=(
-                    (audit_sale.created_by_type or "member") if audit_sale else "gateway"
-                ),
-                created_by_id=(
-                    (audit_sale.created_by_id or audit_sale.user_id) if audit_sale else None
-                ),
-                extra_metadata={"event": "callback"},
+            # Prefer updating the initiation ("created") row instead of inserting a second one.
+            init_pkg_txn = (
+                db.query(SalesTransactions)
+                .filter(
+                    SalesTransactions.tenant_id == UUID(tenant_id),
+                    SalesTransactions.source == "package",
+                    SalesTransactions.extra_metadata["client_order_id"].astext == str(order_uuid),
+                    SalesTransactions.extra_metadata["event"].astext == "created",
+                )
+                .order_by(SalesTransactions.created_at.desc())
+                .first()
             )
-            db.add(txn)
-            db.flush()
-            if order is not None:
-                order.provider_numeric_transaction_id = txn.id
-            db.commit()
+
+            normalized = _wallet_status_from_gateway(result.status)
+            status_value = (
+                "success"
+                if normalized == "succeeded"
+                else "failed"
+                if normalized in ("failed", "cancelled", "reversed")
+                else normalized
+            )
+            gateway_value = (
+                (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway))
+                or (order.gateway if order else (audit_sale.gateway if audit_sale else ""))
+            )
+
+            if init_pkg_txn is not None:
+                init_pkg_txn.order_id = order.id if order else order_uuid
+                init_pkg_txn.gateway = gateway_value
+                init_pkg_txn.gateway_txn_id = result.transaction_id or init_pkg_txn.gateway_txn_id or ""
+                init_pkg_txn.status = status_value
+                init_pkg_txn.amount = result.amount or init_pkg_txn.amount
+                init_pkg_txn.currency = (result.currency or init_pkg_txn.currency or "QAR")
+                meta = dict(init_pkg_txn.extra_metadata or {})
+                meta.setdefault("event", "created")
+                meta["resolved_by"] = "callback"
+                meta["last_event"] = "callback"
+                init_pkg_txn.extra_metadata = meta
+                db.flush()
+                if order is not None:
+                    order.provider_numeric_transaction_id = init_pkg_txn.id
+                db.commit()
+            else:
+                txn = SalesTransactions(
+                    order_id=order.id if order else order_uuid,
+                    tenant_id=UUID(tenant_id),
+                    payment_method="gateway",
+                    gateway=gateway_value,
+                    gateway_txn_id=result.transaction_id or "",
+                    source="package",
+                    status=status_value,
+                    amount=result.amount,
+                    currency=result.currency,
+                    user_id=order.user_id if order else (audit_sale.user_id if audit_sale else None),
+                    created_by_type=(
+                        (audit_sale.created_by_type or "member") if audit_sale else "gateway"
+                    ),
+                    created_by_id=(
+                        (audit_sale.created_by_id or audit_sale.user_id) if audit_sale else None
+                    ),
+                    extra_metadata={"event": "callback"},
+                )
+                db.add(txn)
+                db.flush()
+                if order is not None:
+                    order.provider_numeric_transaction_id = txn.id
+                db.commit()
 
     # ----------------------------------------------------------------
     # Persist result to wallet transactions (top-ups)

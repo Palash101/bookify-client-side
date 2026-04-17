@@ -170,7 +170,10 @@ class PaymentSuccessService:
                     .filter(
                         SalesTransactions.order_id == sale.id,
                         SalesTransactions.source == "package",
-                        SalesTransactions.extra_metadata["event"].astext == "success_redirect",
+                        (
+                            (SalesTransactions.gateway_txn_id == session_id)
+                            | (SalesTransactions.extra_metadata["event"].astext == "success_redirect")
+                        ),
                     )
                     .first()
                 )
@@ -193,6 +196,20 @@ class PaymentSuccessService:
                     db.add(st_row)
                     db.flush()
                     sale.provider_numeric_transaction_id = st_row.id
+                else:
+                    # If callback already updated the initiation row, just tag it.
+                    m = dict(exists.extra_metadata or {})
+                    m.setdefault("event", "callback")
+                    m["resolved_by"] = "success_redirect"
+                    exists.extra_metadata = m
+                    if exists.status != "success":
+                        exists.status = "success"
+                    if not exists.gateway_txn_id:
+                        exists.gateway_txn_id = session_id
+                    if not exists.gateway:
+                        exists.gateway = sale.gateway or "stripe"
+                    db.flush()
+                    sale.provider_numeric_transaction_id = exists.id
 
         debug["sale_id"] = str(sale.id)
         debug["sale_status"] = str(sale.status)
