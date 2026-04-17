@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
-PaymentMethod = Literal["free", "package", "wallet", "gateway"]
+PaymentMode = Literal["cash", "wallet", "package", "gateway", "free"]
 
 
 class BookingRequestBody(BaseModel):
-    payment_method: PaymentMethod
+    payment_mode: PaymentMode = Field(
+        validation_alias=AliasChoices("payment_mode", "payment_method"),
+        serialization_alias="payment_mode",
+    )
     user_package_purchase_id: Optional[UUID] = Field(
         default=None,
-        description="sales.id when payment_method is package",
+        description="sales.id when payment_mode is package",
     )
     seat_id: Optional[str] = Field(
         default=None,
@@ -50,9 +52,8 @@ class BookingCreatedData(BaseModel):
     booking_id: UUID
     status: str
     waiting_position: Optional[int] = None
-    payment_method: Optional[str] = None
+    payment_mode: Optional[str] = None
     sessions_deducted: int = 0
-    credits_deducted: Optional[Decimal] = None
 
 
 class BookingCreateResponse(BaseModel):

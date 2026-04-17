@@ -326,7 +326,7 @@ class ClassesService:
                 "booking_id": None,
                 "seat_id": None,
                 "status": None,
-                "payment_method": None,
+                "payment_mode": None,
                 "package_id": None,
             },
         }

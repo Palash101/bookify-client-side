@@ -132,7 +132,7 @@ class UserBookingResponse(BaseModel):
     booking_id: Optional[str] = None
     seat_id: Optional[str] = None
     status: Optional[str] = None
-    payment_method: Optional[str] = None
+    payment_mode: Optional[str] = None
     package_id: Optional[str] = None
 
     class Config:

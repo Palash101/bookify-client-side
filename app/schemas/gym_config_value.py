@@ -20,6 +20,7 @@ class BookingSettingsConfig(BaseModel):
     allow_late_cancellations: bool = False
     cancellation_window_hours: int = 0
     advance_booking_window_days: int = 0
+    booking_cutoff_minutes: int = 0
 
 
 class AttendanceCheckInConfig(BaseModel):

@@ -64,7 +64,7 @@ async def validate_class_booking(
         tenant_id,
         current_user,
         class_id,
-        body.payment_method,
+        body.payment_mode,
         body.user_package_purchase_id,
         body.seat_id,
         cfg=cfg,
@@ -115,7 +115,7 @@ async def create_class_booking(
         tenant_id,
         current_user,
         class_id,
-        body.payment_method,
+        body.payment_mode,
         body.user_package_purchase_id,
         body.seat_id,
         body.notes,
@@ -127,9 +127,8 @@ async def create_class_booking(
             booking_id=booking.id,
             status=booking.status,
             waiting_position=booking.waiting_position,
-            payment_method=booking.payment_method,
+            payment_mode=booking.payment_mode,
             sessions_deducted=int(booking.sessions_deducted or 0),
-            credits_deducted=booking.credits_deducted,
         ),
     }
 
@@ -154,7 +153,7 @@ async def create_waiting_booking(
         tenant_id,
         current_user,
         class_id,
-        body.payment_method,
+        body.payment_mode,
         body.user_package_purchase_id,
         body.seat_id,
         body.notes,
@@ -167,9 +166,8 @@ async def create_waiting_booking(
             booking_id=booking.id,
             status=booking.status,
             waiting_position=booking.waiting_position,
-            payment_method=booking.payment_method,
+            payment_mode=booking.payment_mode,
             sessions_deducted=int(booking.sessions_deducted or 0),
-            credits_deducted=booking.credits_deducted,
         ),
     }
 
