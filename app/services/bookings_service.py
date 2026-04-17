@@ -1041,7 +1041,8 @@ class BookingsService:
         if payment_mode == "gateway" and status_str in ("confirmed", "pending"):
             status_str = "pending_payment"
 
-        with db.begin():
+        tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+        with tx_ctx:
             now = datetime.now(_tenant_tz(db, tenant_id))
             sessions_deducted = 0
             wallet_txn_id: Optional[UUID] = None
@@ -1211,7 +1212,8 @@ class BookingsService:
             if sale:
                 _restore_sessions_to_sale(sale, int(booking.sessions_deducted or 0))
 
-        with db.begin():
+        tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
+        with tx_ctx:
             booking.status = CANCELLED_STATUS
             booking.cancelled_at = now
             booking.cancelled_by_user_id = user.id
