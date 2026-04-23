@@ -211,7 +211,7 @@ async def get_purchases_history(
     sales.type isko differentiate karta hai:
       - wallet_add
       - package_gateway
-      - package_wallet
+      - package_wallet (legacy) / wallet (new)
     """
     # Scope by token user tenant (security). Header mismatch shouldn't block.
     scoped_tenant_id = current_user.tenant_id
@@ -233,7 +233,7 @@ async def get_purchases_history(
         purchased_at = sale.created_at
 
         # Map payment_method from sale.type
-        if sale.type == "package_wallet":
+        if sale.type in ("package_wallet", "wallet") and (sale.product_item_type or "") == "package":
             payment_method = "wallet"
         else:
             payment_method = "gateway"
@@ -256,9 +256,9 @@ async def get_purchases_history(
 
         if (sale.product_item_type or "") == "wallet":
             data.wallet_adds.append(item)
-        elif sale.type == "package_gateway":
+        elif sale.type in ("package_gateway", "gateway") and (sale.product_item_type or "") == "package":
             data.package_gateway_purchases.append(item)
-        elif sale.type == "package_wallet":
+        elif sale.type in ("package_wallet", "wallet") and (sale.product_item_type or "") == "package":
             data.package_wallet_purchases.append(item)
 
     return PurchasesHistoryResponse(data=data)

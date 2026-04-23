@@ -52,7 +52,7 @@ class PaymentSuccessService:
                         user_id=init_pkg.user_id,
                         package_id=UUID(str(pkg_raw)) if pkg_raw else None,
                         product_item_type="package",
-                        type="package_gateway",
+                        type="gateway",
                         created_by_type=init_pkg.created_by_type,
                         created_by_id=init_pkg.created_by_id,
                         wallet_transaction_id=None,
@@ -154,7 +154,9 @@ class PaymentSuccessService:
             sale.status = "succeeded"
             st = "succeeded"
 
-        is_package_sale = (sale.type or "") in ("package_gateway", "package_wallet")
+        is_package_sale = (sale.type or "") in ("package_gateway", "package_wallet") or (
+            (sale.type or "") == "gateway" and (sale.product_item_type or "") == "package"
+        )
         if is_package_sale and sale.package_id is not None:
             apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
             if st in ("succeeded", "success"):
@@ -165,19 +167,20 @@ class PaymentSuccessService:
                     created_by_id=sale.created_by_id or sale.user_id,
                 )
 
-                exists = (
+                # Prefer updating the existing initiation row (created during payment start)
+                # so we don't end up with 2 rows for the same order_id.
+                st_row = (
                     db.query(SalesTransactions)
                     .filter(
-                        SalesTransactions.order_id == sale.id,
                         SalesTransactions.source == "package",
-                        (
-                            (SalesTransactions.gateway_txn_id == session_id)
-                            | (SalesTransactions.extra_metadata["event"].astext == "success_redirect")
-                        ),
+                        SalesTransactions.gateway_txn_id == session_id,
+                        SalesTransactions.tenant_id == sale.tenant_id,
                     )
+                    .order_by(SalesTransactions.created_at.desc())
                     .first()
                 )
-                if exists is None:
+
+                if st_row is None:
                     st_row = SalesTransactions(
                         order_id=sale.id,
                         tenant_id=sale.tenant_id,
@@ -195,21 +198,33 @@ class PaymentSuccessService:
                     )
                     db.add(st_row)
                     db.flush()
-                    sale.provider_numeric_transaction_id = st_row.id
                 else:
-                    # If callback already updated the initiation row, just tag it.
-                    m = dict(exists.extra_metadata or {})
-                    m.setdefault("event", "callback")
+                    st_row.order_id = sale.id
+                    if st_row.status != "success":
+                        st_row.status = "success"
+                    if not st_row.gateway:
+                        st_row.gateway = sale.gateway or "stripe"
+                    if not st_row.payment_method:
+                        st_row.payment_method = "gateway"
+                    if st_row.amount is None:
+                        st_row.amount = sale.amount
+                    if not st_row.currency:
+                        st_row.currency = sale.currency
+                    if st_row.user_id is None:
+                        st_row.user_id = sale.user_id
+                    if not st_row.created_by_type:
+                        st_row.created_by_type = sale.created_by_type or "member"
+                    if st_row.created_by_id is None:
+                        st_row.created_by_id = sale.created_by_id or sale.user_id
+
+                    m = dict(st_row.extra_metadata or {})
+                    m.setdefault("event", "created")
                     m["resolved_by"] = "success_redirect"
-                    exists.extra_metadata = m
-                    if exists.status != "success":
-                        exists.status = "success"
-                    if not exists.gateway_txn_id:
-                        exists.gateway_txn_id = session_id
-                    if not exists.gateway:
-                        exists.gateway = sale.gateway or "stripe"
+                    m["last_event"] = "success_redirect"
+                    st_row.extra_metadata = m
                     db.flush()
-                    sale.provider_numeric_transaction_id = exists.id
+
+                sale.provider_numeric_transaction_id = st_row.id
 
         debug["sale_id"] = str(sale.id)
         debug["sale_status"] = str(sale.status)

@@ -16,11 +16,12 @@ import uuid
 router = APIRouter()
 
 
-@router.get("", response_model=FitnessProgramsListResponse)
-async def get_training_programs(
-    location_id: Optional[uuid.UUID] = Query(
-        None, description="Filter by location ID (UUID)"
-    ),
+@router.get(
+    "/locations/{location_id}/training-programs",
+    response_model=FitnessProgramsListResponse,
+)
+async def get_training_programs_for_location(
+    location_id: uuid.UUID,
     search: Optional[str] = Query(None, description="Search programs by name"),
     sort_by: Optional[str] = Query(
         None, description="Sort by: name, created_at, display_position"
@@ -32,8 +33,8 @@ async def get_training_programs(
     db: Session = Depends(get_db),
 ):
     """
-    Get training programs for current tenant with optional location filter,
-    search and sorting. Requires X-Tenant-Key header.
+    Location-scoped training programs.
+    Route: /api/v1/locations/{location_id}/training-programs
     """
     programs = FitnessProgramsService.list_programs(
         db,

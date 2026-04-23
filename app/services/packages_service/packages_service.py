@@ -191,7 +191,10 @@ class PackagesService:
                 (Sale.tenant_id.is_(None)) | (Sale.tenant_id == tenant_id),
                 # Only include succeeded sales when a sale row exists.
                 (Sale.id.is_(None)) | (Sale.status.in_(["succeeded", "success"])),
-                (Sale.id.is_(None)) | (Sale.type.in_(["package_gateway", "package_wallet"])),
+                (Sale.id.is_(None))
+                | (Sale.type.in_(["package_gateway", "package_wallet"]))
+                | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
+                | ((Sale.type == "wallet") & (Sale.product_item_type == "package")),
             )
             .order_by(UserPackage.created_at.desc())
             .all()

@@ -24,7 +24,11 @@ def ensure_user_package_for_completed_package_sale(
     """
     if sale.package_id is None:
         return None
-    if sale.type not in ("package_gateway", "package_wallet"):
+    if sale.type not in ("package_gateway", "package_wallet") and not (
+        sale.type == "gateway" and sale.product_item_type == "package"
+    ) and not (
+        sale.type == "wallet" and sale.product_item_type == "package"
+    ):
         return None
     status_norm = (sale.status or "").lower()
     if status_norm not in ("succeeded", "success"):

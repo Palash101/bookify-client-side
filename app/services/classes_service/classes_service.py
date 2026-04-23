@@ -3,8 +3,8 @@ from datetime import date, datetime
 from typing import Optional, List, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, exists, or_
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy import and_, or_
 
 from app.models.class_booking import ClassBooking
 from app.models.gym_class import GymClass
@@ -101,6 +101,7 @@ class ClassesService:
         tenant_id,
         start_date: date,
         end_date: date,
+        location_id: Optional[Any] = None,
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
@@ -125,25 +126,31 @@ class ClassesService:
             tz = ZoneInfo("UTC")
         tenant_now: datetime = datetime.now(tz)
 
-        programme_for_tenant = exists().where(
-            and_(
-                FitnessProgram.id == GymClass.training_programme_id,
-                FitnessProgram.tenant_id == tenant_id,
-            )
-        )
+        fp = aliased(FitnessProgram)
         query = (
             db.query(GymClass)
             .outerjoin(User, GymClass.trainer_id == User.id)
+            .outerjoin(
+                fp,
+                and_(
+                    fp.id == GymClass.training_programme_id,
+                    fp.tenant_id == tenant_id,
+                ),
+            )
             .filter(
                 GymClass.class_date >= start_date,
                 GymClass.class_date <= end_date,
                 or_(
                     GymClass.trainer_id.is_(None),
                     User.tenant_id == tenant_id,
-                    programme_for_tenant,
+                    fp.id.isnot(None),
                 ),
             )
         )
+
+        # Optional filter by training programme location_id
+        if location_id is not None:
+            query = query.filter(fp.location_id == location_id)
 
         # Search by title
         if search:

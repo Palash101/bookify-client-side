@@ -62,7 +62,7 @@ class AuthService:
         if not user.is_active:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Inactive user"
+                detail="Your account is inactive. Please contact support to reactivate your account."
             )
         
         return user
@@ -107,10 +107,6 @@ class AuthService:
         if user_data.phone_country_code and user_data.phone:
             phone_number = f"{user_data.phone_country_code}{user_data.phone}"
         
-        skills_data = {}
-        if user_data.nationality:
-            skills_data["nationality"] = user_data.nationality
-
         role_id = str(user_data.role_id) if user_data.role_id else None
 
         return {
@@ -121,7 +117,7 @@ class AuthService:
             "phone": phone_number,
             "gender": user_data.gender,
             "dob": str(user_data.dob) if user_data.dob else None,
-            "skills": skills_data if skills_data else None,
+            "skills": None,
             "tenant_id": str(tenant_id),
             "role_id": role_id,
             # Mobile app registration creates clients by default

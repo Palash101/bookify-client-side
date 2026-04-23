@@ -214,7 +214,7 @@ async def initiate_package_purchase(
             user_id=current_user.id,
             package_id=body.package_id,
             product_item_type="package",
-            type="package_wallet",
+            type="wallet",
             created_by_type=current_user.user_type or "member",
             created_by_id=current_user.id,
             wallet_transaction_id=wallet_txn.id,
@@ -488,7 +488,7 @@ async def payment_callback(
                         user_id=init_txn.user_id,
                         package_id=UUID(str(pkg_raw)) if pkg_raw else None,
                         product_item_type="package",
-                        type="package_gateway",
+                        type="gateway",
                         created_by_type=init_txn.created_by_type,
                         created_by_id=init_txn.created_by_id,
                         wallet_transaction_id=None,
@@ -765,7 +765,11 @@ async def get_sales_transactions(
         .filter(
             Sale.user_id == current_user.id,
             Sale.tenant_id == tenant_id,
-            (Sale.type.in_(type_filter))
+            (
+                (Sale.type.in_(type_filter))
+                | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
+                | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
+            )
             | (
                 include_wallet_add
                 & (Sale.product_item_type == "wallet")
@@ -791,17 +795,28 @@ async def get_sales_transactions(
 
     def _row(sale: Sale) -> dict[str, Any]:
         st = latest_st_by_order.get(sale.id)
+        is_package_purchase = (sale.type in ("package_gateway", "package_wallet")) or (
+            sale.type == "gateway" and sale.product_item_type == "package"
+        ) or (
+            sale.type == "wallet" and sale.product_item_type == "package"
+        )
         return {
             "id": st.id if st else sale.id,
             "order_id": sale.id,
             "type": sale.type,
-            "payment_method": "wallet" if sale.type == "package_wallet" else "gateway",
+            "payment_method": "wallet"
+            if sale.type in ("package_wallet", "wallet")
+            else "gateway",
             "purchase_source": (
                 "wallet_topup"
                 if (sale.product_item_type == "wallet")
-                else ("wallet_purchase" if sale.type == "package_wallet" else "gateway_purchase")
+                else (
+                    "wallet_purchase"
+                    if sale.type in ("package_wallet", "wallet")
+                    else "gateway_purchase"
+                )
             ),
-            "is_package_purchase": sale.type in ("package_gateway", "package_wallet"),
+            "is_package_purchase": is_package_purchase,
             "gateway": st.gateway if st else sale.gateway,
             "gateway_txn_id": st.gateway_txn_id if st else sale.gateway_transaction_id,
             "status": st.status if st else sale.status,

@@ -22,6 +22,10 @@ def get_db() -> Generator:
     db = SessionLocal()
     try:
         yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -76,7 +80,10 @@ async def get_current_active_user(
     Get current active user.
     """
     if not current_user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(
+            status_code=400,
+            detail="Your account is inactive. Please contact support to reactivate your account.",
+        )
     return current_user
 
 

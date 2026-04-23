@@ -26,7 +26,6 @@ class UserCreate(UserBase):
     email: EmailStr
     phone: Optional[str] = None
     phone_country_code: Optional[str] = None  # e.g., "+974"
-    nationality: Optional[str] = None
     dob: Optional[date] = None
     gender: Optional[str] = None  # "MALE" or "FEMALE"
     password: str
@@ -45,7 +44,6 @@ class UserCreate(UserBase):
                 "email": "john.doe@example.com",
                 "phone": "12345678",
                 "phone_country_code": "+974",
-                "nationality": "Qatar",
                 "dob": "1990-01-01",
                 "gender": "MALE",
                 "password": "SecurePassword123",

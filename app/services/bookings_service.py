@@ -331,13 +331,13 @@ class BookingsService:
         trainer_user = aliased(User)
         rows = (
             db.query(ClassBooking, GymClass, trainer_user)
-            .join(GymClass, ClassBooking.class_id == GymClass.id)
+            .outerjoin(GymClass, ClassBooking.class_id == GymClass.id)
             .outerjoin(trainer_user, GymClass.trainer_id == trainer_user.id)
             .filter(
                 ClassBooking.tenant_id == tenant_id,
                 ClassBooking.user_id == user.id,
             )
-            .order_by(GymClass.class_date.desc(), GymClass.start_time.desc(), ClassBooking.created_at.desc())
+            .order_by(ClassBooking.created_at.desc())
             .all()
         )
 
@@ -347,8 +347,10 @@ class BookingsService:
             "waiting": [],
         }
         for booking, gym_class, trainer in rows:
-            starts_at = _class_starts_at(gym_class, tz)
-            class_name = gym_class.title or gym_class.theme_name
+            starts_at = _class_starts_at(gym_class, tz) if gym_class is not None else None
+            class_name = None
+            if gym_class is not None:
+                class_name = gym_class.title or gym_class.theme_name
             trainer_name: Optional[str] = None
             if trainer:
                 trainer_name = f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() or trainer.email
@@ -386,13 +388,13 @@ class BookingsService:
             item: dict[str, Any] = {
                 "booking_id": str(booking.id),
                 "order_id": booking.order_id,
-                "class_id": str(gym_class.id),
+                "class_id": str(getattr(gym_class, "id", None) or booking.class_id),
                 "class_name": class_name,
                 "status": booking.status,
                 "seat_id": booking.seat_id,
-                "date": gym_class.class_date.isoformat() if gym_class.class_date else None,
-                "start_time": gym_class.start_time.strftime("%H:%M") if gym_class.start_time else None,
-                "end_time": gym_class.end_time.strftime("%H:%M") if gym_class.end_time else None,
+                "date": gym_class.class_date.isoformat() if gym_class and gym_class.class_date else None,
+                "start_time": gym_class.start_time.strftime("%H:%M") if gym_class and gym_class.start_time else None,
+                "end_time": gym_class.end_time.strftime("%H:%M") if gym_class and gym_class.end_time else None,
                 "trainer": trainer_name,
                 "can_cancel": can_cancel,
                 "cancel_deadline": cancel_deadline_iso,
@@ -841,7 +843,11 @@ class BookingsService:
                         Sale.id == user_package_purchase_id,
                         Sale.tenant_id == tenant_id,
                         Sale.user_id == user.id,
-                        Sale.type.in_(["package_gateway", "package_wallet"]),
+                        (
+                            Sale.type.in_(["package_gateway", "package_wallet"])
+                            | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
+                            | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
+                        ),
                         Sale.package_id.isnot(None),
                         Sale.status.in_(["succeeded", "success"]),
                     )
