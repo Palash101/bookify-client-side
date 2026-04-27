@@ -72,6 +72,7 @@ async def get_classes_by_date_for_location(
 @router.get(
     "/locations/{location_id}/classes/{class_id}",
     response_model=ClassDetailsOuterResponse,
+    response_model_exclude_none=True,
 )
 async def get_class_details_for_location(
     location_id: uuid.UUID,

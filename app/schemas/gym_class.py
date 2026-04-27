@@ -153,7 +153,7 @@ class ClassDetailsResponse(BaseModel):
 
     capacity: CapacityResponse
     pricing: PricingResponse
-    layout: LayoutResponse
+    layout: Optional[LayoutResponse] = None
     user_booking: UserBookingResponse
 
     class Config:

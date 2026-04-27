@@ -286,6 +286,20 @@ class ClassesService:
                 )
         # If there are no layout seats configured, return empty.
 
+        # Current user's booking (if any) for this class.
+        active_statuses = ("confirmed", "waiting", "pending", "pending_payment")
+        booking = (
+            db.query(ClassBooking)
+            .filter(
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.class_id == class_id,
+                ClassBooking.user_id == user_id,
+                ClassBooking.status.in_(list(active_statuses)),
+            )
+            .order_by(ClassBooking.created_at.desc())
+            .first()
+        )
+
         # Prepare response payload expected by schema
         payload = {
             "class_id": str(gym_class.id),
@@ -323,18 +337,17 @@ class ClassesService:
                 "wallet_credits_required": None,
                 "currency": "QAR",
             },
-            "layout": {
-                "rows": rows,
-                "columns": columns,
-                "seats": seats,
-            },
             "user_booking": {
-                "has_booked": False,
-                "booking_id": None,
-                "seat_id": None,
-                "status": None,
-                "payment_mode": None,
-                "package_id": None,
+                "has_booked": booking is not None,
+                "booking_id": str(booking.id) if booking is not None else None,
+                "seat_id": booking.seat_id if booking is not None else None,
+                "status": booking.status if booking is not None else None,
+                "payment_mode": booking.payment_mode if booking is not None else None,
+                "package_id": (
+                    str(booking.user_package_purchase_id)
+                    if booking is not None and booking.user_package_purchase_id is not None
+                    else None
+                ),
             },
         }
         return payload
