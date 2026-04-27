@@ -181,20 +181,22 @@ class PackagesService:
         out: List[Dict[str, Any]] = []
         rows = (
             db.query(UserPackage, Sale)
-            .outerjoin(Sale, Sale.id == UserPackage.sale_id)
+            # We only want "active packages" that can actually be used for booking,
+            # so require a real Sale row for the entitlement.
+            .join(Sale, Sale.id == UserPackage.sale_id)
             .filter(
                 UserPackage.user_id == user_id,
                 UserPackage.package_id.isnot(None),
                 # Expiry check comes from entitlement row
                 (UserPackage.expire_at.is_(None)) | (UserPackage.expire_at > sa_func.now()),
-                # Tenant scoping: prefer Sale.tenant_id when present; else fall back to package tenant check later.
-                (Sale.tenant_id.is_(None)) | (Sale.tenant_id == tenant_id),
-                # Only include succeeded sales when a sale row exists.
-                (Sale.id.is_(None)) | (Sale.status.in_(["succeeded", "success"])),
-                (Sale.id.is_(None))
-                | (Sale.type.in_(["package_gateway", "package_wallet"]))
-                | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
-                | ((Sale.type == "wallet") & (Sale.product_item_type == "package")),
+                # Tenant scoping and payment constraints live on Sale.
+                (Sale.tenant_id == tenant_id),
+                Sale.status.in_(["succeeded", "success"]),
+                (
+                    (Sale.type.in_(["package_gateway", "package_wallet"]))
+                    | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
+                    | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
+                ),
             )
             .order_by(UserPackage.created_at.desc())
             .all()
@@ -259,7 +261,8 @@ class PackagesService:
 
             out.append(
                 {
-                    "id": up.sale_id or (sale.id if sale is not None else up.id),
+                    # API contract: this id is the sale id to be used as `user_package_purchase_id` for booking.
+                    "id": sale.id,
                     "package_id": package.id,
                     "package_name": package.name,
                     "package_description": package.description,

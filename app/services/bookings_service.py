@@ -906,13 +906,13 @@ class BookingsService:
                     "package_not_expired",
                     False,
                     expires_at=None,
-                    message="No valid package sale",
+                    message="Invalid package purchase or payment not completed",
                 )
                 outcome.set_check(
                     "package_sessions",
                     False,
                     remaining=0,
-                    message="No valid package sale",
+                    message="Invalid package purchase or payment not completed",
                 )
 
             outcome.set_check("package_location", True)

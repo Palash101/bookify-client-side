@@ -843,9 +843,14 @@ async def list_active_gateways(tenant_id: str = Depends(get_tenant_id)):
     Useful for apps that want to show multiple payment options
     (e.g. Stripe / PayPal) based on tenant setup.
     """
-    settings = TenantPaymentSettings.get(tenant_id)
-    configured = list(settings.get("gateways", {}).keys())
-    active = settings.get("active_gateway")
+    try:
+        settings = TenantPaymentSettings.get(tenant_id)
+        configured = list(settings.get("gateways", {}).keys())
+        active = settings.get("active_gateway")
+    except ValueError:
+        # Treat "no configured gateways" as a valid state for new tenants.
+        configured = []
+        active = None
 
     return {
         "active_gateway":      active,
