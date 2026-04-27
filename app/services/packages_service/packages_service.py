@@ -164,6 +164,7 @@ class PackagesService:
             "sessions_remaining": sessions_remaining,
             "sessions_used": sessions_used,
         }
+        
 
     @staticmethod
     def get_active_packages_for_user(
