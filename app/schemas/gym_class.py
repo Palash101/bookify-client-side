@@ -9,6 +9,7 @@ class GymClassBase(BaseModel):
     title: Optional[str] = None
     theme_name: Optional[str] = None
     trainer_id: Optional[UUID] = None
+    trainer_name: Optional[str] = None
     class_date: Optional[DateType] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None

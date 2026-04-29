@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 from app.core.db.session import get_db
 from app.dependencies import get_current_tenant_id, get_current_active_user
 from app.schemas.gym_class import (
@@ -54,9 +55,24 @@ async def get_classes_by_date_for_location(
         sort_by=sort_by,
         sort_order=sort_order,
     )
+
+    trainer_ids = {c.trainer_id for c in classes if getattr(c, "trainer_id", None) is not None}
+    trainer_name_by_id = {}
+    if trainer_ids:
+        rows = (
+            db.execute(
+                select(User.id, User.first_name, User.last_name).where(User.id.in_(list(trainer_ids)))
+            )
+            .all()
+        )
+        for tid, first, last in rows:
+            full = f"{first or ''} {last or ''}".strip()
+            trainer_name_by_id[str(tid)] = full or None
+
     data = []
     for c in classes:
         item = GymClassResponse.model_validate(c).model_dump()
+        item["trainer_name"] = trainer_name_by_id.get(str(getattr(c, "trainer_id", "")))
         live_layout = ClassesService._with_live_layout_status(db, c)
         item["layouts"] = live_layout
         item["fully_booked"] = ClassesService.fully_booked_for_class(c, live_layout)
