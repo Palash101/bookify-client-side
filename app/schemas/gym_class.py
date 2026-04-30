@@ -143,6 +143,7 @@ class UserBookingResponse(BaseModel):
 class ClassDetailsResponse(BaseModel):
     class_id: str
     name: Optional[str] = None
+    gender: Optional[str] = None
     booking_type: Optional[str] = None
     layout_id: Optional[Union[int, UUID, str]] = None
     layouts: Optional[Any] = None

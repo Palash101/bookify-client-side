@@ -304,6 +304,7 @@ class ClassesService:
         payload = {
             "class_id": str(gym_class.id),
             "name": gym_class.title or gym_class.theme_name or None,
+            "gender": gym_class.gender,
             "booking_type": gym_class.booking_type,
             "layout_id": gym_class.layout_id,
             "layouts": ClassesService._with_live_layout_status(db, gym_class),
