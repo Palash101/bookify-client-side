@@ -77,6 +77,7 @@ class ActivePackageData(BaseModel):
     package_id: UUID
     package_name: Optional[str] = None
     package_description: Optional[str] = None
+    booking_restriction: Optional[Any] = None
     validity_days: Optional[int] = None
     validity_end: Optional[date] = None
 

@@ -267,6 +267,7 @@ class PackagesService:
                     "package_id": package.id,
                     "package_name": package.name,
                     "package_description": package.description,
+                    "booking_restriction": package.booking_restriction,
                     "validity_days": package.validity_days,
                     "validity_end": package.validity_end,
                     "status": (sale.status if sale is not None else "succeeded"),
