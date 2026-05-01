@@ -99,6 +99,53 @@ def _normalize_booking_type(raw: Optional[str]) -> str:
     return raw.lower().replace(" ", "_").replace("-", "_")
 
 
+def _normalize_user_gender_for_booking(raw: Optional[Any]) -> Optional[str]:
+    """Profiles: male | female only for restriction checks; None if unset/nonstandard."""
+    if raw is None:
+        return None
+    s = str(raw).strip().lower()
+    if not s:
+        return None
+    if s in ("male", "m", "man", "men"):
+        return "male"
+    if s in ("female", "f", "woman", "women"):
+        return "female"
+    return None
+
+
+def _normalize_class_gender_for_booking(raw: Optional[Any]) -> str:
+    """
+    Classes: mixed → anyone; male/female → only matching members.
+    Unknown or empty → treat as mixed (no restriction).
+    """
+    if raw is None:
+        return "mixed"
+    s = str(raw).strip().lower()
+    if not s:
+        return "mixed"
+    if s in ("mixed", "any", "all", "both"):
+        return "mixed"
+    if s in ("male", "men", "man", "m"):
+        return "male"
+    if s in ("female", "women", "woman", "f"):
+        return "female"
+    return "mixed"
+
+
+def _gender_eligibility_message(class_gender: str, user_gender: Optional[str]) -> Tuple[bool, str]:
+    if class_gender == "mixed":
+        return True, ""
+    if user_gender is None:
+        return False, "Your profile gender is required to book this class."
+    if class_gender == user_gender:
+        return True, ""
+    if class_gender == "female":
+        return False, "This class is for women only."
+    if class_gender == "male":
+        return False, "This class is for men only."
+    return False, "You cannot book this class."
+
+
 # gym_classes.booking_type values that mean "must book with a package / sale", not wallet or free.
 _PACKAGE_ONLY_BOOKING_TYPES = frozenset(
     {
@@ -659,6 +706,20 @@ class BookingsService:
                 _finalize_booking_validation(outcome, pm)
                 return outcome
         outcome.set_check("class_active", True)
+
+        cg = _normalize_class_gender_for_booking(getattr(gym_class, "gender", None))
+        ug = _normalize_user_gender_for_booking(getattr(user, "gender", None))
+        gender_ok, gender_msg = _gender_eligibility_message(cg, ug)
+        outcome.set_check(
+            "gender_eligibility",
+            gender_ok,
+            message=(gender_msg or None),
+            class_gender=cg,
+            user_gender=(ug if ug is not None else None),
+        )
+        if not gender_ok:
+            _finalize_booking_validation(outcome, pm)
+            return outcome
 
         if starts_at and starts_at <= now:
             outcome.set_check("class_not_started", False, message="Class has already started")
