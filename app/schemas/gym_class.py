@@ -137,6 +137,7 @@ class UserBookingResponse(BaseModel):
     booking_id: Optional[str] = None
     seat_id: Optional[str] = None
     status: Optional[str] = None
+    waiting_position: Optional[int] = None
     payment_mode: Optional[str] = None
     package_id: Optional[str] = None
 

@@ -405,6 +405,7 @@ class ClassesService:
                 "booking_id": str(booking.id) if booking is not None else None,
                 "seat_id": booking.seat_id if booking is not None else None,
                 "status": booking.status if booking is not None else None,
+                "waiting_position": booking.waiting_position if booking is not None else None,
                 "payment_mode": booking.payment_mode if booking is not None else None,
                 "package_id": (
                     str(booking.user_package_purchase_id)
