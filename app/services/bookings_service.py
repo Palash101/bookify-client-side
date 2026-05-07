@@ -196,6 +196,12 @@ def _layout_total_seats(gym_class: GymClass) -> Optional[int]:
         return None
     raw = layouts.get("totalSeats")
     if raw is None:
+        # Backward-compatible fallback: some layouts only provide seats[] without totalSeats.
+        seats = layouts.get("seats")
+        if isinstance(seats, list):
+            with_id = [s for s in seats if isinstance(s, dict) and s.get("id") is not None]
+            n = len(with_id)
+            return n if n > 0 else None
         return None
     try:
         v = int(raw)

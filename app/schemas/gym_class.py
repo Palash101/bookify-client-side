@@ -35,7 +35,10 @@ class GymClassResponse(GymClassBase):
     layouts: Optional[Any] = None
     fully_booked: bool = Field(
         default=False,
-        description="No regular spots left (all layout seats booked, or booking_counts >= capacity).",
+        description=(
+            "True when class is not bookable: regular capacity full and, if max_waitings > 0, "
+            "waitlist is also full (count of waiting bookings >= max_waitings)."
+        ),
     )
 
     class Config:
@@ -90,9 +93,10 @@ class ScheduleShortResponse(BaseModel):
 class CapacityResponse(BaseModel):
     total: int = 0
     booked: int = 0
-    waiting: int = 0
-    max_waiting: int = 0
     available: int = 0
+    max_waiting: int = 0
+    current_waiting: int = 0
+    waiting_available: int = 0
 
     class Config:
         from_attributes = True
@@ -147,6 +151,13 @@ class ClassDetailsResponse(BaseModel):
     booking_type: Optional[str] = None
     layout_id: Optional[Union[int, UUID, str]] = None
     layouts: Optional[Any] = None
+    fully_booked: bool = Field(
+        default=False,
+        description=(
+            "True when class is not bookable: regular capacity full and, if max_waitings > 0, "
+            "waitlist is also full (count of waiting bookings >= max_waitings)."
+        ),
+    )
 
     program: ProgramShortResponse
     trainer: TrainerShortResponse

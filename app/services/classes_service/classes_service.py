@@ -4,7 +4,7 @@ from typing import Optional, List, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 
 from app.models.class_booking import ClassBooking
 from app.models.gym_class import GymClass
@@ -65,35 +65,58 @@ class ClassesService:
         return layout
 
     @staticmethod
-    def fully_booked_for_class(gym_class: GymClass, live_layout: Any) -> bool:
+    def _regular_slots_full(db: Session, gym_class: GymClass) -> bool:
         """
-        Whether the class should be treated as full for UI (disable booking).
+        Main capacity full based on active occupying bookings. Waitlist not considered.
 
-        - If layouts.seats has entries with ids, all such seats must be ``booked``
-          (uses live_layout from _with_live_layout_status).
-        - Else capacity from ``_effective_capacity`` (totalSeats or max_bookings);
-          unlimited (<=0) => not fully_booked.
+        IMPORTANT: Do not rely on seat_id being present on bookings; capacity may be
+        full even if seat mapping isn't recorded.
         """
-        if isinstance(live_layout, dict):
-            seats = live_layout.get("seats")
-            if isinstance(seats, list):
-                with_id = [
-                    s
-                    for s in seats
-                    if isinstance(s, dict) and s.get("id") is not None
-                ]
-                if with_id:
-                    for s in with_id:
-                        st = str(s.get("status") or "").lower()
-                        if st != "booked":
-                            return False
-                    return True
-
         cap = _effective_capacity(gym_class)
         if cap <= 0:
             return False
-        booked = int(gym_class.booking_counts or 0)
+        occupying_statuses = ("confirmed", "pending", "pending_payment")
+        occupying_n = (
+            db.query(func.count(ClassBooking.id))
+            .filter(
+                ClassBooking.class_id == gym_class.id,
+                ClassBooking.status.in_(list(occupying_statuses)),
+            )
+            .scalar()
+            or 0
+        )
+        try:
+            booked = int(occupying_n)
+        except (TypeError, ValueError):
+            booked = 0
         return booked >= cap
+
+    @staticmethod
+    def fully_booked_for_class(db: Session, gym_class: GymClass, live_layout: Any) -> bool:
+        """
+        True only when no one else can book or join the waitlist.
+
+        - Regular capacity full (same rules as _regular_slots_full).
+        - If max_waitings > 0: also require active ``waiting`` bookings >= max_waitings.
+        - If max_waitings <= 0 (no waitlist slots): true when regular capacity only is full.
+        """
+        if not ClassesService._regular_slots_full(db, gym_class):
+            return False
+
+        max_w = int(gym_class.max_waitings or 0)
+        if max_w <= 0:
+            return True
+
+        waiting_n = (
+            db.query(func.count(ClassBooking.id))
+            .filter(
+                ClassBooking.class_id == gym_class.id,
+                ClassBooking.status == "waiting",
+            )
+            .scalar()
+            or 0
+        )
+        return int(waiting_n) >= max_w
 
     @staticmethod
     def list_classes(
@@ -253,11 +276,46 @@ class ClassesService:
                 .first()
             )
 
-        total = int(gym_class.max_bookings or 0)
-        booked = int(gym_class.booking_counts or 0)
+        # Capacity for UI should match booking logic:
+        # - total = layouts.totalSeats (if present) else max_bookings (<=0 means unlimited)
+        # - booked = active occupying bookings (confirmed/pending/pending_payment)
+        total = int(_effective_capacity(gym_class) or 0)
+        occupying_statuses = ("confirmed", "pending", "pending_payment")
+        occupying_raw = (
+            db.query(func.count(ClassBooking.id))
+            .filter(
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.class_id == class_id,
+                ClassBooking.status.in_(list(occupying_statuses)),
+            )
+            .scalar()
+            or 0
+        )
+        try:
+            booked = int(occupying_raw)
+        except (TypeError, ValueError):
+            booked = 0
+
         max_waitings = int(gym_class.max_waitings or 0)
-        available = max(0, total - booked)
-        waiting = max_waitings
+        available = max(0, total - booked) if total > 0 else 0
+
+        current_waiting_raw = (
+            db.query(func.count(ClassBooking.id))
+            .filter(
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.class_id == class_id,
+                ClassBooking.status == "waiting",
+            )
+            .scalar()
+            or 0
+        )
+        try:
+            current_waiting = int(current_waiting_raw)
+        except (TypeError, ValueError):
+            current_waiting = 0
+        waiting_available = (
+            max(0, max_waitings - current_waiting) if max_waitings > 0 else 0
+        )
 
         columns = 5
         rows = 0
@@ -300,6 +358,8 @@ class ClassesService:
             .first()
         )
 
+        live_layout = ClassesService._with_live_layout_status(db, gym_class)
+
         # Prepare response payload expected by schema
         payload = {
             "class_id": str(gym_class.id),
@@ -307,7 +367,8 @@ class ClassesService:
             "gender": gym_class.gender,
             "booking_type": gym_class.booking_type,
             "layout_id": gym_class.layout_id,
-            "layouts": ClassesService._with_live_layout_status(db, gym_class),
+            "layouts": live_layout,
+            "fully_booked": ClassesService.fully_booked_for_class(db, gym_class, live_layout),
             "program": {
                 "id": int(program.id) if program else 0,
                 "name": program.name if program else None,
@@ -329,9 +390,10 @@ class ClassesService:
             "capacity": {
                 "total": total,
                 "booked": booked,
-                "waiting": waiting,
-                "max_waiting": max_waitings,
                 "available": available,
+                "max_waiting": max_waitings,
+                "current_waiting": current_waiting,
+                "waiting_available": waiting_available,
             },
             "pricing": {
                 "drop_in_price": float(gym_class.price) if gym_class.price is not None else None,

@@ -75,7 +75,7 @@ async def get_classes_by_date_for_location(
         item["trainer_name"] = trainer_name_by_id.get(str(getattr(c, "trainer_id", "")))
         live_layout = ClassesService._with_live_layout_status(db, c)
         item["layouts"] = live_layout
-        item["fully_booked"] = ClassesService.fully_booked_for_class(c, live_layout)
+        item["fully_booked"] = ClassesService.fully_booked_for_class(db, c, live_layout)
         data.append(GymClassResponse.model_validate(item))
     return {
         "success": True,
