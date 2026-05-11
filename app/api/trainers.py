@@ -10,7 +10,8 @@ import uuid
 
 router = APIRouter()
 
-SENIOR_TRAINER_ROLE_KEY = "senior_trainer"
+# Users must match roles.key.
+TRAINER_ROLE_KEYS = ("trainer",)
 
 
 @router.get("", response_model=TrainersListResponse)
@@ -26,13 +27,13 @@ async def get_trainers(
     db: Session = Depends(get_db),
 ):
     """
-    Get all users whose role key is senior_trainer (from users + roles),
-    with optional search and sorting. Requires X-Tenant-Key header.
+    List trainer users for this tenant (roles.key = trainer).
+    Optional search/sort. Requires valid X-Tenant-Key header.
     """
-    trainers = TrainersService.list_trainers_by_role_key(
+    trainers = TrainersService.list_trainers_by_role_keys(
         db,
         tenant_id=tenant_id,
-        role_key=SENIOR_TRAINER_ROLE_KEY,
+        role_keys=TRAINER_ROLE_KEYS,
         only_active=True,
         search=search,
         sort_by=sort_by,
