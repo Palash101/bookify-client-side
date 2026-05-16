@@ -153,10 +153,32 @@ async def reset_password(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """
-    Reset password after OTP verification.
-    Token is sent in Authorization header as "Bearer <token>".
+    Two flows (send either otp OR old_password, not both):
+
+    1) Forgot password (no old password):
+       POST /forgot-password -> Bearer token from response + body: otp, new_password, confirm_password
+
+    2) Change password (know current password):
+       POST /login -> Bearer verification token (or access token after verify-otp)
+       + body: old_password, new_password, confirm_password (no otp)
     """
     authorization = request.headers.get("Authorization")
+
+    if reset_data.old_password:
+        user = AuthService.resolve_user_from_bearer(db, authorization, tenant_id)
+        AuthService.change_password_with_old(
+            db,
+            user,
+            reset_data.old_password,
+            reset_data.new_password,
+            reset_data.confirm_password,
+        )
+        return {
+            "success": True,
+            "message": "Password changed successfully.",
+        }
+
+    AuthService.assert_forgot_password_verification_token(authorization)
     email, otp_tenant_id = AuthService.extract_verification_context(authorization)
     AuthService.verify_otp(
         email,
@@ -181,10 +203,10 @@ async def reset_password(
         reset_data.confirm_password,
         otp_tenant_id,
     )
-    
+
     return {
         "success": True,
-        "message": "Password reset successful. You can now login with your new password."
+        "message": "Password reset successful. You can now login with your new password.",
     }
 
 

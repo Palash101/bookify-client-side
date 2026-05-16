@@ -357,6 +357,8 @@ class BookingValidationOutcome:
     sale: Optional[Sale] = None
     proceed_to: Optional[str] = None
     summary_message: Optional[str] = None
+    # Set after gym_class resolves so create() can reuse without another TenantSetting read.
+    gym_config: Optional[GymConfigValue] = None
 
     def set_check(self, key: str, passed: bool, **extra: Any) -> None:
         body: Dict[str, Any] = {"pass": passed}
@@ -374,10 +376,11 @@ class BookingsService:
         db: Session,
         tenant_id: UUID,
         user: User,
+        gym_config: Optional[GymConfigValue] = None,
     ) -> dict[str, list[dict[str, Any]]]:
         tz = _tenant_tz(db, tenant_id)
         now = datetime.now(tz)
-        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
         cancel_hours = int(cfg.booking_settings.cancellation_window_hours or 0)
         allow_late = bool(cfg.booking_settings.allow_late_cancellations)
 
@@ -467,6 +470,7 @@ class BookingsService:
         tenant_id: UUID,
         gym_class: GymClass,
         now: datetime,
+        gym_config: Optional[GymConfigValue] = None,
     ) -> None:
         """
         Promote oldest waiting booking to an occupying status when a slot is freed.
@@ -484,7 +488,7 @@ class BookingsService:
         if not waiting_booking:
             return
 
-        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
         target_status = "confirmed" if cfg.booking_settings.auto_confirm_booking else "pending"
         promoted_status = target_status
 
@@ -687,6 +691,7 @@ class BookingsService:
         outcome.gym_class = gym_class
 
         config = cfg if cfg is not None else GymConfigService.get_gym_config(db, tenant_id)
+        outcome.gym_config = config
         tz = _tenant_tz(db, tenant_id)
         now = datetime.now(tz)
         starts_at = _class_starts_at(gym_class, tz)
@@ -1085,6 +1090,7 @@ class BookingsService:
         seat_id: Optional[str],
         notes: Optional[str],
         force_waiting: bool = False,
+        gym_config: Optional[GymConfigValue] = None,
     ) -> ClassBooking:
         outcome = BookingsService.validate(
             db,
@@ -1094,6 +1100,7 @@ class BookingsService:
             payment_mode,
             user_package_purchase_id,
             seat_id,
+            cfg=gym_config,
         )
         if not outcome.ok or not outcome.gym_class or not outcome.proposed_status:
             msg = outcome.summary_message or "Booking validation failed"
@@ -1150,7 +1157,7 @@ class BookingsService:
                         transaction_id=None,
                         amount=price,
                         currency=(
-                            GymConfigService.get_gym_config(db, tenant_id).payment_pricing.currency
+                            (outcome.gym_config.payment_pricing.currency if outcome.gym_config else None)
                             or "QAR"
                         ).upper(),
                         balance_before=bal_before,
@@ -1213,6 +1220,7 @@ class BookingsService:
         class_id: UUID,
         booking_id: UUID,
         reason: Optional[str],
+        gym_config: Optional[GymConfigValue] = None,
     ) -> ClassBooking:
         booking = (
             db.query(ClassBooking)
@@ -1241,7 +1249,7 @@ class BookingsService:
         if not gym_class:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
 
-        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
         tz = _tenant_tz(db, tenant_id)
         now = datetime.now(tz)
         starts_at = _class_starts_at(gym_class, tz)
@@ -1294,7 +1302,9 @@ class BookingsService:
 
             if previous_status == "confirmed":
                 gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
-                BookingsService._promote_next_waiting(db, tenant_id, gym_class, now)
+                BookingsService._promote_next_waiting(
+                    db, tenant_id, gym_class, now, gym_config=cfg
+                )
             if seat_label:
                 seat_still_taken = (
                     db.query(ClassBooking)

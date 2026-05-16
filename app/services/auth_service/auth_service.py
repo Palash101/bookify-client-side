@@ -11,6 +11,7 @@ from app.core.security import (
     extract_verification_claims,
     create_refresh_token,
     verify_refresh_token,
+    verify_token,
 )
 from app.core.otp_utils import create_otp, verify_otp_any_purpose
 from app.core.mailer import email_service
@@ -216,6 +217,37 @@ class AuthService:
                     detail="Invalid verification token (tenant_id)",
                 )
         return email, otp_tenant_id
+
+    @staticmethod
+    def assert_forgot_password_verification_token(authorization: Optional[str]) -> None:
+        """
+        Ensure Bearer token was issued by /forgot-password (not /login).
+        """
+        if not authorization:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization header missing",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            scheme, token = authorization.split()
+            if scheme.lower() != "bearer":
+                raise ValueError("Invalid scheme")
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization header format. Use 'Bearer <token>'",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        claims = extract_verification_claims(token)
+        if not claims or claims.get("purpose") != "password_reset":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Invalid reset session. Call POST /forgot-password and use the token from that "
+                    "response with the OTP from your email."
+                ),
+            )
     
     @staticmethod
     def verify_otp(
@@ -405,7 +437,7 @@ class AuthService:
         tenant_id: Optional[uuid.UUID] = None,
     ) -> None:
         """
-        Reset user password.
+        Set a new password (forgot-password OTP flow or after old password verified).
         """
         if new_password != confirm_password:
             raise HTTPException(
@@ -426,6 +458,131 @@ class AuthService:
         
         user.password_hash = get_password_hash(new_password)
         db.commit()
+
+    @staticmethod
+    def change_password_with_old(
+        db: Session,
+        user: User,
+        old_password: str,
+        new_password: str,
+        confirm_password: str,
+    ) -> None:
+        """
+        Change password when the user knows their current password.
+        """
+        if not verify_password(old_password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current password is incorrect",
+            )
+        AuthService.reset_password(
+            db,
+            user.email,
+            new_password,
+            confirm_password,
+            user.tenant_id,
+        )
+
+    @staticmethod
+    def resolve_user_from_bearer(
+        db: Session,
+        authorization: Optional[str],
+        tenant_id: uuid.UUID,
+    ) -> User:
+        """
+        Resolve user from access JWT or login verification JWT (after /login, before OTP).
+        """
+        if not authorization:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authorization header missing",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            scheme, token = authorization.split()
+            if scheme.lower() != "bearer":
+                raise ValueError("Invalid scheme")
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization header format. Use 'Bearer <token>'",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        claims = extract_verification_claims(token)
+        if claims and claims.get("email"):
+            token_purpose = claims.get("purpose")
+            if token_purpose not in ("login", None):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Use your login or access token to change password with old_password.",
+                )
+            otp_tenant_id = None
+            tid_raw = claims.get("tenant_id")
+            if tid_raw:
+                try:
+                    otp_tenant_id = uuid.UUID(str(tid_raw))
+                except (ValueError, TypeError):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid verification token (tenant_id)",
+                    )
+            if otp_tenant_id is not None and otp_tenant_id != tenant_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="X-Tenant-Key does not match your session tenant.",
+                )
+            effective_tenant = otp_tenant_id or tenant_id
+            return AuthService.get_user_for_login(db, claims["email"], effective_tenant)
+
+        payload = verify_token(token)
+        if payload and payload.get("sub") and payload.get("type") not in ("verification", "refresh"):
+            try:
+                user_id = uuid.UUID(str(payload["sub"]))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid access token",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found",
+                )
+            tid_claim = payload.get("tenant_id")
+            if tid_claim is not None:
+                try:
+                    if uuid.UUID(str(tid_claim)) != uuid.UUID(str(user.tenant_id)):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Access token tenant mismatch",
+                            headers={"WWW-Authenticate": "Bearer"},
+                        )
+                except (ValueError, TypeError):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid access token",
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+            if user.tenant_id != tenant_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="X-Tenant-Key does not match the user tenant.",
+                )
+            if not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="User account is not active",
+                )
+            return user
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token. Log in or use forgot-password first.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     @staticmethod
     def update_profile(db: Session, user: User, profile_data: ProfileUpdate) -> User:

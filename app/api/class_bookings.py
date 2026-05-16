@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db.session import get_db
 from app.core.settings import settings
-from app.dependencies import get_current_active_user
+from app.dependencies import get_current_active_user, get_gym_config_for_active_user
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.schemas.booking import (
@@ -21,8 +21,8 @@ from app.schemas.booking import (
     BookingValidateData,
     BookingValidateResponse,
 )
+from app.schemas.gym_config_value import GymConfigValue
 from app.services.bookings_service import BookingsService
-from app.services.gym_config_service import GymConfigService
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
@@ -34,10 +34,13 @@ _log = logging.getLogger(__name__)
 )
 async def get_member_bookings(
     current_user: User = Depends(get_current_active_user),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
 ):
     tenant_id = current_user.tenant_id
-    return BookingsService.list_member_bookings(db, tenant_id, current_user)
+    return BookingsService.list_member_bookings(
+        db, tenant_id, current_user, gym_config=gym_config
+    )
 
 
 @router.post(
@@ -49,6 +52,7 @@ async def validate_class_booking(
     class_id: uuid.UUID,
     body: BookingRequestBody,
     current_user: User = Depends(get_current_active_user),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -58,7 +62,6 @@ async def validate_class_booking(
     middleware as a valid app key (same idea as wallet routes).
     """
     tenant_id = current_user.tenant_id
-    cfg = GymConfigService.get_gym_config(db, tenant_id)
     outcome = BookingsService.validate(
         db,
         tenant_id,
@@ -67,7 +70,7 @@ async def validate_class_booking(
         body.payment_mode,
         body.user_package_purchase_id,
         body.seat_id,
-        cfg=cfg,
+        cfg=gym_config,
     )
     debug = None
     if settings.DEBUG:
@@ -104,6 +107,7 @@ async def create_class_booking(
     class_id: uuid.UUID,
     body: BookingRequestBody,
     current_user: User = Depends(get_current_active_user),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -119,6 +123,7 @@ async def create_class_booking(
         body.user_package_purchase_id,
         body.seat_id,
         body.notes,
+        gym_config=gym_config,
     )
     return {
         "success": True,
@@ -141,6 +146,7 @@ async def create_waiting_booking(
     class_id: uuid.UUID,
     body: BookingRequestBody,
     current_user: User = Depends(get_current_active_user),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -158,6 +164,7 @@ async def create_waiting_booking(
         body.seat_id,
         body.notes,
         force_waiting=True,
+        gym_config=gym_config,
     )
     return {
         "success": True,
@@ -181,6 +188,7 @@ async def cancel_class_booking(
     booking_id: uuid.UUID,
     body: BookingCancelRequestBody,
     current_user: User = Depends(get_current_active_user),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
 ):
     tenant_id = current_user.tenant_id
@@ -191,6 +199,7 @@ async def cancel_class_booking(
         class_id=class_id,
         booking_id=booking_id,
         reason=body.reason,
+        gym_config=gym_config,
     )
     gym_class = db.query(GymClass).filter(GymClass.id == class_id).first()
     return {

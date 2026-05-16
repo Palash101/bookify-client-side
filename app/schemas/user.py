@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, model_validator
 from typing import Optional, Any
 from datetime import datetime, date
 from uuid import UUID
@@ -122,9 +122,28 @@ class PasswordResetRequest(BaseModel):
 
 
 class PasswordResetVerify(BaseModel):
-    otp: str
+    """
+    Forgot password: send otp only (Bearer token from /forgot-password).
+    Change password (logged in / after login): send old_password only (Bearer access or login verification token).
+    """
+    otp: Optional[str] = None
+    old_password: Optional[str] = None
     new_password: str
     confirm_password: str
+
+    @model_validator(mode="after")
+    def require_otp_or_old_password(self):
+        has_otp = bool(self.otp and str(self.otp).strip())
+        has_old = bool(self.old_password and str(self.old_password).strip())
+        if has_otp and has_old:
+            raise ValueError(
+                "Send either otp (forgot-password flow) or old_password (change-password flow), not both."
+            )
+        if not has_otp and not has_old:
+            raise ValueError(
+                "Send otp for forgot-password, or old_password if you know your current password."
+            )
+        return self
 
 
 class PasswordResetResponse(BaseModel):

@@ -6,6 +6,8 @@ from app.core.db.session import SessionLocal
 from app.core.security import verify_token
 from app.models.user import User
 from app.models.tenant import Tenant
+from app.schemas.gym_config_value import GymConfigValue
+from app.services.gym_config_service import GymConfigService
 from uuid import UUID
 
 bearer_scheme = HTTPBearer(
@@ -85,6 +87,17 @@ async def get_current_active_user(
             detail="Your account is inactive. Please contact support to reactivate your account.",
         )
     return current_user
+
+
+async def get_gym_config_for_active_user(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> GymConfigValue:
+    """
+    Reads TenantSetting gym_config once per request.
+    Share this dependency on endpoints that also use get_current_active_user — FastAPI caches the user dependency.
+    """
+    return GymConfigService.get_gym_config(db, current_user.tenant_id)
 
 
 async def get_current_tenant_id(
