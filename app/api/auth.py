@@ -19,7 +19,6 @@ from app.schemas.user import (
 from app.models.user import User as UserModel
 from app.dependencies import get_current_tenant_id, get_current_active_user
 from app.services.auth_service.auth_service import AuthService
-import uuid
 
 router = APIRouter()
 
@@ -27,7 +26,7 @@ router = APIRouter()
 @router.post("/login", response_model=OTPResponse)
 async def login(
     user_credentials: OTPRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -50,7 +49,7 @@ async def login(
 @router.post("/register", response_model=OTPResponse)
 async def register(
     user_data: UserCreate,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -126,7 +125,7 @@ async def verify_otp_endpoint(
 @router.post("/forgot-password", response_model=PasswordResetResponse)
 async def forgot_password(
     reset_data: PasswordResetRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -150,7 +149,7 @@ async def reset_password(
     reset_data: PasswordResetVerify,
     request: Request,
     db: Session = Depends(get_db),
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
 ):
     """
     Two flows (send either otp OR old_password, not both):

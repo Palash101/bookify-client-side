@@ -47,7 +47,7 @@ class PackageResponse(BaseModel):
     updated_at: Optional[datetime] = None
     status: Optional[str] = None
     package_type: Optional[str] = None
-    tenant_id: Optional[UUID] = None
+    tenant_id: Optional[str] = None
     booking_restriction: Optional[Any] = None
     pricing_list: List[PackagePricingResponse] = []
 

@@ -1,5 +1,4 @@
 from typing import List, Optional
-import uuid
 
 from sqlalchemy.orm import Session
 
@@ -10,7 +9,7 @@ class LocationsService:
     @staticmethod
     def list_locations(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         only_active: bool = True,
         search: Optional[str] = None,
         sort_by: Optional[str] = None,

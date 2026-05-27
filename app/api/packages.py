@@ -27,7 +27,7 @@ async def get_all_packages(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -51,7 +51,7 @@ async def get_all_packages(
 
 @router.get("/active", response_model=ActivePackagesListResponse)
 async def get_active_packages(
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -82,7 +82,7 @@ async def get_active_packages(
 @router.get("/{package_id}", response_model=PackageDetailResponse)
 async def get_package_detail(
     package_id: uuid.UUID,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """

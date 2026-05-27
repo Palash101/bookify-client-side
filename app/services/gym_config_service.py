@@ -1,5 +1,4 @@
 from typing import Optional
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -11,7 +10,7 @@ GYM_CONFIG_KEY = "gym_config"
 
 class GymConfigService:
     @staticmethod
-    def get_gym_config(db: Session, tenant_id: UUID) -> GymConfigValue:
+    def get_gym_config(db: Session, tenant_id: str) -> GymConfigValue:
         row = (
             db.query(TenantSetting)
             .filter(
@@ -25,7 +24,7 @@ class GymConfigService:
         return GymConfigValue.from_json(row.value)
 
     @staticmethod
-    def get_raw(db: Session, tenant_id: UUID) -> Optional[dict]:
+    def get_raw(db: Session, tenant_id: str) -> Optional[dict]:
         row = (
             db.query(TenantSetting)
             .filter(

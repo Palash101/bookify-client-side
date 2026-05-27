@@ -22,7 +22,7 @@ class Package(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
     status = Column(String(20), nullable=True)  # e.g. draft, active (package_status_enum)
     package_type = Column(String(20), nullable=True)  # e.g. one_time, recurring (package_type_enum)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)
     booking_restriction = Column(JSONB, nullable=True)
 
     # Relationships

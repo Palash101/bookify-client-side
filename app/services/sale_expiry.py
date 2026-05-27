@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-import uuid
 
 from sqlalchemy.orm import Session
 
@@ -34,7 +33,7 @@ def compute_sale_expires_at(order: Sale, package: Optional[Package]) -> Optional
 def apply_package_expiry_to_sale(
     db: Session,
     order: Sale,
-    tenant_id: uuid.UUID,
+    tenant_id: str,
     *,
     overwrite: bool = False,
 ) -> None:

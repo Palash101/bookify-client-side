@@ -33,7 +33,7 @@ class SalesTransactions(Base):
     )
 
     tenant_id = Column(
-        UUID(as_uuid=True),
+        String,
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
         index=True,

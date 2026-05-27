@@ -6,7 +6,6 @@ from app.core.db.session import get_db
 from app.dependencies import get_current_tenant_id
 from app.schemas.trainer import TrainerResponse, TrainersListResponse
 from app.services.trainers_service.trainers_service import TrainersService
-import uuid
 
 router = APIRouter()
 
@@ -23,7 +22,7 @@ async def get_trainers(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """

@@ -29,7 +29,7 @@ async def get_training_programs_for_location(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """

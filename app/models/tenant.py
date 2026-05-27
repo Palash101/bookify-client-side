@@ -1,5 +1,4 @@
 from sqlalchemy import Column, String, DateTime, Boolean, Text
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.db.session import Base
@@ -8,8 +7,8 @@ import uuid
 
 class Tenant(Base):
     __tablename__ = "tenants"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()), index=True)
     business_name = Column(Text, nullable=True)
     domain = Column(Text, nullable=True, index=True)
     status = Column(Text, nullable=True)

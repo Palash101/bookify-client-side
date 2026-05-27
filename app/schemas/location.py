@@ -19,7 +19,7 @@ class LocationBase(BaseModel):
 
 class LocationResponse(LocationBase):
     id: UUID
-    tenant_id: UUID
+    tenant_id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None

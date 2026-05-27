@@ -33,7 +33,7 @@ class UserCreate(UserBase):
     terms_accepted: bool = False
     
     # Optional fields
-    tenant_id: Optional[UUID] = None
+    tenant_id: Optional[str] = None
     role_id: Optional[UUID] = None
     
     class Config:
@@ -69,7 +69,7 @@ class UserUpdate(BaseModel):
 
 class UserInDB(UserBase):
     id: UUID
-    tenant_id: UUID
+    tenant_id: str
     role_id: UUID
     wallet: Optional[float] = 0
     created_at: Optional[datetime] = None
