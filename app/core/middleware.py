@@ -1,11 +1,10 @@
-from fastapi import Request, Response
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
-from app.core.db.session import SessionLocal
-from app.models.tenant_api_key import TenantAPIKey
-from app.models.tenant import Tenant
-import time
+from app.core.db.master_db import SessionLocal
+from app.models.master_org import Organization
+from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,18 +18,53 @@ EXCLUDED_PATHS = [
 ]
 
 
+def _extract_request_domain(request: Request) -> str | None:
+    """
+    Resolve the originating domain of the request.
+
+    Prefer the explicit `X-Forwarded-Host` header (set by upstream proxies / load balancers),
+    falling back to the `Host` header. The port is stripped so lookups match the value
+    stored on `Tenant.domain`.
+    """
+    raw = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not raw:
+        return None
+    # X-Forwarded-Host may contain a comma-separated list; take the first entry.
+    host = raw.split(",")[0].strip()
+    if not host:
+        return None
+    # Strip port if present.
+    if ":" in host:
+        host = host.split(":", 1)[0]
+    return host.lower() or None
+
+
+def _unauthorized(message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"success": False, "message": message, "detail": message},
+    )
+
+
 class TenantMiddleware(BaseHTTPMiddleware):
     """
-    Middleware to validate X-Tenant-Key header for all API requests.
-    Excludes public paths like /, /health, /docs, etc.
+    Middleware that resolves the active organization for every API request.
+
+    A request is accepted if either:
+      - `X-Tenant-Key` header is present and matches an active `OrganizationAPIKey`
+        whose linked `Organization` is active, or
+      - the request domain matches an active `Organization.domain`.
+
+    On success, `request.state.organization_id` and `request.state.organization`
+    are populated. If neither identifier is present, the request is rejected with 401.
     """
-    
+
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        
+
         if request.method == "OPTIONS":
             return await call_next(request)
-        
+
         if (
             path in EXCLUDED_PATHS
             or path.startswith("/docs")
@@ -44,90 +78,60 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
         if not path.startswith("/api/"):
             return await call_next(request)
-        
+
         x_tenant_key = request.headers.get("X-Tenant-Key")
-        
-        if not x_tenant_key:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "success": False,
-                    "message": "X-Tenant-Key header is required",
-                    "detail": "X-Tenant-Key header is required"
-                }
+        request_domain = _extract_request_domain(request)
+
+        if not x_tenant_key and not request_domain:
+            return _unauthorized(
+                "Either X-Tenant-Key header or a request domain is required"
             )
-        
+
         db: Session = SessionLocal()
         try:
-            api_key = (
-                db.query(TenantAPIKey)
-                .filter(
-                    TenantAPIKey.api_key_hash == x_tenant_key,
-                    TenantAPIKey.is_active.is_(True),
+            organization: Organization | None = None
+
+            if x_tenant_key:
+                api_key = (
+                    db.query(OrganizationAPIKey)
+                    .filter(
+                        OrganizationAPIKey.api_key == x_tenant_key,
+                        OrganizationAPIKey.status == APIKeyStatus.active,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            
-            if not api_key:
-                return JSONResponse(
-                    status_code=401,
-                    content={
-                        "success": False,
-                        "message": "Invalid or inactive tenant API key",
-                        "detail": "Invalid or inactive tenant API key"
-                    }
+
+                if not api_key:
+                    return _unauthorized("Invalid or inactive organization API key")
+
+                organization = (
+                    db.query(Organization)
+                    .filter(
+                        Organization.organization_id == api_key.tenant_id,
+                        Organization.status == "active",
+                    )
+                    .first()
                 )
-            
-            tenant = (
-                db.query(Tenant)
-                .filter(
-                    Tenant.id == api_key.tenant_id,
-                    Tenant.status == "active",
+            else:
+                organization = (
+                    db.query(Organization)
+                    .filter(
+                        Organization.domain == request_domain,
+                        Organization.status == "active",
+                    )
+                    .first()
                 )
-                .first()
-            )
-            
-            if not tenant:
-                return JSONResponse(
-                    status_code=401,
-                    content={
-                        "success": False,
-                        "message": "Tenant not found or inactive",
-                        "detail": "Tenant not found or inactive"
-                    }
-                )
-            
-            request.state.tenant_id = tenant.id
-            request.state.tenant = tenant
-            
+
+            if not organization:
+                return _unauthorized("Organization not found or inactive")
+
+            request.state.organization_id = organization.organization_id
+            request.state.organization = organization
+
         finally:
             db.close()
-        
+
         return await call_next(request)
-
-
-class LoggingMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware for logging HTTP requests.
-    """
-    
-    async def dispatch(self, request: Request, call_next):
-        start_time = time.time()
-        
-        logger.info(f"Request: {request.method} {request.url.path}")
-        
-        response = await call_next(request)
-        
-        process_time = time.time() - start_time
-        
-        logger.info(
-            f"Response: {response.status_code} - "
-            f"Process time: {process_time:.4f}s"
-        )
-        
-        response.headers["X-Process-Time"] = str(process_time)
-        
-        return response
 
 
 class CORSMiddleware(BaseHTTPMiddleware):
