@@ -13,11 +13,11 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # Database
-    DB_HOST: str = Field(default="34.55.176.77", env="DB_HOST")
+    DB_HOST: str = Field(default="35.223.36.202", env="DB_HOST")
     DB_PORT: int = Field(default=5432, env="DB_PORT")
     DB_USER: str = Field(default="postgres", env="DB_USER")
-    DB_PASSWORD: str = Field(default="Bookify#1234", env="DB_PASSWORD")
-    DB_NAME: str = Field(default="bookify_dev", env="DB_NAME")
+    DB_PASSWORD: str = Field(default="KjCnq9p$HEKx", env="DB_PASSWORD")
+    DB_NAME: str = Field(default="velo", env="DB_NAME")
     DATABASE_URL: Optional[str] = Field(default=None, env="DATABASE_URL")
     
     @property

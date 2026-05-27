@@ -1,0 +1,661 @@
+%PDF-1.4
+%����
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+2 0 obj
+<< /Length 4135 >>
+stream
+BT
+/F1 10 Tf
+40 791.89 Td
+(BOOKING TEST CASES \(HINDI\)) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(Date: 2026-05-09) Tj
+0 -13 Td
+(Purpose: Booking flow me kya-kya cheezein test karni chahiye \(conditions + expected results\). Is) Tj
+0 -13 Td
+(document me API endpoint ka mention nahi hai; sirf rules/conditions cover kiye gaye hain: tenant) Tj
+0 -13 Td
+(scope, class status/time rules, payment modes \(free/wallet/gateway/cash/package\), capacity/waitlist,) Tj
+0 -13 Td
+(aur layout seats.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(LEGEND / PRIORITY) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(- P0 = business critical \(data integrity / money / capacity\).) Tj
+0 -13 Td
+(- P1 = important \(policy/policies + common edge cases\).) Tj
+0 -13 Td
+(- P2 = nice-to-have \(rare edge cases / UX polish\).) Tj
+0 -13 Td
+(- Rule: Validation fail ho to booking create nahi honi chahiye; aur side-effects \(wallet debit /) Tj
+0 -13 Td
+(package sessions\) bhi mutate nahi hone chahiye.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(A\) VALIDATION RULES \(BOOKING SE PEHLE\)) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-001 [P0]  Happy path \(basic\) — class bookable) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class active/published ho, future start ho, user same tenant ka ho, capacity) Tj
+0 -13 Td
+(  available ho, aur payment_mode allowed ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Normal booking attempt karein \(correct payment_mode + required fields\).) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking allowed; status 'confirmed' ya 'pending' \(auto-confirm) Tj
+0 -13 Td
+(  setting ke hisaab se\).) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-002 [P0]  Reject — class already started) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class start_time tenant timezone ke hisaab se already start ho chuka ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking try karein \(any payment_mode\).) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; clear message 'Class has already started' type;) Tj
+0 -13 Td
+(  no booking created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-003 [P1]  Reject — booking cutoff time crossed) Tj
+0 -13 Td
+(  Shartein \(conditions\): Config me booking_cutoff_minutes set ho; ab time cutoff se aage nikal gaya ho) Tj
+0 -13 Td
+(  \(starts_at ke close\).) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking try karein when now > starts_at - cutoff.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; message cutoff minutes mention kare; no booking) Tj
+0 -13 Td
+(  created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-004 [P0]  Reject — payment_mode allowed nahi) Tj
+0 -13 Td
+(  Shartein \(conditions\): Paid class par free select karna; free class par wallet/gateway select karna;) Tj
+0 -13 Td
+(  package-only class par package ke alawa kuch aur select karna.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Wrong payment_mode ke saath booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; user ko allowed payment modes ka hint mile; no) Tj
+0 -13 Td
+(  booking created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-005 [P0]  Reject — duplicate booking \(same class\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Same user ke paas already active booking ho: confirmed / waiting / pending /) Tj
+0 -13 Td
+(  pending_payment.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Same class ko dubara book karne ki koshish karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; duplicate prevent ho; no extra booking row.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-006 [P0]  Capacity full — waitlist allowed case) Tj
+0 -13 Td
+(  Shartein \(conditions\): Capacity reached ho; waiting list enabled ho; max_waitings configured ho aur) Tj
+0 -13 Td
+(  waiting list full na ho.) Tj
+ET
+endstream
+endobj
+3 0 obj
+<< /Type /Page /Parent 12 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+4 0 obj
+<< /Length 4277 >>
+stream
+BT
+/F1 10 Tf
+40 791.89 Td
+(  Steps \(kaise test karein\): Class full hone par booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): User waitlist me add ho sake; waiting_position set ho \(next) Tj
+0 -13 Td
+(  number\).) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-007 [P0]  Capacity full — waitlist disabled/full → reject) Tj
+0 -13 Td
+(  Shartein \(conditions\): Capacity reached ho; ya to waiting list disabled ho, ya waiting list already) Tj
+0 -13 Td
+(  full ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; message me 'Class is full' + reason aaye; no) Tj
+0 -13 Td
+(  booking created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-008 [P0]  Layout class — seat required \(when real slot available\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class me layout configured ho \(seats\); capacity available ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Seat select kiye bina booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; seat required message; no booking created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-009 [P1]  Layout class — waitlist booking me seat required nahi) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class full ho + waitlist allowed ho + layout configured ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Seat select kiye bina waitlist booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Waitlist allow ho; seat selection defer ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-010 [P0]  Reject — seat already taken / unavailable) Tj
+0 -13 Td
+(  Shartein \(conditions\): Layout class ho; chosen seat already booked/unavailable ho, ya kisi active) Tj
+0 -13 Td
+(  booking ne same seat le rakhi ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Taken seat ke saath booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; message 'seat already taken/not available'.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-011 [P0]  Reject — wallet insufficient \(paid class\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Paid class ho; user.wallet < price ho; pay-per-class enabled ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Wallet payment select karke booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; clear message 'Insufficient wallet balance'.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-012 [P0]  Reject — package booking invalid \(sale missing/invalid/sessions 0\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Package mode enabled ho; valid sale id required ho; sessions_remaining >= 1) Tj
+0 -13 Td
+(  hona chahiye.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Package payment ke saath \(a\) missing/invalid sale id, \(b\)) Tj
+0 -13 Td
+(  sessions_remaining=0 ke cases try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; user ko payment selection/change method ka) Tj
+0 -13 Td
+(  prompt; no booking created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-V-013 [P1]  Reject — gender restriction) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class gender restricted \(male/female\) ho; user gender mismatch ho ya unset) Tj
+0 -13 Td
+(  ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking reject; restriction message show ho; no booking created.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(B\) BOOKING CREATE \(SIDE-EFFECTS KE SAATH\)) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-C-001 [P0]  Create booking success \(confirmed/pending\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Validations pass; capacity available; payment_mode allowed.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking create karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking create ho; status confirmed ya pending; booking_counts) Tj
+0 -13 Td
+(  expected tarike se update ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-C-002 [P0]  Gateway booking — status pending_payment) Tj
+0 -13 Td
+(  Shartein \(conditions\): Gateway mode enabled ho; payment_mode gateway allowed ho; slot available ho.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 12 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 4129 >>
+stream
+BT
+/F1 10 Tf
+40 791.89 Td
+(  Steps \(kaise test karein\): Gateway payment ke saath booking create karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking status pending_payment ho; user ko payment flow me le) Tj
+0 -13 Td
+(  jaye; duplicate booking na bane.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-C-003 [P0]  Wallet booking — upfront wallet debit) Tj
+0 -13 Td
+(  Shartein \(conditions\): Paid class; wallet >= price; payment_mode wallet.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking create karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Wallet amount price se reduce ho; booking create ho;) Tj
+0 -13 Td
+(  refund/cancel scenarios ke liye audit marker present ho \(notes marker\).) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-C-004 [P0]  Package booking — session deduct) Tj
+0 -13 Td
+(  Shartein \(conditions\): Valid package sale ho; sessions_remaining>=1; payment_mode package.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking create karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): sessions_remaining 1 se decrease ho; booking me) Tj
+0 -13 Td
+(  sessions_deducted=1 set ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-C-005 [P0]  Reject create — validation fail cases) Tj
+0 -13 Td
+(  Shartein \(conditions\): Any failing case: wrong payment_mode / seat missing / duplicate / capacity) Tj
+0 -13 Td
+(  full without waitlist etc.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Direct booking create try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking create nahi ho; wallet debit / sessions deduct jaise) Tj
+0 -13 Td
+(  side-effects nahi hone chahiye.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-C-006 [P0]  Layout booking — seat status booked) Tj
+0 -13 Td
+(  Shartein \(conditions\): Layout class; seat_id provided; booking occupying status) Tj
+0 -13 Td
+(  \(confirmed/pending/pending_payment\).) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Booking create karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Seat status 'booked' ho; same seat kisi aur active booking ko na) Tj
+0 -13 Td
+(  mile.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(C\) WAITLIST) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-001 [P0]  Waitlist add \(jab class full ho\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Capacity full ho; waitlist enabled ho; max_waitings exceed na ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Waitlist booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Status waiting set ho; waiting_position correct ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-002 [P1]  Waitlist reject \(jab slot available ho\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Capacity available ho \(slot free ho\).) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Waitlist attempt karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Waitlist reject ho; user ko regular booking karne ko bola jaye.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-003 [P0]  Waitlist reject — waiting list disabled) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class full ho, lekin waiting list feature disabled ho \(gym setting / class) Tj
+0 -13 Td
+(  policy\).) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Class full hone par waitlist join karne ki koshish karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Reject ho; clear message aaye; waiting booking create na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-004 [P1]  Waitlist reject — max_waitings set nahi ya 0) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class full ho; waitlist enabled ho sakti hai, lekin max_waitings 0/empty ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Waitlist join try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Reject ho; 'waiting list not configured' type message aaye;) Tj
+0 -13 Td
+(  waiting booking create na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-005 [P0]  Waitlist reject — waitlist full) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class full ho; max_waitings configured ho; already max_waitings members) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 12 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 1 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Length 4298 >>
+stream
+BT
+/F1 10 Tf
+40 791.89 Td
+(  waiting me ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): New user se waitlist join try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Reject ho; 'waiting list is full' type message; waiting_position) Tj
+0 -13 Td
+(  increment na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-006 [P0]  Waitlist not allowed — one-to-one class \(capacity = 1\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): One-to-one class ho \(capacity=1\) aur already kisi aur ka booking occupy kar) Tj
+0 -13 Td
+(  raha ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Second user se booking/waitlist try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Reject ho; one-to-one me waitlist allow na ho; koi waiting) Tj
+0 -13 Td
+(  booking create na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-007 [P0]  Waitlist duplicate prevent — same user already waiting) Tj
+0 -13 Td
+(  Shartein \(conditions\): User already same class ke waitlist me ho \(status waiting\).) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Same user se dobara waitlist join try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Reject ho; duplicate waiting booking create na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-008 [P1]  Waitlist order — promotion oldest waiting ko mile) Tj
+0 -13 Td
+(  Shartein \(conditions\): Waitlist me multiple members ho; unka order \(booked_at/created_at\) different) Tj
+0 -13 Td
+(  ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Confirmed booking cancel karke slot free karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Sabse purana waiting user promote ho; baaki users ka order) Tj
+0 -13 Td
+(  consistent rahe.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-009 [P0]  Promotion + gateway — waiting se promote hone par pending_payment) Tj
+0 -13 Td
+(  Shartein \(conditions\): Waitlist me user ka payment_mode gateway ho; slot free ho jaye.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Slot free hote hi \(cancel confirmed\) promotion observe karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Promoted booking ka status pending_payment ho; user ko payment) Tj
+0 -13 Td
+(  complete karna pade.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-W-010 [P1]  Layout class + waitlist — seat selection defer hoti hai) Tj
+0 -13 Td
+(  Shartein \(conditions\): Layout class full ho; user waitlist me join kare; seat_id na diya ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Waitlist join karein without seat selection; phir slot free karke) Tj
+0 -13 Td
+(  promotion trigger karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Waitlist join ho jaye; promotion ke time seat) Tj
+0 -13 Td
+(  selection/assignment ka expected behavior define ho \(no crash, no duplicate seat\).) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(D\) CANCEL + PROMOTION \(WAITLIST SE SLOT FILL\)) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-X-001 [P0]  Cancel confirmed → next waiting promote) Tj
+0 -13 Td
+(  Shartein \(conditions\): Same class me \(a\) ek confirmed booking ho \(b\) kam se kam 1 waiting booking) Tj
+0 -13 Td
+(  ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Confirmed booking cancel karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): booking_counts decrement ho; oldest waiting promote ho) Tj
+0 -13 Td
+(  \(confirmed/pending ya gateway case me pending_payment\); waiting_position clear ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-X-002 [P0]  Package booking cancel → sessions restore) Tj
+0 -13 Td
+(  Shartein \(conditions\): Package booking me sessions_deducted=1 ho aur sale linked ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Cancel karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): sessions_remaining +1 ho; booking cancelled ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-X-003 [P1]  Cancel blocked — cutoff ke baad) Tj
+0 -13 Td
+(  Shartein \(conditions\): allow_late_cancellations=false ho; cancellation_window_hours configured ho;) Tj
+0 -13 Td
+(  cutoff cross ho chuka ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Cancel try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Cancel reject ho; policy message mile; booking status unchanged) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 12 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 1 0 R >> >> /Contents 8 0 R >>
+endobj
+10 0 obj
+<< /Length 3885 >>
+stream
+BT
+/F1 10 Tf
+40 791.89 Td
+(  rahe.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-X-004 [P1]  Cancel → seat free \(if no one else holds it\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Layout class; booking me seat_id ho; same seat kisi aur active booking me na) Tj
+0 -13 Td
+(  ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Cancel karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Seat 'available' ho jaye; seat dubara book ho sake.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-X-005 [P1]  Already cancelled/completed booking ko cancel nahi kar sakte) Tj
+0 -13 Td
+(  Shartein \(conditions\): Booking status cancelled ya completed ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Cancel try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Reject ho; clear message mile.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(E\) MEMBER BOOKINGS LIST \(UPCOMING/PAST/WAITING\)) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-L-001 [P1]  Waiting bookings sirf waiting bucket me) Tj
+0 -13 Td
+(  Shartein \(conditions\): Waiting + confirmed/past bookings exist karein.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Bookings list screen/feature me verify karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Waiting status wale bookings waiting me; baaki upcoming/past me;) Tj
+0 -13 Td
+(  can_cancel logic correct.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-L-002 [P1]  Cancel deadline aur can_cancel calculation correct) Tj
+0 -13 Td
+(  Shartein \(conditions\): cancellation_window_hours set ho; class future me ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Cancel deadline ko starts_at - window se compare karein; can_cancel) Tj
+0 -13 Td
+(  behavior verify karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): cancel_deadline correct ho; allow_late_cancellations/cutoff) Tj
+0 -13 Td
+(  rules ke saath consistent ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(F\) SECURITY / ISOLATION \(MUST-HAVE\)) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-S-001 [P0]  User A dusre user ki booking cancel/view na kar sake \(IDOR\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): User A aur User B exist karein; booking B ki ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): A se B ki booking ko cancel/view try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Access deny \(404/403\); koi sensitive data leak na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(BKG-S-002 [P0]  Cross-tenant class booking blocked \(trainer/program mismatch\)) Tj
+0 -13 Td
+(  Shartein \(conditions\): Class ka trainer ya training programme kisi aur tenant ka ho.) Tj
+0 -13 Td
+(  Steps \(kaise test karein\): Current tenant user se booking try karein.) Tj
+0 -13 Td
+(  Expected \(kya result hona chahiye\): Booking blocked; 'class not in your gym' type failure; booking) Tj
+0 -13 Td
+(  create na ho.) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+(QUICK EXECUTION CHECKLIST \(FAST\)) Tj
+0 -13 Td
+(====================================================================================================) Tj
+0 -13 Td
+() Tj
+0 -13 Td
+(- P0 pehle run karein: payment rules, capacity/waitlist, seat locking, wallet/package side-effects,) Tj
+0 -13 Td
+(cancel→promotion.) Tj
+0 -13 Td
+(- Har failure me confirm karein: booking create nahi hui, aur wallet debit / package sessions change) Tj
+0 -13 Td
+(nahi huye.) Tj
+0 -13 Td
+(- Har success me confirm karein: booking_counts, seat status, aur bookings list me correct status.) Tj
+0 -13 Td
+() Tj
+ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 12 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 1 0 R >> >> /Contents 10 0 R >>
+endobj
+12 0 obj
+<< /Type /Pages /Kids [ 3 0 R 5 0 R 7 0 R 9 0 R 11 0 R ] /Count 5 >>
+endobj
+13 0 obj
+<< /Type /Catalog /Pages 12 0 R >>
+endobj
+xref
+0 14
+0000000000 65535 f 
+0000000015 00000 n 
+0000000085 00000 n 
+0000004272 00000 n 
+0000004405 00000 n 
+0000008734 00000 n 
+0000008867 00000 n 
+0000013048 00000 n 
+0000013181 00000 n 
+0000017531 00000 n 
+0000017664 00000 n 
+0000021602 00000 n 
+0000021737 00000 n 
+0000021822 00000 n 
+trailer
+<< /Size 14 /Root 13 0 R >>
+startxref
+21873
+%%EOF
