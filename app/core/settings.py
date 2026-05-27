@@ -5,7 +5,7 @@ from functools import lru_cache
 import os
 from dotenv import load_dotenv
 
-load_dotenv(".env.dev")
+load_dotenv(".env")
 
 
 class Settings(BaseSettings):
@@ -14,11 +14,11 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # Database
-    DB_HOST: str = Field(default="34.55.176.77", env="DB_HOST")
-    DB_PORT: int = Field(default=5432, env="DB_PORT")
-    DB_USER: str = Field(default="postgres", env="DB_USER")
-    DB_PASSWORD: str = Field(default="Bookify#1234", env="DB_PASSWORD")
-    DB_NAME: str = Field(default="bookify_dev", env="DB_NAME")
+    DB_HOST: str = Field(..., env="DB_HOST")
+    DB_PORT: int = Field(..., env="DB_PORT")
+    DB_USER: str = Field(..., env="DB_USER")
+    DB_PASSWORD: str = Field(..., env="DB_PASSWORD")
+    DB_NAME: str = Field(..., env="DB_NAME")
     DATABASE_URL: Optional[str] = Field(default=None, env="DATABASE_URL")
     
     @property
@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     # Prefer `MODE` if present (used by some modules), otherwise fall back to ENVIRONMENT.
     MODE: str = Field(default=os.getenv("MODE", os.getenv("ENVIRONMENT", "development")), env="MODE")
     ENVIRONMENT: str = Field(default=os.getenv("ENVIRONMENT", "development"), env="ENVIRONMENT")
+    GCP_PROJECT_ID: str = Field(default=os.getenv("GCP_PROJECT_ID", ""), env="GCP_PROJECT_ID")
+    
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
     
     class Config:
