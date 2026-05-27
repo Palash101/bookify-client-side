@@ -81,6 +81,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         x_tenant_key = request.headers.get("X-Tenant-Key")
+        print(x_tenant_key,'x_tenant_key')
         request_domain = _extract_request_domain(request)
 
         if not x_tenant_key and not request_domain:
@@ -126,8 +127,8 @@ class TenantMiddleware(BaseHTTPMiddleware):
             if not organization:
                 return _unauthorized("Organization not found or inactive")
 
-            request.state.organization_id = organization.organization_id
-            request.state.organization = organization
+            request.state.tenant_id = organization.organization_id
+            request.state.tenant = organization
 
         finally:
             db.close()
