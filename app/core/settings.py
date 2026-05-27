@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import List, Optional
+from functools import lru_cache
 import os
 from dotenv import load_dotenv
 
@@ -72,11 +73,19 @@ class Settings(BaseSettings):
     )
 
     # Environment
-    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
+    # Prefer `MODE` if present (used by some modules), otherwise fall back to ENVIRONMENT.
+    MODE: str = Field(default=os.getenv("MODE", os.getenv("ENVIRONMENT", "development")), env="MODE")
+    ENVIRONMENT: str = Field(default=os.getenv("ENVIRONMENT", "development"), env="ENVIRONMENT")
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
     
     class Config:
         case_sensitive = True
 
 
-settings = Settings()
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
+
+
+# Backwards-compatible module-level instance
+settings = get_settings()

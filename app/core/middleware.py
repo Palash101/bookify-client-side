@@ -6,6 +6,7 @@ from app.core.db.master_db import SessionLocal
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ EXCLUDED_PATHS = [
 ]
 
 
-def _extract_request_domain(request: Request) -> str | None:
+def _extract_request_domain(request: Request) -> Optional[str]:
     """
     Resolve the originating domain of the request.
 
@@ -89,7 +90,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
         db: Session = SessionLocal()
         try:
-            organization: Organization | None = None
+            organization: Optional[Organization] = None
 
             if x_tenant_key:
                 api_key = (

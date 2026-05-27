@@ -8,6 +8,7 @@ from fastapi import Request
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.db.tenant_connection_manager import get_tenant_connection_manager
+from app.core.db.master_db import SessionLocal as _MasterSessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -70,4 +71,14 @@ def get_db(request: Request) -> Session:
         raise
     finally:
         db.close()
+
+
+# --------------------------------------------------------------------------------------
+# Backwards-compatible export
+# --------------------------------------------------------------------------------------
+#
+# Some parts of the codebase still import `SessionLocal` from `app.core.db.session`.
+# Keep this alias so older modules continue to work while the project transitions to
+# using `get_db` (tenant-scoped) or `app.core.db.master_db.SessionLocal` (master DB).
+SessionLocal = _MasterSessionLocal
 
