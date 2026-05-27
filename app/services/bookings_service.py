@@ -63,7 +63,7 @@ WAITING_STATUS = "waiting"
 CANCELLED_STATUS = "cancelled"
 
 
-def _tenant_tz(db: Session, tenant_id: UUID) -> ZoneInfo:
+def _tenant_tz(db: Session, tenant_id: str) -> ZoneInfo:
     tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     tz_name = (tenant.timezone or "UTC").strip() if tenant else "UTC"
     tz_key = tz_name.upper()
@@ -374,7 +374,7 @@ class BookingsService:
     @staticmethod
     def list_member_bookings(
         db: Session,
-        tenant_id: UUID,
+        tenant_id: str,
         user: User,
         gym_config: Optional[GymConfigValue] = None,
     ) -> dict[str, list[dict[str, Any]]]:
@@ -467,7 +467,7 @@ class BookingsService:
     @staticmethod
     def _promote_next_waiting(
         db: Session,
-        tenant_id: UUID,
+        tenant_id: str,
         gym_class: GymClass,
         now: datetime,
         gym_config: Optional[GymConfigValue] = None,
@@ -505,7 +505,7 @@ class BookingsService:
 
     @staticmethod
     def _load_class_for_tenant(
-        db: Session, tenant_id: UUID, class_id: UUID
+        db: Session, tenant_id: str, class_id: UUID
     ) -> Optional[GymClass]:
         """
         Class is bookable for this tenant if:
@@ -537,8 +537,8 @@ class BookingsService:
     def debug_validate_context(
         db: Session,
         *,
-        booking_tenant_id: UUID,
-        api_key_tenant_id: Optional[UUID],
+        booking_tenant_id: str,
+        api_key_tenant_id: Optional[str],
         user: User,
         class_id: UUID,
         outcome: BookingValidationOutcome,
@@ -632,7 +632,7 @@ class BookingsService:
     @staticmethod
     def validate(
         db: Session,
-        tenant_id: UUID,
+        tenant_id: str,
         user: User,
         class_id: UUID,
         payment_mode: PaymentMode,
@@ -652,7 +652,7 @@ class BookingsService:
                 payment_mode,
             )
 
-        if UUID(str(user.tenant_id)) != UUID(str(tenant_id)):
+        if str(user.tenant_id) != str(tenant_id):
             outcome.set_check(
                 "tenant_user",
                 False,
@@ -1082,7 +1082,7 @@ class BookingsService:
     @staticmethod
     def create(
         db: Session,
-        tenant_id: UUID,
+        tenant_id: str,
         user: User,
         class_id: UUID,
         payment_mode: PaymentMode,
@@ -1215,7 +1215,7 @@ class BookingsService:
     @staticmethod
     def cancel(
         db: Session,
-        tenant_id: UUID,
+        tenant_id: str,
         user: User,
         class_id: UUID,
         booking_id: UUID,

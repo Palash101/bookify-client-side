@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Text, ForeignKey, Boolean, DateTime, true
+from sqlalchemy import Column, String, Text, ForeignKey, Boolean, DateTime, true
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 
@@ -14,7 +14,7 @@ class TenantSetting(Base):
     __tablename__ = "settings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
     setting_key = Column(Text, nullable=False, index=True)
     value = Column(JSONB, nullable=True)
     is_enabled = Column(Boolean, nullable=True, server_default=true())

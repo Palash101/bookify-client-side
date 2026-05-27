@@ -18,7 +18,7 @@ class PackagesService:
     @staticmethod
     def list_packages(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
@@ -61,7 +61,7 @@ class PackagesService:
         return query.all()
 
     @staticmethod
-    def get_package_detail(db: Session, tenant_id: uuid.UUID, package_id: uuid.UUID) -> Package:
+    def get_package_detail(db: Session, tenant_id: str, package_id: uuid.UUID) -> Package:
         package = (
             db.query(Package)
             .options(
@@ -77,7 +77,7 @@ class PackagesService:
     @staticmethod
     def _active_package_entry_for_order(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         order: Sale,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -169,7 +169,7 @@ class PackagesService:
     @staticmethod
     def get_active_packages_for_user(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         user_id: uuid.UUID,
     ) -> List[Dict[str, Any]]:
         """

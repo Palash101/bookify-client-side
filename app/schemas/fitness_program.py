@@ -6,7 +6,7 @@ from uuid import UUID
 
 class FitnessProgramResponse(BaseModel):
     id: int
-    tenant_id: UUID
+    tenant_id: str
     location_id: Optional[UUID] = None
 
     name: Optional[str] = None

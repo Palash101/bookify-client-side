@@ -9,7 +9,7 @@ class TenantPaymentSettings(Base):
     __tablename__ = "tenant_payment_settings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, index=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
 
     # 'stripe' | 'paypal' | 'myfatoorah' (backed by payment_gateway_type enum in DB)
     gateway_type = Column(String, nullable=False)

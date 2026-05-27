@@ -66,10 +66,7 @@ async def get_current_user(
     # Session gym must match JWT (same email can exist on multiple tenants)
     tid_claim = payload.get("tenant_id")
     if tid_claim is not None:
-        try:
-            if UUID(str(tid_claim)) != UUID(str(user.tenant_id)):
-                raise credentials_exception
-        except (ValueError, TypeError):
+        if str(tid_claim) != str(user.tenant_id):
             raise credentials_exception
 
     return user
@@ -102,7 +99,7 @@ async def get_gym_config_for_active_user(
 
 async def get_current_tenant_id(
     request: Request,
-) -> UUID:
+) -> str:
     """
     Get tenant_id from request state (set by TenantMiddleware).
     """

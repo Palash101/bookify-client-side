@@ -28,7 +28,7 @@ class AuthService:
     """
     
     @staticmethod
-    def get_user_by_email(db: Session, email: str, tenant_id: uuid.UUID) -> Optional[User]:
+    def get_user_by_email(db: Session, email: str, tenant_id: str) -> Optional[User]:
         """
         Get user by email and tenant_id.
         """
@@ -46,7 +46,7 @@ class AuthService:
         return db.query(User).filter(User.id == user_id).first()
     
     @staticmethod
-    def authenticate_user(db: Session, email: str, password: str, tenant_id: uuid.UUID) -> User:
+    def authenticate_user(db: Session, email: str, password: str, tenant_id: str) -> User:
         """
         Authenticate a user by email and password.
         Raises HTTPException if authentication fails.
@@ -69,7 +69,7 @@ class AuthService:
         return user
     
     @staticmethod
-    def check_user_exists(db: Session, email: str, tenant_id: uuid.UUID) -> None:
+    def check_user_exists(db: Session, email: str, tenant_id: str) -> None:
         """
         Check if user already exists. Raises HTTPException if exists.
         """
@@ -98,7 +98,7 @@ class AuthService:
             )
     
     @staticmethod
-    def prepare_registration_data(user_data: UserCreate, tenant_id: uuid.UUID) -> Dict[str, Any]:
+    def prepare_registration_data(user_data: UserCreate, tenant_id: str) -> Dict[str, Any]:
         """
         Prepare user data dict for registration (to store in OTP cache).
         """
@@ -129,7 +129,7 @@ class AuthService:
     async def send_otp(
         email: str,
         purpose: str,
-        tenant_id: Optional[uuid.UUID] = None,
+        tenant_id: Optional[str] = None,
         user_data: Optional[Dict] = None,
     ) -> Tuple[str, str]:
         """
@@ -179,7 +179,7 @@ class AuthService:
         return email
 
     @staticmethod
-    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[uuid.UUID]]:
+    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[str]]:
         """
         Email + tenant_id from Bearer verification JWT (OTP flow).
         """
@@ -207,15 +207,9 @@ class AuthService:
             )
         email = claims["email"]
         tid_raw = claims.get("tenant_id")
-        otp_tenant_id: Optional[uuid.UUID] = None
+        otp_tenant_id: Optional[str] = None
         if tid_raw:
-            try:
-                otp_tenant_id = uuid.UUID(str(tid_raw))
-            except (ValueError, TypeError):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid verification token (tenant_id)",
-                )
+            otp_tenant_id = str(tid_raw)
         return email, otp_tenant_id
 
     @staticmethod
@@ -254,7 +248,7 @@ class AuthService:
         email: str,
         otp: str,
         expected_purpose: Optional[str] = None,
-        otp_tenant_id: Optional[uuid.UUID] = None,
+        otp_tenant_id: Optional[str] = None,
     ) -> Tuple[str, Optional[Dict]]:
         """
         Verify OTP and return (purpose, cached_user_data).
@@ -316,7 +310,7 @@ class AuthService:
             dob=dob,
             skills=cached_user_data.get("skills"),
             is_active=True,
-            tenant_id=uuid.UUID(cached_user_data["tenant_id"]),
+            tenant_id=cached_user_data["tenant_id"],
             role_id=role_id,
             # If somehow user_type not present in cache, treat as client for app
             user_type=cached_user_data.get("user_type", "client"),
@@ -328,7 +322,7 @@ class AuthService:
         return db_user
     
     @staticmethod
-    def get_user_for_login(db: Session, email: str, tenant_id: Optional[uuid.UUID] = None) -> User:
+    def get_user_for_login(db: Session, email: str, tenant_id: Optional[str] = None) -> User:
         """
         Get user for login flow (after OTP verification).
         If tenant_id is provided, ensure we fetch user for that tenant only.
@@ -406,17 +400,10 @@ class AuthService:
 
         tid = payload.get("tenant_id")
         if tid is not None:
-            try:
-                if uuid.UUID(str(tid)) != uuid.UUID(str(user.tenant_id)):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Refresh token tenant mismatch",
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-            except (ValueError, TypeError):
+            if str(tid) != str(user.tenant_id):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid refresh token",
+                    detail="Refresh token tenant mismatch",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
         
@@ -434,7 +421,7 @@ class AuthService:
         email: str,
         new_password: str,
         confirm_password: str,
-        tenant_id: Optional[uuid.UUID] = None,
+        tenant_id: Optional[str] = None,
     ) -> None:
         """
         Set a new password (forgot-password OTP flow or after old password verified).
@@ -487,7 +474,7 @@ class AuthService:
     def resolve_user_from_bearer(
         db: Session,
         authorization: Optional[str],
-        tenant_id: uuid.UUID,
+        tenant_id: str,
     ) -> User:
         """
         Resolve user from access JWT or login verification JWT (after /login, before OTP).
@@ -520,13 +507,7 @@ class AuthService:
             otp_tenant_id = None
             tid_raw = claims.get("tenant_id")
             if tid_raw:
-                try:
-                    otp_tenant_id = uuid.UUID(str(tid_raw))
-                except (ValueError, TypeError):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Invalid verification token (tenant_id)",
-                    )
+                otp_tenant_id = str(tid_raw)
             if otp_tenant_id is not None and otp_tenant_id != tenant_id:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -553,17 +534,10 @@ class AuthService:
                 )
             tid_claim = payload.get("tenant_id")
             if tid_claim is not None:
-                try:
-                    if uuid.UUID(str(tid_claim)) != uuid.UUID(str(user.tenant_id)):
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Access token tenant mismatch",
-                            headers={"WWW-Authenticate": "Bearer"},
-                        )
-                except (ValueError, TypeError):
+                if str(tid_claim) != str(user.tenant_id):
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid access token",
+                        detail="Access token tenant mismatch",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
             if user.tenant_id != tenant_id:

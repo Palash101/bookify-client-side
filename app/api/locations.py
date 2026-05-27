@@ -6,7 +6,6 @@ from app.core.db.session import get_db
 from app.dependencies import get_current_tenant_id
 from app.schemas.location import LocationResponse, LocationsListResponse
 from app.services.locations_service.locations_service import LocationsService
-import uuid
 
 
 router = APIRouter()
@@ -21,7 +20,7 @@ async def get_locations(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """

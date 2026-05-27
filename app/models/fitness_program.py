@@ -19,7 +19,7 @@ class FitnessProgram(Base):
 
     id = Column(BigInteger, primary_key=True, index=True)
 
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False, index=True)
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
     location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True, index=True)
 
     name = Column(Text, nullable=True)

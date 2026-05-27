@@ -96,12 +96,12 @@ class PackagePurchaseRequest(BaseModel):
 # Dependency: extract tenant_id using existing TenantMiddleware + dependency
 # ---------------------------------------------------------------------------
 
-def get_tenant_id(tenant_id: UUID = Depends(get_current_tenant_id)) -> str:
+def get_tenant_id(tenant_id: str = Depends(get_current_tenant_id)) -> str:
     """
     Resolve tenant from X-Tenant-Key header (via TenantMiddleware)
     and return it as string for the payment factory.
     """
-    return str(tenant_id)
+    return tenant_id
 
 def _resolve_tenant_for_stripe_webhook(db: Session, raw_body: bytes, stripe_signature: str) -> Optional[str]:
     """
@@ -210,7 +210,7 @@ async def initiate_package_purchase(
         current_user.wallet = balance_after
 
         order = Sale(
-            tenant_id=UUID(tenant_id),
+            tenant_id=tenant_id,
             user_id=current_user.id,
             package_id=body.package_id,
             product_item_type="package",
@@ -306,7 +306,7 @@ async def initiate_package_purchase(
     # Log initial transaction event (payment initiated; no Sale yet)
     txn = SalesTransactions(
         order_id=None,
-        tenant_id=UUID(tenant_id),
+        tenant_id=tenant_id,
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
@@ -429,8 +429,7 @@ async def payment_callback(
         # For non-stripe gateways, keep requiring tenant header/middleware
         tenant_id = None
         try:
-            tenant_uuid = await get_current_tenant_id(request)
-            tenant_id = str(tenant_uuid)
+            tenant_id = await get_current_tenant_id(request)
         except Exception:
             raise HTTPException(status_code=401, detail="X-Tenant-Key header is required")
 
@@ -462,7 +461,7 @@ async def payment_callback(
         if order_uuid is not None:
             order = db.query(Sale).filter(
                 Sale.id == order_uuid,
-                Sale.tenant_id == UUID(tenant_id),
+                Sale.tenant_id == tenant_id,
             ).first()
 
             # When we only log initiation in sales_transactions, the Sale is created here on success.
@@ -470,7 +469,7 @@ async def payment_callback(
                 init_txn = (
                     db.query(SalesTransactions)
                     .filter(
-                        SalesTransactions.tenant_id == UUID(tenant_id),
+                        SalesTransactions.tenant_id == tenant_id,
                         SalesTransactions.source == "package",
                         SalesTransactions.extra_metadata["client_order_id"].astext == str(order_uuid),
                         SalesTransactions.extra_metadata["event"].astext == "created",
@@ -484,7 +483,7 @@ async def payment_callback(
                     pricing_raw = meta.get("package_pricing_id")
                     order = Sale(
                         id=order_uuid,
-                        tenant_id=UUID(tenant_id),
+                        tenant_id=tenant_id,
                         user_id=init_txn.user_id,
                         package_id=UUID(str(pkg_raw)) if pkg_raw else None,
                         product_item_type="package",
@@ -525,7 +524,7 @@ async def payment_callback(
 
                 if order.package_id is not None:
                     apply_package_expiry_to_sale(
-                        db, order, UUID(tenant_id), overwrite=True
+                        db, order, tenant_id, overwrite=True
                     )
 
                 if (order.status or "").lower() in ("succeeded", "success"):
@@ -540,7 +539,7 @@ async def payment_callback(
             init_pkg_txn = (
                 db.query(SalesTransactions)
                 .filter(
-                    SalesTransactions.tenant_id == UUID(tenant_id),
+                    SalesTransactions.tenant_id == tenant_id,
                     SalesTransactions.source == "package",
                     SalesTransactions.extra_metadata["client_order_id"].astext == str(order_uuid),
                     SalesTransactions.extra_metadata["event"].astext == "created",
@@ -581,7 +580,7 @@ async def payment_callback(
             else:
                 txn = SalesTransactions(
                     order_id=order.id if order else order_uuid,
-                    tenant_id=UUID(tenant_id),
+                    tenant_id=tenant_id,
                     payment_method="gateway",
                     gateway=gateway_value,
                     gateway_txn_id=result.transaction_id or "",
@@ -749,7 +748,7 @@ async def payment_callback(
 @router.get("/sales-transactions", response_model=SalesTransactionsListResponse)
 async def get_sales_transactions(
     limit: int = Query(20, ge=1, le=100),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     include_wallet_add: bool = Query(False, description="Include wallet top-ups in results"),

@@ -124,7 +124,7 @@ async def add_wallet_balance(
 
 @router.get("/balance", response_model=WalletBalanceResponse)
 async def get_wallet_balance(
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -153,7 +153,7 @@ async def get_wallet_balance(
 
 @router.get("/transactions", response_model=WalletTransactionsListResponse)
 async def get_wallet_transactions(
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     limit: int = Query(20, ge=1, le=100),
@@ -201,7 +201,7 @@ async def get_wallet_transactions(
     response_model=PurchasesHistoryResponse,
 )
 async def get_purchases_history(
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     limit: int = Query(50, ge=1, le=200),

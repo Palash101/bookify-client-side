@@ -10,7 +10,7 @@ class FitnessProgramsService:
     @staticmethod
     def list_programs(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         location_id: Optional[uuid.UUID] = None,
         search: Optional[str] = None,
         sort_by: Optional[str] = None,

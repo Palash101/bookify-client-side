@@ -1,5 +1,4 @@
 from typing import List, Optional, Sequence
-import uuid
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -12,7 +11,7 @@ class TrainersService:
     @staticmethod
     def list_trainers_by_role_keys(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         role_keys: Sequence[str],
         only_active: bool = True,
         search: Optional[str] = None,
@@ -62,7 +61,7 @@ class TrainersService:
     @staticmethod
     def list_trainers_by_role_key(
         db: Session,
-        tenant_id: uuid.UUID,
+        tenant_id: str,
         role_key: str,
         only_active: bool = True,
         search: Optional[str] = None,

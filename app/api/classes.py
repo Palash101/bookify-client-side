@@ -35,7 +35,7 @@ async def get_classes_by_date_for_location(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
     """
@@ -93,7 +93,7 @@ async def get_classes_by_date_for_location(
 async def get_class_details_for_location(
     location_id: uuid.UUID,
     class_id: uuid.UUID,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
