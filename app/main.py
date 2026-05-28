@@ -51,11 +51,12 @@ def custom_openapi():
         }
     }
     
+    api_prefix = settings.API_V1_STR.rstrip("/")
     endpoints_needing_bearer = [
-        "/api/v1/auth/verify-otp",
-        "/api/v1/auth/reset-password",
-        "/api/v1/auth/profile",
-        "/api/v1/auth/edit-profile",
+        f"{api_prefix}/auth/verify-otp",
+        f"{api_prefix}/auth/reset-password",
+        f"{api_prefix}/auth/profile",
+        f"{api_prefix}/auth/edit-profile",
     ]
     
     for path, path_item in openapi_schema.get("paths", {}).items():

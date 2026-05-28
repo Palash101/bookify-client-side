@@ -11,7 +11,7 @@ load_dotenv(".env")
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Bookify"
     VERSION: str = "1.0.0"
-    API_V1_STR: str = "/api/v1"
+    API_V1_STR: str = "/api/v1/client"
     
     # Database
     DB_HOST: str = Field(..., env="DB_HOST")
