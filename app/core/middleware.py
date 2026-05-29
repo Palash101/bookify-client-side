@@ -15,7 +15,7 @@ EXCLUDED_PATHS = [
     "/docs",
     "/redoc",
     "/openapi.json",
-    "/api/v1/openapi.json",
+    "/api/v1/client/openapi.json",
 ]
 
 
@@ -74,7 +74,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Webhook/callback endpoints are called by payment providers (no tenant header).
-        if path.startswith("/api/v1/payment/callback/"):
+        if path.startswith("/api/v1/client/payment/callback/"):
             return await call_next(request)
 
         if not path.startswith("/api/"):

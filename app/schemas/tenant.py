@@ -1,23 +1,16 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
-from uuid import UUID
 
 
 class TenantResponse(BaseModel):
-    id: UUID
-    business_name: Optional[str] = None
+    # NOTE: For client `/gym` endpoint this is sourced from master DB `Organization`.
+    id: str = Field(validation_alias="organization_id")
+    business_name: Optional[str] = Field(default=None, validation_alias="name")
     domain: Optional[str] = None
-    status: Optional[str] = None
-    timezone: Optional[str] = None
-    currency: Optional[str] = None
-    terms_accepted: Optional[bool] = None
-    type: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class GymTenantResponse(BaseModel):

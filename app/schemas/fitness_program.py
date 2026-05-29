@@ -1,21 +1,13 @@
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
-from uuid import UUID
 
 
 class FitnessProgramResponse(BaseModel):
     id: int
-    tenant_id: str
-    location_id: Optional[UUID] = None
 
     name: Optional[str] = None
     description: Optional[str] = None
     image_url: Optional[str] = None
-
-    is_active: Optional[bool] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
     is_layout_required: Optional[bool] = None
     spot_name: Optional[str] = None

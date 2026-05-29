@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import ProgrammingError, OperationalError
 import logging
 from uuid import uuid4
 
@@ -114,11 +115,15 @@ def _resolve_tenant_for_stripe_webhook(db: Session, raw_body: bytes, stripe_sign
     except Exception:
         return None
 
-    rows = (
-        db.query(TenantPaymentSettingsModel)
-        .filter(TenantPaymentSettingsModel.gateway_type == GatewayType.STRIPE.value)
-        .all()
-    )
+    try:
+        rows = (
+            db.query(TenantPaymentSettingsModel)
+            .filter(TenantPaymentSettingsModel.gateway_type == GatewayType.STRIPE.value)
+            .all()
+        )
+    except (ProgrammingError, OperationalError):
+        # Payments tables not migrated in this environment.
+        return None
 
     for row in rows:
         settings = row.payment_config or {}
