@@ -5,17 +5,19 @@ from sqlalchemy.orm import Session
 from app.core.db.master_db import SessionLocal
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
+from app.core.settings import settings
 import logging
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_api_prefix = settings.API_V1_STR.rstrip("/")
+
 EXCLUDED_PATHS = [
     "/health",
-    "/docs",
-    "/redoc",
-    "/openapi.json",
-    "/api/v1/client/openapi.json",
+    f"{_api_prefix}/docs",
+    f"{_api_prefix}/redoc",
+    f"{_api_prefix}/openapi.json",
 ]
 
 
@@ -68,13 +70,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
         if (
             path in EXCLUDED_PATHS
-            or path.startswith("/docs")
-            or path.startswith("/redoc")
+            or path.startswith(f"{_api_prefix}/docs")
+            or path.startswith(f"{_api_prefix}/redoc")
         ):
             return await call_next(request)
 
         # Webhook/callback endpoints are called by payment providers (no tenant header).
-        if path.startswith("/api/v1/client/payment/callback/"):
+        if path.startswith(f"{_api_prefix}/payment/callback/"):
             return await call_next(request)
 
         if not path.startswith("/api/"):

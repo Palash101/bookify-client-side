@@ -15,7 +15,7 @@ from app.core.db.session import Base
 
 
 class FitnessProgram(Base):
-    __tablename__ = "fitness_programs"
+    __tablename__ = "training_programs"
 
     id = Column(BigInteger, primary_key=True, index=True)
 

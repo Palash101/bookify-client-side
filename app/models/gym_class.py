@@ -7,7 +7,7 @@ import uuid
 
 
 class GymClass(Base):
-    __tablename__ = "gym_classes"
+    __tablename__ = "classes"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     training_programme_id = Column(BigInteger, nullable=True, default=0)
