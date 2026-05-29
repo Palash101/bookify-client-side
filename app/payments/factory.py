@@ -12,6 +12,7 @@ from typing import Any, Optional, Union
 import logging
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import ProgrammingError, OperationalError
 
 from .base import BasePaymentGateway, GatewayType
 from .stripe_gateway import StripePaymentGateway
@@ -83,11 +84,23 @@ class TenantPaymentSettings:
         """
         db: Session = SessionLocal()
         try:
-            rows: list[TenantPaymentSettingsModel] = (
-                db.query(TenantPaymentSettingsModel)
-                .filter(TenantPaymentSettingsModel.tenant_id == tenant_id)
-                .all()
-            )
+            try:
+                rows: list[TenantPaymentSettingsModel] = (
+                    db.query(TenantPaymentSettingsModel)
+                    .filter(TenantPaymentSettingsModel.tenant_id == tenant_id)
+                    .all()
+                )
+            except (ProgrammingError, OperationalError) as exc:
+                # Some environments may not have payments tables migrated yet.
+                # Treat as "no configured gateways" instead of crashing the API.
+                logger.warning(
+                    "Payment settings table unavailable (tenant_id=%s): %s",
+                    tenant_id,
+                    str(exc),
+                )
+                raise ValueError(
+                    f"No payment settings configured for tenant '{tenant_id}'."
+                ) from exc
 
             if not rows:
                 raise ValueError(

@@ -83,6 +83,28 @@ class User(UserInDB):
     pass
 
 
+class UserMeResponse(BaseModel):
+    """
+    Safe user payload for client `GET /auth/me`.
+    Avoids exposing internal fields (tenant_id, role_id, is_active, timestamps).
+    """
+    id: UUID
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    full_name: Optional[str] = None
+    avatar: Optional[str] = None
+    gender: Optional[str] = None
+    dob: Optional[date] = None
+    designation: Optional[str] = None
+    skills: Optional[Any] = None
+    wallet: Optional[float] = 0
+
+    class Config:
+        from_attributes = True
+
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
@@ -168,7 +190,7 @@ class RefreshTokenResponse(BaseModel):
 class ProfileResponse(BaseModel):
     success: bool = True
     message: str
-    data: User
+    data: UserMeResponse
 
 
 class ProfileUpdate(BaseModel):

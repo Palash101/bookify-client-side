@@ -26,7 +26,6 @@ class PackagePricingResponse(BaseModel):
     session_count: Optional[int] = None
     is_unlimited: Optional[bool] = None
     persons: Optional[int] = None
-    created_at: Optional[datetime] = None
     discount: Optional[PackageDiscountResponse] = None
 
     class Config:
@@ -45,9 +44,7 @@ class PackageResponse(BaseModel):
     terms_conditions: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    status: Optional[str] = None
     package_type: Optional[str] = None
-    tenant_id: Optional[str] = None
     booking_restriction: Optional[Any] = None
     pricing_list: List[PackagePricingResponse] = []
 

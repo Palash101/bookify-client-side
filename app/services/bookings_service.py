@@ -9,6 +9,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import String as SAString, and_, cast, func, or_
+from sqlalchemy.exc import ProgrammingError, OperationalError
 from sqlalchemy.orm import Session, aliased, attributes
 
 from app.models.class_booking import ClassBooking
@@ -64,7 +65,15 @@ CANCELLED_STATUS = "cancelled"
 
 
 def _tenant_tz(db: Session, tenant_id: str) -> ZoneInfo:
-    tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    try:
+        tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    except (ProgrammingError, OperationalError):
+        # Some tenant DBs do not include the `tenants` table; default to UTC.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        tenant = None
     tz_name = (tenant.timezone or "UTC").strip() if tenant else "UTC"
     tz_key = tz_name.upper()
     if tz_key in COMMON_TZ_ABBREVS:

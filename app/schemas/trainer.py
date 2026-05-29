@@ -1,6 +1,5 @@
 from pydantic import BaseModel
 from typing import Optional, List, Any
-from datetime import datetime
 from uuid import UUID
 
 
@@ -9,14 +8,10 @@ class TrainerResponse(BaseModel):
     id: UUID
     first_name: Optional[str] = None
     last_name: Optional[str] = None
-    email: Optional[str] = None
-    phone: Optional[str] = None
     avatar: Optional[str] = None
     designation: Optional[str] = None
     # JSONB: may be {}, [] or null in DB
     skills: Optional[Any] = None
-    is_active: Optional[bool] = None
-    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

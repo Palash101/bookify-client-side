@@ -2,10 +2,10 @@ from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from app.core.db.session import SessionLocal
+from app.core.db.session import get_db as tenant_get_db
 from app.core.security import verify_token
 from app.models.user import User
-from app.models.tenant import Tenant
+from app.models.master_org import Organization
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.gym_config_service import GymConfigService
 from uuid import UUID
@@ -17,19 +17,13 @@ bearer_scheme = HTTPBearer(
 )
 
 
-def get_db() -> Generator:
+def get_db(request: Request) -> Generator:
     """
-    Database dependency that yields a database session.
+    Tenant-scoped database dependency.
+
+    Uses `TenantMiddleware` -> `request.state.tenant_id` to connect to the correct tenant DB.
     """
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    yield from tenant_get_db(request)
 
 
 async def get_current_user(
@@ -78,7 +72,8 @@ async def get_current_active_user(
     """
     Get current active user.
     """
-    if not current_user.is_active:
+    # Legacy rows may have NULL; treat NULL as active.
+    if current_user.is_active is False:
         raise HTTPException(
             status_code=400,
             detail="Your account is inactive. Please contact support to reactivate your account.",
@@ -114,10 +109,16 @@ async def get_current_tenant_id(
 
 async def get_current_tenant(
     request: Request,
-) -> Tenant:
+) -> Organization:
     """
-    Get full tenant object from request state (set by TenantMiddleware).
+    Resolve current tenant from request state (set by TenantMiddleware).
+
+    TenantMiddleware attaches `request.state.tenant_id` based on the X-Tenant-Key (or domain)
+    via the master/control-plane DB. Here we use that id to load the actual `tenants` row
+    from the application DB.
     """
+    # For client APIs we resolve tenant through TenantMiddleware which uses the
+    # master/control-plane DB and attaches the Organization object directly.
     if hasattr(request.state, "tenant"):
         return request.state.tenant
     

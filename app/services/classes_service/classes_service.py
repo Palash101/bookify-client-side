@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import ProgrammingError, OperationalError
 
 from app.models.class_booking import ClassBooking
 from app.models.gym_class import GymClass
@@ -138,7 +139,15 @@ class ClassesService:
           - For status = 'draft', include only when publish_at <= tenant's current time.
         """
         # Resolve tenant timezone (DB may store "IST" etc.; zoneinfo needs IANA e.g. "Asia/Kolkata")
-        tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        try:
+            tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        except (ProgrammingError, OperationalError):
+            # Some tenant DBs do not include the `tenants` table; default to UTC.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            tenant = None
         tz_name = (tenant.timezone or "UTC").strip() if tenant else "UTC"
         tz_key = tz_name.upper()
         if tz_key in COMMON_TZ_ABBREVS:
