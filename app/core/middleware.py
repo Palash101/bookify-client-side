@@ -75,8 +75,16 @@ class TenantMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
-        # Webhook/callback endpoints are called by payment providers (no tenant header).
-        if path.startswith(f"{_api_prefix}/payment/callback/"):
+        # Payment redirects & webhooks (no tenant header — called by Stripe/browser).
+        if path in (
+            f"{_api_prefix}/payment/success",
+            f"{_api_prefix}/payment/cancel",
+        ) or path.startswith(
+            (
+                f"{_api_prefix}/payment/callback/",
+                f"{_api_prefix}/callback/",
+            )
+        ):
             return await call_next(request)
 
         if not path.startswith("/api/"):

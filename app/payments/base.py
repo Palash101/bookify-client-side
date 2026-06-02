@@ -9,7 +9,11 @@ from enum import Enum
 from typing import Any, Optional
 import logging
 
+from app.core.settings import settings
+
 logger = logging.getLogger(__name__)
+
+_API_PREFIX = settings.API_V1_STR.rstrip("/")
 
 
 # ---------------------------------------------------------------------------
@@ -172,22 +176,45 @@ class BasePaymentGateway(ABC):
     # Shared helpers available to all subclasses
     # ------------------------------------------------------------------
 
-    def get_callback_url(self, base_url: str, path: str = "/payment/callback") -> str:
-        """Build the full callback URL from configured base URL."""
-        base = self.settings.get("callback_base_url", base_url).rstrip("/")
-        return f"{base}{path}/{self.GATEWAY_TYPE.value}"
+    def _payment_api_base(self, fallback: str) -> str:
+        """Normalize callback_base_url to the API client root (strip trailing callback paths)."""
+        base = self.settings.get("callback_base_url", fallback).rstrip("/")
+        gateway = self.GATEWAY_TYPE.value
+        for suffix in (
+            f"/payment/callback/{gateway}",
+            f"/callback/{gateway}",
+            "/payment/callback",
+            "/callback",
+        ):
+            if base.endswith(suffix):
+                return base[: -len(suffix)].rstrip("/")
+        if base.endswith(_API_PREFIX):
+            return base
+        if _API_PREFIX in base:
+            return base.split(_API_PREFIX, 1)[0] + _API_PREFIX
+        return f"{base}{_API_PREFIX}"
+
+    def get_callback_url(self, base_url: str, path: str = "/callback") -> str:
+        """Build the full webhook/callback URL (default: /api/v1/client/callback/{gateway})."""
+        configured = self.settings.get("callback_url")
+        if configured:
+            return configured
+        raw = self.settings.get("callback_base_url", base_url).rstrip("/")
+        gateway = self.GATEWAY_TYPE.value
+        if raw.endswith(f"/callback/{gateway}") or raw.endswith(f"/payment/callback/{gateway}"):
+            return raw
+        api_base = self._payment_api_base(base_url)
+        return f"{api_base}{path}/{gateway}"
 
     def get_success_url(self, base_url: str) -> str:
-        return self.settings.get(
-            "success_url",
-            f"{base_url.rstrip('/')}/payment/success",
-        )
+        if self.settings.get("success_url"):
+            return self.settings["success_url"]
+        return f"{self._payment_api_base(base_url)}/payment/success"
 
     def get_cancel_url(self, base_url: str) -> str:
-        return self.settings.get(
-            "cancel_url",
-            f"{base_url.rstrip('/')}/payment/cancel",
-        )
+        if self.settings.get("cancel_url"):
+            return self.settings["cancel_url"]
+        return f"{self._payment_api_base(base_url)}/payment/cancel"
 
     def _log_error(self, message: str, exc: Optional[Exception] = None) -> None:
         logger.error("[%s] %s — %s", self.GATEWAY_TYPE, message, exc)

@@ -27,3 +27,7 @@ api_router.include_router(
     payment_routes.router,
     prefix="",
 )
+api_router.include_router(
+    payment_routes.payment_callback_router,
+    prefix="",
+)

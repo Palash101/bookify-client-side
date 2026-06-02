@@ -18,6 +18,12 @@ from uuid import uuid4
 
 from .base import GatewayType, PaymentRequest
 from .factory import get_gateway, TenantPaymentSettings
+from .redirect_handlers import (
+    build_payment_cancel_response,
+    build_payment_success_response,
+)
+from .tenant_resolve import resolve_tenant_for_stripe_webhook
+from app.core.db.session import get_session_factory
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
 from app.core.settings import settings
 from app.models.user import User
@@ -26,13 +32,14 @@ from app.models.package_pricing import PackagePricing
 from app.models.package import Package
 from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
-from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
+# Stripe dashboard URL: /api/v1/client/callback/{gateway_type}
+payment_callback_router = APIRouter(prefix="/callback", tags=["payments"])
 logger = logging.getLogger(__name__)
 
 
@@ -103,41 +110,6 @@ def get_tenant_id(tenant_id: str = Depends(get_current_tenant_id)) -> str:
     and return it as string for the payment factory.
     """
     return tenant_id
-
-def _resolve_tenant_for_stripe_webhook(db: Session, raw_body: bytes, stripe_signature: str) -> Optional[str]:
-    """
-    Stripe webhooks do not include X-Tenant-Key. We resolve tenant by trying to
-    verify the signature against each tenant's configured webhook_secret.
-    Returns tenant_id as string if matched, else None.
-    """
-    try:
-        import stripe as stripe_lib  # type: ignore
-    except Exception:
-        return None
-
-    try:
-        rows = (
-            db.query(TenantPaymentSettingsModel)
-            .filter(TenantPaymentSettingsModel.gateway_type == GatewayType.STRIPE.value)
-            .all()
-        )
-    except (ProgrammingError, OperationalError):
-        # Payments tables not migrated in this environment.
-        return None
-
-    for row in rows:
-        settings = row.payment_config or {}
-        secret = settings.get("webhook_secret")
-        if not secret:
-            continue
-        try:
-            stripe_lib.Webhook.construct_event(raw_body, stripe_signature, secret)
-            return str(row.tenant_id)
-        except Exception:
-            continue
-
-    return None
-
 
 @router.post("/package-purchase")
 async def initiate_package_purchase(
@@ -395,49 +367,80 @@ async def initiate_package_purchase(
     }
 
 
+@router.get("/success")
+async def payment_success_redirect(session_id: Optional[str] = None):
+    """Browser redirect after successful checkout (Stripe, PayPal, etc.)."""
+    return build_payment_success_response(session_id)
+
+
+@router.get("/cancel")
+async def payment_cancel_redirect(session_id: Optional[str] = None):
+    """Browser redirect when the user cancels checkout."""
+    return build_payment_cancel_response(session_id)
+
+
 @router.get("/callback/{gateway_type}")
 @router.post("/callback/{gateway_type}")
+@payment_callback_router.get("/{gateway_type}")
+@payment_callback_router.post("/{gateway_type}")
 async def payment_callback(
     gateway_type: str,
     request: Request,
-    db: Session = Depends(get_db),
 ):
     """
     Unified callback endpoint for all gateways.
-    URL pattern: /payment/callback/{gateway_type}
+    URL patterns:
+      - /api/v1/client/callback/{gateway_type}  (tenant DB default)
+      - /api/v1/client/payment/callback/{gateway_type}
     Handles both GET (redirect) and POST (webhook) callbacks.
     """
-    # Merge query params + JSON body into one payload dict
     payload: dict[str, Any] = dict(request.query_params)
-
-    try:
-        json_body = await request.json()
-        if isinstance(json_body, dict):
-            payload.update(json_body)
-    except Exception:
-        pass  # Not a JSON request — that's fine
-
     tenant_id: Optional[str] = None
 
-    # For Stripe webhooks we need the raw body for signature verification and tenant auto-resolve
+    # Stripe webhooks: read raw body first (signature verification requires untouched bytes).
     if gateway_type == GatewayType.STRIPE.value:
         payload["raw_body"] = await request.body()
         payload["stripe_signature"] = request.headers.get("stripe-signature", "")
-        tenant_id = _resolve_tenant_for_stripe_webhook(
-            db,
+        tenant_id = resolve_tenant_for_stripe_webhook(
             payload["raw_body"],
             payload.get("stripe_signature", ""),
         )
         if tenant_id is None:
             raise HTTPException(status_code=401, detail="Unable to resolve tenant for stripe webhook")
     else:
-        # For non-stripe gateways, keep requiring tenant header/middleware
-        tenant_id = None
+        try:
+            json_body = await request.json()
+            if isinstance(json_body, dict):
+                payload.update(json_body)
+        except Exception:
+            pass
         try:
             tenant_id = await get_current_tenant_id(request)
         except Exception:
             raise HTTPException(status_code=401, detail="X-Tenant-Key header is required")
 
+    request.state.tenant_id = tenant_id
+    db = get_session_factory(tenant_id)()
+    try:
+        return await _handle_payment_callback(
+            gateway_type=gateway_type,
+            request=request,
+            db=db,
+            tenant_id=tenant_id,
+            payload=payload,
+        )
+    finally:
+        db.close()
+
+
+async def _handle_payment_callback(
+    *,
+    gateway_type: str,
+    request: Request,
+    db: Session,
+    tenant_id: str,
+    payload: dict[str, Any],
+) -> Any:
     gateway = get_gateway(tenant_id, gateway_type)
     result = gateway.handle_callback(payload)
 

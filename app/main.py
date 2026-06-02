@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse
-from urllib.parse import urlencode
+from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.openapi.utils import get_openapi
@@ -9,11 +8,11 @@ from typing import Optional
 from app.core.settings import settings
 from app.core.middleware import TenantMiddleware
 from app.api import api_router
-from app.core.db.session import SessionLocal
-from app.models.sales import Sale
-from uuid import UUID
+from app.payments.redirect_handlers import (
+    build_payment_cancel_response,
+    build_payment_success_response,
+)
 import logging
-from app.services.payment_success_service import PaymentSuccessService
 
 logger = logging.getLogger(__name__)
 
@@ -149,51 +148,18 @@ async def health_check():
 
 
 # ---------------------------------------------------------------------------
-# Payment redirect endpoints (no /api/v1 prefix)
-# Gateways may redirect users to /payment/success or /payment/cancel.
-# Webhooks/callbacks are handled under /api/v1/payment/callback/{gateway_type}.
+# Legacy payment redirect paths (no /api/v1/client prefix).
+# Prefer /api/v1/client/payment/success and /api/v1/client/payment/cancel.
 # ---------------------------------------------------------------------------
 
 @app.get("/payment/success")
-async def payment_success(session_id: Optional[str] = None):
-    # Temporarily disable deep-link redirect (PAYMENT_SUCCESS_DEEP_LINK) and return JSON instead.
-    def _respond(**payload: Optional[str]) -> JSONResponse:
-        clean = {k: str(v) for k, v in payload.items() if v is not None and str(v) != ""}
-        return JSONResponse(
-            status_code=200,
-            content={
-                "success": "error" not in clean,
-                "message": clean.get("error") or "Payment success received",
-                **clean,
-            },
-        )
-
-    if not session_id:
-        return _respond(error="missing_session_id")
-
-    db = SessionLocal()
-    try:
-        debug = PaymentSuccessService.handle(db, session_id)
-        if debug.get("error"):
-            db.rollback()
-            return _respond(error=debug["error"], **debug)
-        db.commit()
-        return _respond(**debug)
-    except Exception:
-        logger.exception("payment_success failed (session_id=%s)", session_id)
-        db.rollback()
-        return _respond(error="payment_success_failed", session_id=session_id)
-    finally:
-        db.close()
+async def payment_success_legacy(session_id: Optional[str] = None):
+    return build_payment_success_response(session_id)
 
 
 @app.get("/payment/cancel")
-async def payment_cancel(session_id: Optional[str] = None):
-    return {
-        "success": False,
-        "message": "Payment cancelled redirect received",
-        "session_id": session_id,
-    }
+async def payment_cancel_legacy(session_id: Optional[str] = None):
+    return build_payment_cancel_response(session_id)
 
 
 if __name__ == "__main__":
