@@ -18,7 +18,7 @@ from .base import BasePaymentGateway, GatewayType
 from .stripe_gateway import StripePaymentGateway
 from .paypal_gateway import PayPalPaymentGateway
 from .myfatoorah_gateway import MyFatoorahPaymentGateway
-from app.core.db.session import SessionLocal
+from app.core.db.session import get_session_factory
 from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,12 @@ class TenantPaymentSettings:
         Load tenant payment settings from the database.
         Returns the full tenant payment settings dict expected by the factory.
         """
-        db: Session = SessionLocal()
+        # IMPORTANT:
+        # `tenant_payment_settings` lives in the tenant DB, not the master DB.
+        # Using `app.core.db.session.SessionLocal` would hit the master DB (by design),
+        # which makes gateways look "missing" even when configured correctly.
+        factory = get_session_factory(tenant_id)
+        db: Session = factory()
         try:
             try:
                 rows: list[TenantPaymentSettingsModel] = (
