@@ -65,14 +65,16 @@ CANCELLED_STATUS = "cancelled"
 
 
 def _tenant_tz(db: Session, tenant_id: str) -> ZoneInfo:
+    tenant: Optional[Tenant] = None
     try:
-        tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     except (ProgrammingError, OperationalError):
-        # Some tenant DBs do not include the `tenants` table; default to UTC.
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        # Some tenant DBs do not include the `tenants` table; clear aborted txn then UTC.
+        if db.in_transaction():
+            try:
+                db.rollback()
+            except Exception:
+                pass
         tenant = None
     tz_name = (tenant.timezone or "UTC").strip() if tenant else "UTC"
     tz_key = tz_name.upper()
@@ -1130,16 +1132,33 @@ class BookingsService:
         if payment_mode == "gateway" and status_str in ("confirmed", "pending"):
             status_str = "pending_payment"
 
+        # Resolve timezone before opening a nested transaction — _tenant_tz may
+        # call db.rollback() when the tenants table is missing, which breaks an
+        # active savepoint/context manager.
+        now = datetime.now(_tenant_tz(db, tenant_id))
+
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
-            now = datetime.now(_tenant_tz(db, tenant_id))
             sessions_deducted = 0
             wallet_txn_id: Optional[UUID] = None
             sale_id: Optional[UUID] = None
 
-            if payment_mode == "package" and outcome.sale:
-                sale = outcome.sale
-                sale_id = sale.id
+            if payment_mode == "package" and user_package_purchase_id:
+                sale_id = user_package_purchase_id
+                sale = (
+                    db.query(Sale)
+                    .filter(
+                        Sale.id == sale_id,
+                        Sale.tenant_id == tenant_id,
+                        Sale.user_id == user.id,
+                    )
+                    .first()
+                )
+                if not sale:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Package purchase not found",
+                    )
                 if status_str in ("confirmed", "waiting"):
                     sessions_deducted = 1
                     rem = _sessions_remaining_from_sale(sale)

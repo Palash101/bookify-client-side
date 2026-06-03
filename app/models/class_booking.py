@@ -21,7 +21,7 @@ class ClassBooking(Base):
 
     tenant_id = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
-    class_id = Column(UUID(as_uuid=True), ForeignKey("gym_classes.id", ondelete="CASCADE"), nullable=False, index=True)
+    class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
 
     seat_id = Column(String(64), nullable=True)
 
