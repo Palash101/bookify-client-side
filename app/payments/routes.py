@@ -87,8 +87,8 @@ class PackagePurchaseRequest(BaseModel):
     package_pricing_id: UUID
     persons: Optional[int] = Field(
         default=1,
-        description="Number of persons for this purchase (e.g. 2 for partner training)",
-        gt=0,
+        description="Number of persons for this purchase; must be at least 1 and not more than the pricing max.",
+        ge=1,
     )
     payment_method: Literal["gateway", "wallet"] = Field(
         default="gateway",
@@ -146,12 +146,12 @@ async def initiate_package_purchase(
             detail="Pricing not configured for this package",
         )
 
-    # Validate persons against pricing rule (if defined)
+    # Validate persons: can be fewer than pricing max, but not more
     persons_requested = body.persons or 1
-    if pricing.persons is not None and persons_requested != pricing.persons:
+    if pricing.persons is not None and persons_requested > pricing.persons:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This pricing is valid for exactly {pricing.persons} person(s).",
+            detail=f"Maximum {pricing.persons} person(s) allowed for this pricing. You requested {persons_requested}.",
         )
 
     amount_value = float(pricing.price)
