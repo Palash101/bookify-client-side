@@ -19,7 +19,7 @@ from .stripe_gateway import StripePaymentGateway
 from .paypal_gateway import PayPalPaymentGateway
 from .myfatoorah_gateway import MyFatoorahPaymentGateway
 from app.core.db.session import get_session_factory
-from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
+from app.models.tenant_setting import TenantSetting
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +42,13 @@ class TenantPaymentSettings:
     """
     Loads and caches a tenant's payment configuration.
 
-    DB schema uses one row per (tenant, gateway_type):
+    DB schema uses the shared `settings` table, filtered by setting_key='payment_gateway'.
+    The gateway type is read from value['type'], and the full value dict is the config.
 
-        tenant_payment_settings:
-          tenant_id      str
-          gateway_type   payment_gateway_type  -- 'stripe' | 'paypal' | 'myfatoorah'
-          payment_config JSONB                 -- provider-specific config
+        settings:
+          tenant_id    str
+          setting_key  str   -- must be 'payment_gateway'
+          value        JSONB -- {"type": "stripe", ...provider config...}
 
     In-memory structure we expose from .get():
 
@@ -82,24 +83,21 @@ class TenantPaymentSettings:
         Load tenant payment settings from the database.
         Returns the full tenant payment settings dict expected by the factory.
         """
-        # IMPORTANT:
-        # `tenant_payment_settings` lives in the tenant DB, not the master DB.
-        # Using `app.core.db.session.SessionLocal` would hit the master DB (by design),
-        # which makes gateways look "missing" even when configured correctly.
         factory = get_session_factory(tenant_id)
         db: Session = factory()
         try:
             try:
-                rows: list[TenantPaymentSettingsModel] = (
-                    db.query(TenantPaymentSettingsModel)
-                    .filter(TenantPaymentSettingsModel.tenant_id == tenant_id)
+                rows: list[TenantSetting] = (
+                    db.query(TenantSetting)
+                    .filter(
+                        TenantSetting.tenant_id == tenant_id,
+                        TenantSetting.setting_key == "payment_gateway",
+                    )
                     .all()
                 )
             except (ProgrammingError, OperationalError) as exc:
-                # Some environments may not have payments tables migrated yet.
-                # Treat as "no configured gateways" instead of crashing the API.
                 logger.warning(
-                    "Payment settings table unavailable (tenant_id=%s): %s",
+                    "Settings table unavailable (tenant_id=%s): %s",
                     tenant_id,
                     str(exc),
                 )
@@ -116,10 +114,11 @@ class TenantPaymentSettings:
             active_gateway: Optional[str] = None
 
             for row in rows:
-                gt = (row.gateway_type or "").lower()
-                if not gt or not row.payment_config:
+                config = row.value or {}
+                gt = (config.get("type") or "").lower()
+                if not gt:
                     continue
-                gateways[gt] = row.payment_config
+                gateways[gt] = config
                 # We'll decide active gateway after we load all rows.
 
             if not gateways:

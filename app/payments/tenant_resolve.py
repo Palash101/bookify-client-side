@@ -13,7 +13,7 @@ from app.core.db.session import get_session_factory
 from app.models.master_org import Organization
 from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
-from app.models.tenant_payment_settings import TenantPaymentSettings as TenantPaymentSettingsModel
+from app.models.tenant_setting import TenantSetting
 from app.payments.base import GatewayType
 
 logger = logging.getLogger(__name__)
@@ -48,16 +48,20 @@ def resolve_tenant_for_stripe_webhook(raw_body: bytes, stripe_signature: str) ->
         try:
             try:
                 rows = (
-                    db.query(TenantPaymentSettingsModel)
-                    .filter(TenantPaymentSettingsModel.gateway_type == GatewayType.STRIPE.value)
+                    db.query(TenantSetting)
+                    .filter(
+                        TenantSetting.setting_key == "payment_gateway",
+                    )
                     .all()
                 )
             except (ProgrammingError, OperationalError):
                 continue
 
             for row in rows:
-                settings = row.payment_config or {}
-                secret = settings.get("webhook_secret")
+                config = row.value or {}
+                if (config.get("type") or "").lower() != GatewayType.STRIPE.value:
+                    continue
+                secret = config.get("webhook_secret")
                 if not secret:
                     continue
                 try:
