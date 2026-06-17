@@ -1,29 +1,17 @@
 from copy import deepcopy
 from datetime import date, datetime
 from typing import Optional, List, Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import ProgrammingError, OperationalError
 
 from app.models.class_booking import ClassBooking
 from app.models.gym_class import GymClass
 from app.models.user import User
-from app.models.tenant import Tenant
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
 from app.services.bookings_service import _effective_capacity
-
-# Map common DB abbreviations to IANA timezone names (zoneinfo does not accept "IST" etc.)
-COMMON_TZ_ABBREVS = {
-    "IST": "Asia/Kolkata",
-    "GST": "Asia/Dubai",
-    "QAT": "Asia/Qatar",
-    "AST": "Asia/Riyadh",
-    "PKT": "Asia/Karachi",
-    "UTC": "UTC",
-}
+from app.services.gym_config_service import GymConfigService
 
 ACTIVE_LAYOUT_SEAT_STATUSES = ("confirmed", "pending", "pending_payment", "waiting")
 
@@ -138,24 +126,9 @@ class ClassesService:
           - Always include status != 'draft'.
           - For status = 'draft', include only when publish_at <= tenant's current time.
         """
-        # Resolve tenant timezone (DB may store "IST" etc.; zoneinfo needs IANA e.g. "Asia/Kolkata")
-        try:
-            tenant: Optional[Tenant] = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-        except (ProgrammingError, OperationalError):
-            # Some tenant DBs do not include the `tenants` table; default to UTC.
-            try:
-                db.rollback()
-            except Exception:
-                pass
-            tenant = None
-        tz_name = (tenant.timezone or "UTC").strip() if tenant else "UTC"
-        tz_key = tz_name.upper()
-        if tz_key in COMMON_TZ_ABBREVS:
-            tz_name = COMMON_TZ_ABBREVS[tz_key]
-        try:
-            tz = ZoneInfo(tz_name)
-        except ZoneInfoNotFoundError:
-            tz = ZoneInfo("UTC")
+        # Resolve tenant timezone from settings.gym_config.organization_config
+        gym_config = GymConfigService.get_gym_config(db, tenant_id)
+        tz = GymConfigService.resolve_zoneinfo(gym_config)
         tenant_now: datetime = datetime.now(tz)
 
         fp = aliased(FitnessProgram)
@@ -261,6 +234,8 @@ class ClassesService:
 
         if not gym_class:
             return None
+
+        gym_config = GymConfigService.get_gym_config(db, tenant_id)
 
         trainer = None
         if gym_class.trainer_id:
@@ -407,7 +382,7 @@ class ClassesService:
             "pricing": {
                 "drop_in_price": float(gym_class.price) if gym_class.price is not None else None,
                 "wallet_credits_required": None,
-                "currency": "QAR",
+                "currency": gym_config.resolved_currency(),
             },
             "user_booking": {
                 "has_booked": booking is not None,

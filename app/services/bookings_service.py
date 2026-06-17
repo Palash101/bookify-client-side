@@ -6,7 +6,7 @@ from datetime import date, datetime, time as time_type, timedelta, timezone as d
 from decimal import Decimal
 from typing import Any, Optional, Sequence, Tuple
 from uuid import UUID
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import String as SAString, and_, cast, func, or_
 from sqlalchemy.exc import ProgrammingError, OperationalError
@@ -16,7 +16,6 @@ from app.models.class_booking import ClassBooking
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
 from app.models.sales import Sale
-from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.wallet_transactions import WalletTransaction
 from fastapi import HTTPException, status
@@ -40,15 +39,6 @@ def _append_bfy_wtxn_note(existing: Optional[str], txn_id: UUID, kind: str) -> s
     return f"{base}\n{tag}"
 
 
-COMMON_TZ_ABBREVS = {
-    "IST": "Asia/Kolkata",
-    "GST": "Asia/Dubai",
-    "QAT": "Asia/Qatar",
-    "AST": "Asia/Riyadh",
-    "PKT": "Asia/Karachi",
-    "UTC": "UTC",
-}
-
 # Bookings that block the user from booking the same class again
 ACTIVE_USER_BOOKING_STATUSES: Tuple[str, ...] = (
     "confirmed",
@@ -64,26 +54,13 @@ WAITING_STATUS = "waiting"
 CANCELLED_STATUS = "cancelled"
 
 
-def _tenant_tz(db: Session, tenant_id: str) -> ZoneInfo:
-    tenant: Optional[Tenant] = None
-    try:
-        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
-    except (ProgrammingError, OperationalError):
-        # Some tenant DBs do not include the `tenants` table; clear aborted txn then UTC.
-        if db.in_transaction():
-            try:
-                db.rollback()
-            except Exception:
-                pass
-        tenant = None
-    tz_name = (tenant.timezone or "UTC").strip() if tenant else "UTC"
-    tz_key = tz_name.upper()
-    if tz_key in COMMON_TZ_ABBREVS:
-        tz_name = COMMON_TZ_ABBREVS[tz_key]
-    try:
-        return ZoneInfo(tz_name)
-    except ZoneInfoNotFoundError:
-        return ZoneInfo("UTC")
+def _tenant_tz(
+    db: Session,
+    tenant_id: str,
+    gym_config: Optional[GymConfigValue] = None,
+) -> ZoneInfo:
+    cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
+    return GymConfigService.resolve_zoneinfo(cfg)
 
 
 def _class_starts_at(gym_class: GymClass, tz: ZoneInfo) -> Optional[datetime]:
@@ -389,9 +366,9 @@ class BookingsService:
         user: User,
         gym_config: Optional[GymConfigValue] = None,
     ) -> dict[str, list[dict[str, Any]]]:
-        tz = _tenant_tz(db, tenant_id)
-        now = datetime.now(tz)
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
+        tz = _tenant_tz(db, tenant_id, gym_config=cfg)
+        now = datetime.now(tz)
         cancel_hours = int(cfg.booking_settings.cancellation_window_hours or 0)
         allow_late = bool(cfg.booking_settings.allow_late_cancellations)
 
@@ -703,7 +680,7 @@ class BookingsService:
 
         config = cfg if cfg is not None else GymConfigService.get_gym_config(db, tenant_id)
         outcome.gym_config = config
-        tz = _tenant_tz(db, tenant_id)
+        tz = _tenant_tz(db, tenant_id, gym_config=config)
         now = datetime.now(tz)
         starts_at = _class_starts_at(gym_class, tz)
 
@@ -1132,10 +1109,8 @@ class BookingsService:
         if payment_mode == "gateway" and status_str in ("confirmed", "pending"):
             status_str = "pending_payment"
 
-        # Resolve timezone before opening a nested transaction — _tenant_tz may
-        # call db.rollback() when the tenants table is missing, which breaks an
-        # active savepoint/context manager.
-        now = datetime.now(_tenant_tz(db, tenant_id))
+        # Resolve timezone before opening a nested transaction.
+        now = datetime.now(_tenant_tz(db, tenant_id, gym_config=outcome.gym_config))
 
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
@@ -1185,9 +1160,10 @@ class BookingsService:
                         transaction_id=None,
                         amount=price,
                         currency=(
-                            (outcome.gym_config.payment_pricing.currency if outcome.gym_config else None)
-                            or "QAR"
-                        ).upper(),
+                            outcome.gym_config.resolved_currency()
+                            if outcome.gym_config
+                            else GymConfigService.get_currency(db, tenant_id)
+                        ),
                         balance_before=bal_before,
                         balance_after=bal_after,
                         created_by=user.user_type or "member",
@@ -1278,7 +1254,7 @@ class BookingsService:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
 
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
-        tz = _tenant_tz(db, tenant_id)
+        tz = _tenant_tz(db, tenant_id, gym_config=cfg)
         now = datetime.now(tz)
         starts_at = _class_starts_at(gym_class, tz)
 

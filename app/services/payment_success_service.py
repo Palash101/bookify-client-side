@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.wallet_transactions import WalletTransaction
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
+from app.services.gym_config_service import GymConfigService
 
 
 class PaymentSuccessService:
@@ -46,6 +47,7 @@ class PaymentSuccessService:
                     order_uuid = UUID(str(client_order_id))
                     pkg_raw = meta.get("package_id")
                     pricing_raw = meta.get("package_pricing_id")
+                    default_currency = GymConfigService.get_currency(db, init_pkg.tenant_id)
                     sale = Sale(
                         id=order_uuid,
                         tenant_id=init_pkg.tenant_id,
@@ -62,7 +64,7 @@ class PaymentSuccessService:
                             "session_type": meta.get("session_type"),
                             "session_count": meta.get("session_count"),
                             "package_pricing_id": str(pricing_raw) if pricing_raw else None,
-                            "currency": init_pkg.currency or "QAR",
+                            "currency": init_pkg.currency or default_currency,
                             "gateway": "stripe",
                             "status": "succeeded",
                             "gateway_transaction_id": session_id,
@@ -92,12 +94,13 @@ class PaymentSuccessService:
                 credited = float(init_wallet.amount or 0)
                 after = before + credited
 
+                default_currency = GymConfigService.get_currency(db, init_wallet.tenant_id)
                 wtxn = WalletTransaction(
                     user_id=init_wallet.user_id,
                     direction="credit",
                     transaction_id=session_id,
                     amount=init_wallet.amount or 0,
-                    currency=(init_wallet.currency or "QAR").upper(),
+                    currency=(init_wallet.currency or default_currency).upper(),
                     balance_before=before,
                     balance_after=after,
                     created_by=init_wallet.created_by_type,
@@ -118,7 +121,7 @@ class PaymentSuccessService:
                     amount=init_wallet.amount or 0,
                     extra_metadata={
                         "purpose": "wallet_add",
-                        "currency": (init_wallet.currency or "QAR").upper(),
+                        "currency": (init_wallet.currency or default_currency).upper(),
                         "gateway": "stripe",
                         "status": "succeeded",
                         "gateway_transaction_id": session_id,

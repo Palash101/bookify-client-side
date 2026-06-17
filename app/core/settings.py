@@ -8,6 +8,18 @@ from dotenv import load_dotenv
 load_dotenv(".env")
 
 
+def configure_gcp_credentials() -> None:
+    """Point Google client libraries at the service account key from .env."""
+    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds_path:
+        resolved = os.path.abspath(creds_path)
+        if os.path.isfile(resolved):
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = resolved
+
+
+configure_gcp_credentials()
+
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Bookify"
     VERSION: str = "1.0.0"
@@ -77,8 +89,31 @@ class Settings(BaseSettings):
     MODE: str = Field(default=os.getenv("MODE", os.getenv("ENVIRONMENT", "development")), env="MODE")
     ENVIRONMENT: str = Field(default=os.getenv("ENVIRONMENT", "development"), env="ENVIRONMENT")
     GCP_PROJECT_ID: str = Field(default=os.getenv("GCP_PROJECT_ID", ""), env="GCP_PROJECT_ID")
-    
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = Field(
+        default=None, env="GOOGLE_APPLICATION_CREDENTIALS"
+    )
+    # Set false locally when GCP_PROJECT_ID is set but ADC lacks Secret Manager access.
+    USE_GCP_SECRET_MANAGER: bool = Field(default=True, env="USE_GCP_SECRET_MANAGER")
+    JWT_SIGNING_SECRET_ID: str = Field(
+        default="bookify-dev-auth-secret", env="JWT_SIGNING_SECRET_ID"
+    )
+
+    # Pub/Sub — one topic for all domain events; consumer fans out internally.
+    PUBSUB_TOPIC_ID: str = Field(default="bookify-events", env="PUBSUB_TOPIC_ID")
+    PUBSUB_EMULATOR_HOST: Optional[str] = Field(default=None, env="PUBSUB_EMULATOR_HOST")
+    PUBSUB_ENABLE_MESSAGE_ORDERING: bool = Field(
+        default=False, env="PUBSUB_ENABLE_MESSAGE_ORDERING"
+    )
+    # Force console publisher even when GCP_PROJECT_ID is set (local dev / tests).
+    PUBLISHER_CONSOLE: bool = Field(default=False, env="PUBLISHER_CONSOLE")
+
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
+
+    @property
+    def publisher_is_console(self) -> bool:
+        if self.PUBLISHER_CONSOLE:
+            return True
+        return not self.GCP_PROJECT_ID
     
     class Config:
         case_sensitive = True

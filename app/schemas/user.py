@@ -137,6 +137,7 @@ class OTPResponse(BaseModel):
     message: str
     otp_code: Optional[str] = None  # OTP code (for testing only, remove in production)
     token: str  # Verification token containing email, to be used in verify-otp
+    debug_otp_sent_to: Optional[str] = None  # Populated when DEBUG=true (login Pub/Sub target)
 
 
 class PasswordResetRequest(BaseModel):
@@ -173,6 +174,7 @@ class PasswordResetResponse(BaseModel):
     message: str
     otp_code: Optional[str] = None  # For testing only, remove in production
     token: str
+    debug_otp_sent_to: Optional[str] = None  # Populated when DEBUG=true
 
 
 class RefreshTokenRequest(BaseModel):

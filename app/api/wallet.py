@@ -6,10 +6,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import String
 
-from app.dependencies import get_current_active_user, get_current_tenant_id
+from app.dependencies import get_current_active_user, get_current_tenant_id, get_gym_config_for_active_user
 from app.core.db.session import get_db
 from app.models.user import User
 from app.models.wallet_transactions import WalletTransaction
+from app.schemas.gym_config_value import GymConfigValue
 from app.schemas.transactions import (
     WalletTransactionsListResponse,
     WalletBalanceResponse,
@@ -41,6 +42,7 @@ async def add_wallet_balance(
     tenant_id=Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
 ):
     """
     Initiate a wallet top-up payment through the tenant's configured gateway.
@@ -48,11 +50,7 @@ async def add_wallet_balance(
     """
     gateway = get_gateway(str(tenant_id), body.payment_gateway)
 
-    currency_code = (
-        (gateway.settings or {}).get("currency")
-        or (gateway.settings or {}).get("default_currency")
-        or "QAR"
-    )
+    currency_code = gym_config.resolved_currency()
 
     balance_before = float(current_user.wallet or 0)
 
@@ -127,6 +125,7 @@ async def get_wallet_balance(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
 ):
     # Tenant header ka mismatch ho sakta hai (token kis tenant ka hai us par depend karta hai).
     # Wallet data `current_user.id` se scoped hoga, isliye strict tenant mismatch error na do.
@@ -139,7 +138,7 @@ async def get_wallet_balance(
         .order_by(WalletTransaction.created_at.desc())
         .first()
     )
-    currency = (getattr(last_txn, "currency", None) or "QAR")
+    currency = getattr(last_txn, "currency", None) or gym_config.resolved_currency()
 
     return {
         "success": True,

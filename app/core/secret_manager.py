@@ -1,13 +1,18 @@
+import logging
 import os
 import threading
 from typing import Dict, Optional, Union
 
 try:
+    from google.api_core import exceptions as gcp_exceptions
     from google.cloud import secretmanager
 except ModuleNotFoundError:  # pragma: no cover
+    gcp_exceptions = None
     secretmanager = None
 
 from app.core.settings import settings
+
+log = logging.getLogger(__name__)
 
 
 class SecretManager:
@@ -50,7 +55,6 @@ class SecretManager:
                         raise RuntimeError(
                             "google-cloud-secret-manager is required to use GCP Secret Manager."
                         )
-                    # Uses default application credentials.
                     self._client = secretmanager.SecretManagerServiceClient()
         return self._client
 
@@ -59,6 +63,36 @@ class SecretManager:
         name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
         response = client.access_secret_version(request={"name": name})
         return response.payload.data.decode("UTF-8")
+
+    def _try_fetch_gcp_secret(self, secret_id: str) -> Optional[str]:
+        """
+        Best-effort GCP lookup. Returns None on missing project, disabled GCP, or any error
+        so callers can fall back to environment variables (local dev).
+        """
+        if not settings.USE_GCP_SECRET_MANAGER or not settings.GCP_PROJECT_ID:
+            return None
+
+        try:
+            value = self._access_latest_secret(
+                settings.GCP_PROJECT_ID, secret_id, self._get_client()
+            )
+            return value.strip() or None
+        except Exception as exc:
+            if gcp_exceptions and isinstance(
+                exc, (gcp_exceptions.PermissionDenied, gcp_exceptions.NotFound)
+            ):
+                log.warning(
+                    "GCP Secret Manager denied or missing secret %s: %s; using env fallback",
+                    secret_id,
+                    exc,
+                )
+            else:
+                log.warning(
+                    "GCP Secret Manager lookup failed for %s: %s; using env fallback",
+                    secret_id,
+                    exc,
+                )
+            return None
 
     def get_jwt_secret(self) -> Optional[str]:
         """
@@ -73,17 +107,13 @@ class SecretManager:
             if self._jwt_secret:
                 return self._jwt_secret
 
-        secret: Optional[str] = None
-
-        project_id = settings.GCP_PROJECT_ID
-        if project_id:
-            secret = self._access_latest_secret(
-                project_id, settings.JWT_SIGNING_SECRET_ID, self._get_client()
+        secret = self._try_fetch_gcp_secret(settings.JWT_SIGNING_SECRET_ID)
+        if not secret:
+            secret = os.getenv("SECRET_MANAGER__BOOKIFY_DEV_AUTH_SECRET") or os.getenv(
+                "JWT_SECRET_KEY"
             )
         if secret:
             secret = secret.strip()
-
-        if secret:
             with self._cache_lock:
                 self._jwt_secret = secret
 
@@ -94,7 +124,7 @@ class SecretManager:
         Tenant-based secret used to create tenant DB sessions.
 
         Expected to be a DSN/URL or other DB-secret string per tenant.
-        
+
         Lookup order:
         - GCP Secret Manager: template (versions/latest) [requires GCP_PROJECT_ID]
         - SECRET_MANAGER__TENANT_DB_SECRET__<TENANT_ID> (env fallback)
@@ -111,12 +141,9 @@ class SecretManager:
 
         secret: Optional[str] = None
 
-        project_id = settings.GCP_PROJECT_ID
-        if project_id:
-            template = os.getenv("TENANT_DB_SECRET_NAME_TEMPLATE", "{tenant_id}-db-postgres")
-            secret_id = template.format(tenant_id=tenant_key)
-            secret = self._access_latest_secret(project_id, secret_id, self._get_client())
-            print(secret,'secret')
+        template = os.getenv("TENANT_DB_SECRET_NAME_TEMPLATE", "{tenant_id}-db-postgres")
+        secret_id = template.format(tenant_id=tenant_key)
+        secret = self._try_fetch_gcp_secret(secret_id)
 
         if not secret:
             secret = os.getenv(f"SECRET_MANAGER__TENANT_DB_SECRET__{tenant_key}") or os.getenv(

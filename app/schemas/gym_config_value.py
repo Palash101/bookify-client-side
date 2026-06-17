@@ -3,10 +3,16 @@ from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class PaymentPricingConfig(BaseModel):
+class OrganizationConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     currency: Optional[str] = None
+    timezone: Optional[str] = None
+
+
+class PaymentPricingConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     enable_free_classes: bool = False
     enable_class_package: bool = False
     enable_pay_per_class: bool = False
@@ -63,6 +69,7 @@ class GymConfigValue(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    organization_config: OrganizationConfig = Field(default_factory=OrganizationConfig)
     payment_pricing: PaymentPricingConfig = Field(default_factory=PaymentPricingConfig)
     booking_settings: BookingSettingsConfig = Field(default_factory=BookingSettingsConfig)
     attendance_check_in: AttendanceCheckInConfig = Field(default_factory=AttendanceCheckInConfig)
@@ -70,6 +77,14 @@ class GymConfigValue(BaseModel):
     notification_settings: NotificationSettingsConfig = Field(
         default_factory=NotificationSettingsConfig
     )
+
+    def resolved_currency(self, default: str = "QAR") -> str:
+        raw = (self.organization_config.currency or "").strip()
+        return raw.upper() if raw else default
+
+    def resolved_timezone_name(self, default: str = "UTC") -> str:
+        raw = (self.organization_config.timezone or "").strip()
+        return raw if raw else default
 
     @classmethod
     def from_json(cls, raw: Any) -> "GymConfigValue":

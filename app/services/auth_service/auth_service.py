@@ -14,12 +14,26 @@ from app.core.security import (
     verify_token,
 )
 from app.core.otp_utils import create_otp, verify_otp_any_purpose
-from app.core.mailer import email_service
+from app.core.events import publish_event
+from app.core.logging import get_logger
 from app.schemas.user import UserCreate, ProfileUpdate
 from datetime import timedelta, date as date_type
 from app.core.settings import settings
 from typing import Optional, Dict, Any, Tuple
 import uuid
+
+log = get_logger(__name__)
+
+OTP_EXPIRY_MINUTES = 5
+
+# Email consumer currently handles client.login_otp only (same payload for all OTP flows).
+CLIENT_OTP_EVENT_TYPE = "client.login_otp"
+
+CLIENT_OTP_EVENT_TYPES: Dict[str, str] = {
+    "login": CLIENT_OTP_EVENT_TYPE,
+    "register": CLIENT_OTP_EVENT_TYPE,
+    "password_reset": CLIENT_OTP_EVENT_TYPE,
+}
 
 
 class AuthService:
@@ -126,25 +140,152 @@ class AuthService:
         }
     
     @staticmethod
-    async def send_otp(
+    def _full_name(first_name: Optional[str], last_name: Optional[str], email: str) -> str:
+        parts = [first_name, last_name]
+        full_name = " ".join(part.strip() for part in parts if part and part.strip())
+        return full_name or email
+
+    @staticmethod
+    def _user_full_name(user: User) -> str:
+        return AuthService._full_name(user.first_name, user.last_name, user.email or "")
+
+    @staticmethod
+    def _pubsub_otp_error_detail(exc: Exception) -> str:
+        detail = (
+            "Unable to send OTP right now. "
+            "Check GCP Pub/Sub topic, credentials, and that the email consumer is running."
+        )
+        exc_name = type(exc).__name__
+        if exc_name == "PermissionDenied" or "PermissionDenied" in str(exc):
+            detail = (
+                f"GCP Pub/Sub permission denied for topic '{settings.PUBSUB_TOPIC_ID}'. "
+                "Grant pubsub.topics.publish to the account in GOOGLE_APPLICATION_CREDENTIALS "
+                f"(project: {settings.GCP_PROJECT_ID})."
+            )
+        elif exc_name == "NotFound" or "not found" in str(exc).lower():
+            detail = (
+                f"GCP Pub/Sub topic '{settings.PUBSUB_TOPIC_ID}' not found in "
+                f"project '{settings.GCP_PROJECT_ID}'."
+            )
+        return detail
+
+    @staticmethod
+    async def send_client_otp(
+        *,
         email: str,
         purpose: str,
-        tenant_id: Optional[str] = None,
-        user_data: Optional[Dict] = None,
+        tenant_id: str,
+        full_name: str,
+        user_data: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, str]:
         """
-        Generate OTP, send email, and return (otp_code, verification_token).
-        tenant_id scopes OTP + verification JWT to one gym (same email on multiple tenants).
+        Generate OTP, publish a client OTP event via GCP Pub/Sub.
+        Returns (verification_token, otp_code).
         """
-        tid_str: Optional[str] = None
-        if tenant_id is not None:
-            tid_str = str(tenant_id)
-        elif user_data and user_data.get("tenant_id"):
-            tid_str = str(user_data["tenant_id"])
-        otp_code = create_otp(email, purpose, user_data=user_data, tenant_id=tid_str)
-        await email_service.send_otp_email(email, otp_code, purpose)
-        verification_token = create_verification_token(email, purpose, tenant_id=tid_str)
-        return otp_code, verification_token
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email is required to send OTP",
+            )
+
+        event_type = CLIENT_OTP_EVENT_TYPES.get(purpose)
+        if not event_type:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Unsupported OTP purpose: {purpose}",
+            )
+
+        tid_str = str(tenant_id)
+        otp_code = create_otp(
+            email,
+            purpose,
+            expiry_minutes=OTP_EXPIRY_MINUTES,
+            user_data=user_data,
+            tenant_id=tid_str,
+        )
+
+        event_data = {
+            "to": email,
+            "html": "",
+            "text": "",
+            "full_name": full_name,
+            "otp": otp_code,
+            "expiry_minutes": f"{OTP_EXPIRY_MINUTES}Min",
+        }
+        log.info(
+            "client_otp_prepare purpose=%s event_type=%s tenant_id=%s to_email=%s "
+            "full_name=%s otp=%s topic=%s/%s",
+            purpose,
+            event_type,
+            tid_str,
+            email,
+            full_name,
+            otp_code,
+            settings.GCP_PROJECT_ID,
+            settings.PUBSUB_TOPIC_ID,
+        )
+
+        try:
+            message_id = await publish_event(
+                event_type=event_type,
+                tenant_id=tid_str,
+                data=event_data,
+                ordering_key=tid_str,
+            )
+            log.info(
+                "client_otp_published purpose=%s event_type=%s to_email=%s tenant_id=%s message_id=%s",
+                purpose,
+                event_type,
+                email,
+                tid_str,
+                message_id,
+            )
+        except Exception as exc:
+            log.exception(
+                "%s publish failed for tenant=%s email=%s", event_type, tid_str, email
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=AuthService._pubsub_otp_error_detail(exc),
+            ) from exc
+
+        token = create_verification_token(email, purpose, tenant_id=tid_str)
+        return token, otp_code
+
+    @staticmethod
+    async def send_login_otp(user: User, tenant_id: str) -> Tuple[str, str]:
+        return await AuthService.send_client_otp(
+            email=user.email,
+            purpose="login",
+            tenant_id=tenant_id,
+            full_name=AuthService._user_full_name(user),
+        )
+
+    @staticmethod
+    async def send_register_otp(
+        email: str,
+        tenant_id: str,
+        *,
+        first_name: Optional[str],
+        last_name: Optional[str],
+        user_data: Dict[str, Any],
+    ) -> Tuple[str, str]:
+        return await AuthService.send_client_otp(
+            email=email,
+            purpose="register",
+            tenant_id=tenant_id,
+            full_name=AuthService._full_name(first_name, last_name, email),
+            user_data=user_data,
+        )
+
+    @staticmethod
+    async def send_password_reset_otp(user: User, tenant_id: str) -> Tuple[str, str]:
+        return await AuthService.send_client_otp(
+            email=user.email,
+            purpose="password_reset",
+            tenant_id=tenant_id,
+            full_name=AuthService._user_full_name(user),
+        )
     
     @staticmethod
     def extract_and_validate_token(authorization: Optional[str]) -> str:

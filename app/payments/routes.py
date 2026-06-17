@@ -7,7 +7,7 @@ The active gateway is resolved per-tenant via the factory.
 
 from typing import Any, Optional, Literal
 from uuid import UUID
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr, Field
@@ -34,6 +34,7 @@ from app.models.sales_transactions import SalesTransactions
 from app.models.wallet_transactions import WalletTransaction
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
+from app.services.gym_config_service import GymConfigService
 from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
@@ -155,7 +156,7 @@ async def initiate_package_purchase(
         )
 
     amount_value = float(pricing.price)
-    currency_code = "QAR"  # TODO: if multi-currency later, derive from tenant/settings
+    currency_code = GymConfigService.get_currency(db, tenant_id)
 
     # --------------------------
     # WALLET payment method
@@ -217,7 +218,7 @@ async def initiate_package_purchase(
         db.add(order)
         db.flush()
 
-        tz = timezone.utc
+        tz = GymConfigService.get_timezone(db, tenant_id)
         if package:
             if package.validity_days is not None:
                 order.expires_at = datetime.now(tz) + timedelta(days=package.validity_days)
@@ -443,6 +444,7 @@ async def _handle_payment_callback(
 ) -> Any:
     gateway = get_gateway(tenant_id, gateway_type)
     result = gateway.handle_callback(payload)
+    default_currency = GymConfigService.get_currency(db, tenant_id)
 
     def _wallet_status_from_gateway(status_value: Any) -> str:
         s = status_value.value if hasattr(status_value, "value") else str(status_value)
@@ -505,7 +507,7 @@ async def _handle_payment_callback(
                             "session_type": meta.get("session_type"),
                             "session_count": meta.get("session_count"),
                             "package_pricing_id": str(pricing_raw) if pricing_raw else None,
-                            "currency": init_txn.currency or (result.currency or "QAR"),
+                            "currency": init_txn.currency or (result.currency or default_currency),
                             "gateway": (
                                 result.gateway.value
                                 if hasattr(result.gateway, "value")
@@ -575,7 +577,7 @@ async def _handle_payment_callback(
                 init_pkg_txn.gateway_txn_id = result.transaction_id or init_pkg_txn.gateway_txn_id or ""
                 init_pkg_txn.status = status_value
                 init_pkg_txn.amount = result.amount or init_pkg_txn.amount
-                init_pkg_txn.currency = (result.currency or init_pkg_txn.currency or "QAR")
+                init_pkg_txn.currency = (result.currency or init_pkg_txn.currency or default_currency)
                 meta = dict(init_pkg_txn.extra_metadata or {})
                 meta.setdefault("event", "created")
                 meta["resolved_by"] = "callback"
@@ -646,7 +648,7 @@ async def _handle_payment_callback(
                 direction="credit",
                 transaction_id=result.transaction_id,
                 amount=init_wallet_txn.amount or 0,
-                currency=(init_wallet_txn.currency or (result.currency or "QAR")).upper(),
+                currency=(init_wallet_txn.currency or (result.currency or default_currency)).upper(),
                 balance_before=before,
                 balance_after=after if _wallet_status_from_gateway(result.status) == "succeeded" else None,
                 created_by=init_wallet_txn.created_by_type,
@@ -667,7 +669,7 @@ async def _handle_payment_callback(
                 amount=init_wallet_txn.amount or 0,
                 extra_metadata={
                     "purpose": "wallet_add",
-                    "currency": (init_wallet_txn.currency or (result.currency or "QAR")).upper(),
+                    "currency": (init_wallet_txn.currency or (result.currency or default_currency)).upper(),
                     "gateway": (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)),
                     "status": _wallet_status_from_gateway(result.status),
                     "gateway_transaction_id": result.transaction_id,
@@ -692,7 +694,7 @@ async def _handle_payment_callback(
             init_wallet_txn.gateway = (
                 result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)
             )
-            init_wallet_txn.currency = (result.currency or init_wallet_txn.currency or "QAR")
+            init_wallet_txn.currency = (result.currency or init_wallet_txn.currency or default_currency)
             init_wallet_txn.amount = result.amount or init_wallet_txn.amount or sale.amount
             meta = dict(init_wallet_txn.extra_metadata or {})
             meta.setdefault("event", "created")
