@@ -15,12 +15,23 @@ class TenantWebsiteConfig(Base):
     __tablename__ = "tenant_website_config"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    tenant_id = Column(String, nullable=False, index=True)
+    tenant_id = Column(String, unique=True, nullable=False, index=True)
+
+    # Theme
+    theme_id = Column(UUID(as_uuid=True), nullable=True)
+    theme_name = Column(String(100), nullable=True)
 
     about = Column(Text, nullable=True)
     logo_url = Column(Text, nullable=True)
+    footer_logo = Column(Text, nullable=True)
+    fevicon_icon = Column(Text, nullable=True)
     primary_color = Column(String(50), nullable=True)
     secondary_color = Column(String(50), nullable=True)
+    background_color = Column(String(50), nullable=True)
+
+    # Business hours (e.g. {"mon": {"open": "09:00", "close": "18:00"}, ...})
+    business_hours = Column(JSONB, nullable=True)
+
     support_email = Column(String(255), nullable=True)
     support_phone = Column(String(50), nullable=True)
 

@@ -8,10 +8,16 @@ from pydantic import BaseModel
 class TenantWebsiteConfigData(BaseModel):
     id: UUID
     tenant_id: str
+    theme_id: Optional[UUID] = None
+    theme_name: Optional[str] = None
     about: Optional[str] = None
     logo_url: Optional[str] = None
+    footer_logo: Optional[str] = None
+    fevicon_icon: Optional[str] = None
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
+    background_color: Optional[str] = None
+    business_hours: Optional[Dict[str, Any]] = None
     support_email: Optional[str] = None
     support_phone: Optional[str] = None
     terms_and_conditions: Optional[str] = None
