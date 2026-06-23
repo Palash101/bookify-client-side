@@ -93,6 +93,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
         x_tenant_key = request.headers.get("X-Tenant-Key")
         print(x_tenant_key,'x_tenant_key')
         request_domain = _extract_request_domain(request)
+        print(request_domain,'request_domain')
 
         if not x_tenant_key and not request_domain:
             return _unauthorized(
