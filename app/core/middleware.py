@@ -8,6 +8,7 @@ from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
 from app.core.settings import settings
 import logging
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,30 @@ EXCLUDED_PATHS = [
 
 def _extract_request_domain(request: Request) -> Optional[str]:
     """
-    Resolve the originating domain of the request.
+    Resolve the originating domain of the *client* that issued the request.
 
-    Prefer the explicit `X-Forwarded-Host` header (set by upstream proxies / load balancers),
-    falling back to the `Host` header. The port is stripped so lookups match the value
-    stored on `Tenant.domain`.
+    For browser clients the calling site's domain is carried by the `Origin`
+    header (falling back to `Referer`). For example, a page served from
+    `https://velo.fitnezstudios.com` calling `https://api.fitnezstudios.com`
+    sends `Origin: https://velo.fitnezstudios.com`.
+
+    The `Host` / `X-Forwarded-Host` headers reflect the API endpoint that was
+    *dialled* (`api.fitnezstudios.com`), not the calling site, so they are only
+    used as a last-resort fallback for non-browser callers.
+
+    The port is stripped so lookups match the value stored on
+    `Organization.domain`.
     """
+    # Preferred: the frontend origin reported by the browser.
+    for header in ("origin", "referer"):
+        raw = request.headers.get(header)
+        if not raw:
+            continue
+        host = urlparse(raw).hostname
+        if host:
+            return host.lower()
+
+    # Fallback for non-browser callers that don't send Origin/Referer.
     raw = request.headers.get("x-forwarded-host") or request.headers.get("host")
     if not raw:
         return None
