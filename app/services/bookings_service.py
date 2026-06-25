@@ -459,9 +459,10 @@ class BookingsService:
         gym_class: GymClass,
         now: datetime,
         gym_config: Optional[GymConfigValue] = None,
-    ) -> None:
+    ) -> Optional[ClassBooking]:
         """
         Promote oldest waiting booking to an occupying status when a slot is freed.
+        Returns the promoted booking, if any.
         """
         waiting_booking = (
             db.query(ClassBooking)
@@ -474,7 +475,7 @@ class BookingsService:
             .first()
         )
         if not waiting_booking:
-            return
+            return None
 
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
         target_status = "confirmed" if cfg.booking_settings.auto_confirm_booking else "pending"
@@ -490,6 +491,7 @@ class BookingsService:
         if promoted_status == "confirmed":
             waiting_booking.confirmed_at = now
             gym_class.booking_counts = int(gym_class.booking_counts or 0) + 1
+        return waiting_booking
 
     @staticmethod
     def _load_class_for_tenant(
@@ -1079,7 +1081,7 @@ class BookingsService:
         notes: Optional[str],
         force_waiting: bool = False,
         gym_config: Optional[GymConfigValue] = None,
-    ) -> ClassBooking:
+    ) -> Tuple[ClassBooking, bool]:
         outcome = BookingsService.validate(
             db,
             tenant_id,
@@ -1214,7 +1216,7 @@ class BookingsService:
                 )
 
         db.refresh(booking)
-        return booking
+        return booking, wallet_txn_id is not None
 
     @staticmethod
     def cancel(
@@ -1225,7 +1227,7 @@ class BookingsService:
         booking_id: UUID,
         reason: Optional[str],
         gym_config: Optional[GymConfigValue] = None,
-    ) -> ClassBooking:
+    ) -> Tuple[ClassBooking, Optional[ClassBooking]]:
         booking = (
             db.query(ClassBooking)
             .filter(
@@ -1297,6 +1299,7 @@ class BookingsService:
             if sale:
                 _restore_sessions_to_sale(sale, int(booking.sessions_deducted or 0))
 
+        promoted_booking: Optional[ClassBooking] = None
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
             booking.status = CANCELLED_STATUS
@@ -1306,7 +1309,7 @@ class BookingsService:
 
             if previous_status == "confirmed":
                 gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
-                BookingsService._promote_next_waiting(
+                promoted_booking = BookingsService._promote_next_waiting(
                     db, tenant_id, gym_class, now, gym_config=cfg
                 )
             if seat_label:
@@ -1324,4 +1327,6 @@ class BookingsService:
                     _set_layout_seat_status(gym_class, seat_label, "available")
 
         db.refresh(booking)
-        return booking
+        if promoted_booking is not None:
+            db.refresh(promoted_booking)
+        return booking, promoted_booking

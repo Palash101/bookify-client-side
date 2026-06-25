@@ -9,6 +9,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import os
+import uuid
 from functools import lru_cache
 from typing import Any, Optional
 
@@ -112,7 +113,6 @@ async def publish_event(
         tenant_id=tenant_id,
         data=data,
         ordering_key=ordering_key,
+        event_id=event_id or str(uuid.uuid4()),
     )
-    if event_id is not None:
-        envelope.event_id = event_id
     return await get_publisher().publish(envelope)

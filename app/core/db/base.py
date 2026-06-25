@@ -20,6 +20,7 @@ from app.models.wallet_transactions import WalletTransaction
 from app.models.class_booking import ClassBooking
 from app.models.user_package import UserPackage
 from app.models.tenant_website_config import TenantWebsiteConfig
+from app.models.notification_template import NotificationTemplate
 
 __all__ = [
     "Base",
@@ -41,4 +42,5 @@ __all__ = [
     "ClassBooking",
     "UserPackage",
     "TenantWebsiteConfig",
+    "NotificationTemplate",
 ]

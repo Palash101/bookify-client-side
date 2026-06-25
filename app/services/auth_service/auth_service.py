@@ -14,7 +14,8 @@ from app.core.security import (
     verify_token,
 )
 from app.core.otp_utils import create_otp, verify_otp_any_purpose
-from app.core.events import publish_event
+from app.core.events.event_types import CLIENT_LOGIN_OTP
+from app.services.event_publish_service import EventPublishService
 from app.core.logging import get_logger
 from app.schemas.user import UserCreate, ProfileUpdate
 from datetime import timedelta, date as date_type
@@ -26,8 +27,8 @@ log = get_logger(__name__)
 
 OTP_EXPIRY_MINUTES = 5
 
-# Email consumer currently handles client.login_otp only (same payload for all OTP flows).
-CLIENT_OTP_EVENT_TYPE = "client.login_otp"
+# Email consumer handles client.login_otp (same payload for all OTP flows).
+CLIENT_OTP_EVENT_TYPE = CLIENT_LOGIN_OTP
 
 CLIENT_OTP_EVENT_TYPES: Dict[str, str] = {
     "login": CLIENT_OTP_EVENT_TYPE,
@@ -226,19 +227,21 @@ class AuthService:
         )
 
         try:
-            message_id = await publish_event(
-                event_type=event_type,
+            published = await EventPublishService.publish(
                 tenant_id=tid_str,
+                event_type=event_type,
                 data=event_data,
                 ordering_key=tid_str,
             )
             log.info(
-                "client_otp_published purpose=%s event_type=%s to_email=%s tenant_id=%s message_id=%s",
+                "client_otp_published purpose=%s event_type=%s to_email=%s tenant_id=%s "
+                "event_id=%s message_id=%s",
                 purpose,
                 event_type,
                 email,
                 tid_str,
-                message_id,
+                published.event_id,
+                published.message_id,
             )
         except Exception as exc:
             log.exception(

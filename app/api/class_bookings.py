@@ -23,6 +23,8 @@ from app.schemas.booking import (
 )
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.bookings_service import BookingsService
+from app.services.notification_service import BookingNotificationService
+from app.services.wallet_notification_service import WalletNotificationService
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
@@ -114,7 +116,7 @@ async def create_class_booking(
     Validate then create a booking. Re-runs validation on submit (do not trust client-only checks).
     """
     tenant_id = current_user.tenant_id
-    booking = BookingsService.create(
+    booking, wallet_debited = BookingsService.create(
         db,
         tenant_id,
         current_user,
@@ -125,6 +127,35 @@ async def create_class_booking(
         body.notes,
         gym_config=gym_config,
     )
+    db.commit()
+    if wallet_debited:
+        await WalletNotificationService.publish_debited(
+            db,
+            tenant_id=tenant_id,
+            user_id=current_user.id,
+        )
+    status = (booking.status or "").strip().lower()
+    if status == "confirmed":
+        await BookingNotificationService.publish_confirmed(
+            db,
+            tenant_id=tenant_id,
+            booking=booking,
+            gym_config=gym_config,
+        )
+    elif status == "pending_payment":
+        await BookingNotificationService.publish_pending_payment(
+            db,
+            tenant_id=tenant_id,
+            booking=booking,
+            gym_config=gym_config,
+        )
+    else:
+        await BookingNotificationService.publish_for_booking(
+            db,
+            tenant_id=tenant_id,
+            booking=booking,
+            gym_config=gym_config,
+        )
     return {
         "success": True,
         "message": "Booking created",
@@ -154,7 +185,7 @@ async def create_waiting_booking(
     max_waitings controls how many waiting bookings are allowed.
     """
     tenant_id = current_user.tenant_id
-    booking = BookingsService.create(
+    booking, wallet_debited = BookingsService.create(
         db,
         tenant_id,
         current_user,
@@ -164,6 +195,19 @@ async def create_waiting_booking(
         body.seat_id,
         body.notes,
         force_waiting=True,
+        gym_config=gym_config,
+    )
+    db.commit()
+    if wallet_debited:
+        await WalletNotificationService.publish_debited(
+            db,
+            tenant_id=tenant_id,
+            user_id=current_user.id,
+        )
+    await BookingNotificationService.publish_waitlist_joined(
+        db,
+        tenant_id=tenant_id,
+        booking=booking,
         gym_config=gym_config,
     )
     return {
@@ -192,7 +236,7 @@ async def cancel_class_booking(
     db: Session = Depends(get_db),
 ):
     tenant_id = current_user.tenant_id
-    booking = BookingsService.cancel(
+    booking, promoted_booking = BookingsService.cancel(
         db=db,
         tenant_id=tenant_id,
         user=current_user,
@@ -201,6 +245,20 @@ async def cancel_class_booking(
         reason=body.reason,
         gym_config=gym_config,
     )
+    db.commit()
+    await BookingNotificationService.publish_cancelled(
+        db,
+        tenant_id=tenant_id,
+        booking=booking,
+        gym_config=gym_config,
+    )
+    if promoted_booking is not None:
+        await BookingNotificationService.publish_waitlist_promoted(
+            db,
+            tenant_id=tenant_id,
+            booking=promoted_booking,
+            gym_config=gym_config,
+        )
     gym_class = db.query(GymClass).filter(GymClass.id == class_id).first()
     return {
         "success": True,

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models.sales import Sale, SALE_WALLET_TXN_KEY, backfill_sale_checkout_metadata
 from app.models.sales_transactions import SalesTransactions
 from app.models.user import User
+from app.models.user_package import UserPackage
 from app.models.wallet_transactions import WalletTransaction
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
@@ -144,6 +145,7 @@ class PaymentSuccessService:
                 sale.provider_numeric_transaction_id = init_wallet.id
                 if user:
                     user.wallet = after
+                debug["wallet_topup_user_id"] = str(init_wallet.user_id)
                 debug["sale_created_from_init_wallet"] = "1"
 
         if sale is None:
@@ -163,12 +165,17 @@ class PaymentSuccessService:
         if is_package_sale and sale.package_id is not None:
             apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
             if st in ("succeeded", "success"):
-                ensure_user_package_for_completed_package_sale(
+                existing_user_package = (
+                    db.query(UserPackage).filter(UserPackage.sale_id == sale.id).first()
+                )
+                user_package = ensure_user_package_for_completed_package_sale(
                     db,
                     sale,
                     created_by=sale.created_by_type or "member",
                     created_by_id=sale.created_by_id or sale.user_id,
                 )
+                if user_package and existing_user_package is None:
+                    debug["package_purchased_id"] = str(sale.package_id)
 
                 # Prefer updating the existing initiation row (created during payment start)
                 # so we don't end up with 2 rows for the same order_id.
