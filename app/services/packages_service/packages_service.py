@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.class_booking import ClassBooking
 from app.models.package import Package
+from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
 from app.models.sales import Sale
 from app.models.user_package import UserPackage
@@ -15,6 +16,58 @@ from app.services.sale_expiry import compute_sale_expires_at
 
 
 class PackagesService:
+    @staticmethod
+    def compute_discounted_purchase_amount(pricing: PackagePricing) -> float:
+        """
+        Final charge for a package pricing row after its linked discount (if any).
+        Discount types: flat/fixed (subtract amount) or percentage/percent (reduce by %).
+        """
+        if pricing.price is None:
+            raise ValueError("Package pricing has no price configured")
+
+        base = float(pricing.price)
+        discount: Optional[PackageDiscount] = pricing.discount
+        if discount is None or discount.value is None:
+            return round(base, 2)
+
+        discount_value = float(discount.value)
+        discount_type = (discount.type or "").strip().lower()
+
+        if discount_type in ("percentage", "percent", "pct"):
+            final = base * (1 - discount_value / 100)
+        else:
+            # flat, fixed, amount, or unknown — subtract fixed value
+            final = base - discount_value
+
+        return round(max(0.0, final), 2)
+
+    _DISCOUNT_METADATA_KEYS = (
+        "discount_id",
+        "discount_type",
+        "discount_value",
+        "original_price",
+        "discount_amount",
+    )
+
+    @staticmethod
+    def discount_metadata_from(meta: Optional[dict[str, Any]]) -> dict[str, Any]:
+        if not meta:
+            return {}
+        return {k: meta[k] for k in PackagesService._DISCOUNT_METADATA_KEYS if k in meta}
+
+    @staticmethod
+    def build_purchase_discount_metadata(pricing: PackagePricing, amount_value: float) -> dict[str, Any]:
+        if pricing.discount is None or pricing.discount.value is None:
+            return {}
+        original_price = float(pricing.price)
+        return {
+            "discount_id": str(pricing.discount.id),
+            "discount_type": pricing.discount.type,
+            "discount_value": float(pricing.discount.value),
+            "original_price": original_price,
+            "discount_amount": round(original_price - amount_value, 2),
+        }
+
     @staticmethod
     def list_packages(
         db: Session,

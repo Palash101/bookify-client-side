@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import ProgrammingError, OperationalError
 import logging
 from uuid import uuid4
@@ -35,6 +35,7 @@ from app.models.wallet_transactions import WalletTransaction
 from app.models.user_package import UserPackage
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
+from app.services.packages_service.packages_service import PackagesService
 from app.services.gym_config_service import GymConfigService
 from app.services.package_notification_service import PackageNotificationService
 from app.services.payment_notification_service import PaymentNotificationService
@@ -129,9 +130,10 @@ async def initiate_package_purchase(
     - **Gateway package:** `sales` + `sales_transactions` (+ `user_packages` when payment succeeds).
     - **Wallet balance package:** `wallet_transactions` (debit) + `sales` + `sales_transactions` + `user_packages`.
     """
-    # Derive amount/currency from selected package pricing
+    # Derive amount/currency from selected package pricing (incl. discount)
     pricing_query = (
         db.query(PackagePricing, Package)
+        .options(joinedload(PackagePricing.discount))
         .join(Package, Package.id == PackagePricing.package_id)
         .filter(
             PackagePricing.id == body.package_pricing_id,
@@ -159,7 +161,8 @@ async def initiate_package_purchase(
             detail=f"Maximum {pricing.persons} person(s) allowed for this pricing. You requested {persons_requested}.",
         )
 
-    amount_value = float(pricing.price)
+    amount_value = PackagesService.compute_discounted_purchase_amount(pricing)
+    discount_meta = PackagesService.build_purchase_discount_metadata(pricing, amount_value)
     currency_code = GymConfigService.get_currency(db, tenant_id)
 
     # --------------------------
@@ -209,6 +212,7 @@ async def initiate_package_purchase(
                 "currency": currency_code,
                 "gateway": "wallet",
                 "status": "succeeded",
+                **discount_meta,
                 SALE_WALLET_TXN_KEY: {
                     "transaction_type": "package_wallet_purchase",
                     "status": "succeeded",
@@ -318,6 +322,7 @@ async def initiate_package_purchase(
             "persons": persons_requested,
             "session_type": pricing.session_type,
             "session_count": pricing.session_count,
+            **discount_meta,
         },
     )
     db.add(txn)
@@ -538,6 +543,7 @@ async def _handle_payment_callback(
                             ),
                             "status": _wallet_status_from_gateway(result.status),
                             "gateway_transaction_id": result.transaction_id,
+                            **PackagesService.discount_metadata_from(meta),
                         },
                     )
                     db.add(order)

@@ -9,8 +9,8 @@ from app.services.trainers_service.trainers_service import TrainersService
 
 router = APIRouter()
 
-# Users must match roles.key.
-TRAINER_ROLE_KEYS = ("trainer",)
+# Users must match roles.key (admin-only staff should also appear as trainers).
+TRAINER_ROLE_KEYS = ("trainer", "admin")
 
 
 @router.get("", response_model=TrainersListResponse)
@@ -26,7 +26,7 @@ async def get_trainers(
     db: Session = Depends(get_db),
 ):
     """
-    List trainer users for this tenant (roles.key = trainer).
+    List trainer users for this tenant (roles.key = trainer or admin).
     Optional search/sort. Requires valid X-Tenant-Key header.
     """
     trainers = TrainersService.list_trainers_by_role_keys(

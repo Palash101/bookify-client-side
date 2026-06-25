@@ -12,6 +12,7 @@ from app.models.user_package import UserPackage
 from app.models.wallet_transactions import WalletTransaction
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
+from app.services.packages_service.packages_service import PackagesService
 from app.services.gym_config_service import GymConfigService
 
 
@@ -69,6 +70,7 @@ class PaymentSuccessService:
                             "gateway": "stripe",
                             "status": "succeeded",
                             "gateway_transaction_id": session_id,
+                            **PackagesService.discount_metadata_from(meta),
                         },
                     )
                     db.add(sale)
