@@ -11,12 +11,6 @@ from app.core.events.event_types import (
     CLIENT_WALLET_TOPUP_FAILED,
 )
 from app.core.events.event_payloads import (
-    DEFAULT_BOOKING_CANCELLED_EVENT_DATA,
-    DEFAULT_BOOKING_CONFIRMED_EVENT_DATA,
-    DEFAULT_BOOKING_PENDING_PAYMENT_EVENT_DATA,
-    DEFAULT_WAITLIST_JOINED_EVENT_DATA,
-    DEFAULT_WALLET_TOPUP_SUCCESS_EVENT_DATA,
-    DEFAULT_WALLET_TOPUP_FAILED_EVENT_DATA,
     build_booking_notification_data,
     build_wallet_notification_data,
 )
@@ -38,12 +32,6 @@ __all__ = [
     "CLIENT_LOGIN_OTP",
     "CLIENT_WALLET_TOPUP_SUCCESS",
     "CLIENT_WALLET_TOPUP_FAILED",
-    "DEFAULT_BOOKING_CANCELLED_EVENT_DATA",
-    "DEFAULT_BOOKING_CONFIRMED_EVENT_DATA",
-    "DEFAULT_BOOKING_PENDING_PAYMENT_EVENT_DATA",
-    "DEFAULT_WAITLIST_JOINED_EVENT_DATA",
-    "DEFAULT_WALLET_TOPUP_SUCCESS_EVENT_DATA",
-    "DEFAULT_WALLET_TOPUP_FAILED_EVENT_DATA",
     "build_booking_notification_data",
     "build_wallet_notification_data",
     "ConsolePublisher",

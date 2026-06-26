@@ -63,19 +63,19 @@ class BookingNotificationService:
     ) -> Optional[PublishedEvent]:
         cfg = gym_config or GymConfigValue()
         if not BookingNotificationService._notification_enabled(cfg, event_type):
-            log.info(
-                "booking_notification_skipped_disabled tenant_id=%s event_type=%s booking_id=%s",
+            log.warning(
+                "booking_notification_gym_setting_off tenant_id=%s event_type=%s booking_id=%s "
+                "(publishing to Pub/Sub anyway; consumer may skip email)",
                 tenant_id,
                 event_type,
                 booking.id,
             )
-            return None
 
-        return await EventPublishService.publish_with_email_template(
-            db,
+        return await EventPublishService.publish(
             tenant_id=tenant_id,
             event_type=event_type,
-            data=build_booking_notification_data(booking, event_type),
+            data=build_booking_notification_data(booking),
+            ordering_key=str(tenant_id),
         )
 
     @staticmethod

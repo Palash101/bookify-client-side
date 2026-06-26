@@ -14,6 +14,7 @@ from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.services.packages_service.packages_service import PackagesService
 from app.services.gym_config_service import GymConfigService
+from app.services.wallet_notification_service import wallet_topup_email_pending
 
 
 class PaymentSuccessService:
@@ -238,6 +239,10 @@ class PaymentSuccessService:
 
                 sale.provider_numeric_transaction_id = st_row.id
 
+        if wallet_topup_email_pending(sale):
+            debug["wallet_topup_wallet_transaction_id"] = str(sale.wallet_transaction_id)
+
+        debug["event_tenant_id"] = str(sale.tenant_id)
         debug["sale_id"] = str(sale.id)
         debug["sale_status"] = str(sale.status)
         return debug

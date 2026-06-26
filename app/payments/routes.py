@@ -39,7 +39,15 @@ from app.services.packages_service.packages_service import PackagesService
 from app.services.gym_config_service import GymConfigService
 from app.services.package_notification_service import PackageNotificationService
 from app.services.payment_notification_service import PaymentNotificationService
-from app.services.wallet_notification_service import WalletNotificationService
+from app.services.wallet_notification_service import (
+    WalletNotificationService,
+    mark_wallet_topup_email_sent,
+    wallet_topup_email_pending,
+)
+from app.services.event_tenant import (
+    event_tenant_id_from_sale,
+    event_tenant_id_from_user_package_id,
+)
 from app.schemas.transactions import SalesTransactionsListResponse
 
 # Use a single, consistent tag name for Swagger ("payments")
@@ -392,13 +400,13 @@ async def initiate_package_purchase(
 @router.get("/success")
 async def payment_success_redirect(session_id: Optional[str] = None):
     """Browser redirect after successful checkout (Stripe, PayPal, etc.)."""
-    return build_payment_success_response(session_id)
+    return await build_payment_success_response(session_id)
 
 
 @router.get("/cancel")
 async def payment_cancel_redirect(session_id: Optional[str] = None):
     """Browser redirect when the user cancels checkout."""
-    return build_payment_cancel_response(session_id)
+    return await build_payment_cancel_response(session_id)
 
 
 @router.get("/callback/{gateway_type}")
@@ -829,27 +837,55 @@ async def _handle_payment_callback(
             db.commit()
 
     if wallet_topup_txn_id is not None:
-        await WalletNotificationService.publish_topup_success(
-            db,
-            tenant_id=tenant_id,
-            wallet_transaction_id=wallet_topup_txn_id,
-        )
+        sale = db.query(Sale).filter(Sale.wallet_transaction_id == wallet_topup_txn_id).first()
+        event_tenant_id = event_tenant_id_from_sale(sale, tenant_id)
+        if sale is not None and not wallet_topup_email_pending(sale):
+            logger.info(
+                "wallet_topup_pubsub_skipped_already_sent tenant_id=%s event_tenant_id=%s wallet_transaction_id=%s",
+                tenant_id,
+                event_tenant_id,
+                wallet_topup_txn_id,
+            )
+        else:
+            published = await WalletNotificationService.publish_topup_success(
+                db,
+                tenant_id=event_tenant_id,
+                wallet_transaction_id=wallet_topup_txn_id,
+            )
+            if published is not None and sale is not None:
+                mark_wallet_topup_email_sent(sale)
+                db.commit()
     if wallet_topup_failed_txn_id is not None:
+        failed_sale = (
+            db.query(Sale)
+            .filter(Sale.wallet_transaction_id == wallet_topup_failed_txn_id)
+            .first()
+        )
         await WalletNotificationService.publish_topup_failed(
             db,
-            tenant_id=tenant_id,
+            tenant_id=event_tenant_id_from_sale(failed_sale, tenant_id),
             wallet_transaction_id=wallet_topup_failed_txn_id,
         )
     if package_purchased_user_package_id is not None:
         await PackageNotificationService.publish_purchased(
             db,
-            tenant_id=tenant_id,
+            tenant_id=event_tenant_id_from_user_package_id(
+                db, package_purchased_user_package_id, tenant_id
+            ),
             user_package_id=package_purchased_user_package_id,
         )
     if payment_failed_sales_transaction_id is not None:
+        failed_st = (
+            db.query(SalesTransactions)
+            .filter(SalesTransactions.id == int(payment_failed_sales_transaction_id))
+            .first()
+        )
+        failed_sale = None
+        if failed_st and failed_st.order_id:
+            failed_sale = db.query(Sale).filter(Sale.id == failed_st.order_id).first()
         await PaymentNotificationService.publish_failed(
             db,
-            tenant_id=tenant_id,
+            tenant_id=event_tenant_id_from_sale(failed_sale, tenant_id),
             sales_transaction_id=payment_failed_sales_transaction_id,
         )
 

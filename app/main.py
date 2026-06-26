@@ -26,6 +26,18 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+async def log_pubsub_startup_config() -> None:
+    mode = "console" if settings.publisher_is_console else "gcp"
+    logger.info(
+        "pubsub_startup mode=%s project=%s topic=%s ordering=%s",
+        mode,
+        settings.GCP_PROJECT_ID or "(none)",
+        settings.PUBSUB_TOPIC_ID,
+        settings.PUBSUB_ENABLE_MESSAGE_ORDERING,
+    )
+
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -154,12 +166,12 @@ async def health_check():
 
 @app.get("/payment/success")
 async def payment_success_legacy(session_id: Optional[str] = None):
-    return build_payment_success_response(session_id)
+    return await build_payment_success_response(session_id)
 
 
 @app.get("/payment/cancel")
 async def payment_cancel_legacy(session_id: Optional[str] = None):
-    return build_payment_cancel_response(session_id)
+    return await build_payment_cancel_response(session_id)
 
 
 if __name__ == "__main__":

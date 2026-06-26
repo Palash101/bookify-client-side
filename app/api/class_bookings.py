@@ -24,10 +24,59 @@ from app.schemas.booking import (
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.bookings_service import BookingsService
 from app.services.notification_service import BookingNotificationService
-from app.services.wallet_notification_service import WalletNotificationService
+from app.core.events.event_types import (
+    CLIENT_BOOKING_CANCELLED,
+    CLIENT_BOOKING_CONFIRMED,
+    CLIENT_BOOKING_PENDING_PAYMENT,
+    CLIENT_BOOKING_WAITLIST_JOINED,
+    CLIENT_BOOKING_WAITLIST_PROMOTED,
+    CLIENT_WALLET_DEBITED,
+)
+from app.services.pubsub_debug import publish_tenant_event_debug
+from app.core.events.event_payloads import (
+    build_booking_notification_data,
+    build_wallet_notification_data,
+)
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
+
+
+async def _publish_booking_event(
+    db: Session,
+    *,
+    tenant_id: str,
+    booking,
+    event_type: str,
+    gym_config: GymConfigValue,
+) -> dict[str, str]:
+    cfg = gym_config or GymConfigValue()
+    if not BookingNotificationService._notification_enabled(cfg, event_type):
+        _log.warning(
+            "booking_gym_notification_off tenant_id=%s event_type=%s booking_id=%s",
+            tenant_id,
+            event_type,
+            booking.id,
+        )
+    return await publish_tenant_event_debug(
+        tenant_id=tenant_id,
+        event_type=event_type,
+        data=build_booking_notification_data(booking),
+    )
+
+
+async def _publish_wallet_debited(
+    *,
+    tenant_id: str,
+    wallet_transaction_id: uuid.UUID,
+) -> dict[str, str]:
+    return await publish_tenant_event_debug(
+        tenant_id=tenant_id,
+        event_type=CLIENT_WALLET_DEBITED,
+        data=build_wallet_notification_data(
+            wallet_transaction_id=str(wallet_transaction_id),
+        ),
+    )
 
 
 @router.get(
@@ -128,34 +177,39 @@ async def create_class_booking(
         gym_config=gym_config,
     )
     db.commit()
+    pubsub: dict[str, dict[str, str]] = {}
     if wallet_txn_id is not None:
-        await WalletNotificationService.publish_debited(
-            db,
+        pubsub["wallet_debited"] = await _publish_wallet_debited(
             tenant_id=tenant_id,
             wallet_transaction_id=wallet_txn_id,
         )
     status = (booking.status or "").strip().lower()
     if status == "confirmed":
-        await BookingNotificationService.publish_confirmed(
+        pubsub["booking"] = await _publish_booking_event(
             db,
             tenant_id=tenant_id,
             booking=booking,
+            event_type=CLIENT_BOOKING_CONFIRMED,
             gym_config=gym_config,
         )
     elif status == "pending_payment":
-        await BookingNotificationService.publish_pending_payment(
+        pubsub["booking"] = await _publish_booking_event(
             db,
             tenant_id=tenant_id,
             booking=booking,
+            event_type=CLIENT_BOOKING_PENDING_PAYMENT,
             gym_config=gym_config,
         )
     else:
-        await BookingNotificationService.publish_for_booking(
-            db,
-            tenant_id=tenant_id,
-            booking=booking,
-            gym_config=gym_config,
-        )
+        event_type = BookingNotificationService.resolve_event_type(booking)
+        if event_type:
+            pubsub["booking"] = await _publish_booking_event(
+                db,
+                tenant_id=tenant_id,
+                booking=booking,
+                event_type=event_type,
+                gym_config=gym_config,
+            )
     return {
         "success": True,
         "message": "Booking created",
@@ -165,6 +219,7 @@ async def create_class_booking(
             waiting_position=booking.waiting_position,
             payment_mode=booking.payment_mode,
             sessions_deducted=int(booking.sessions_deducted or 0),
+            pubsub=pubsub or None,
         ),
     }
 
@@ -198,16 +253,17 @@ async def create_waiting_booking(
         gym_config=gym_config,
     )
     db.commit()
+    pubsub: dict[str, dict[str, str]] = {}
     if wallet_txn_id is not None:
-        await WalletNotificationService.publish_debited(
-            db,
+        pubsub["wallet_debited"] = await _publish_wallet_debited(
             tenant_id=tenant_id,
             wallet_transaction_id=wallet_txn_id,
         )
-    await BookingNotificationService.publish_waitlist_joined(
+    pubsub["booking"] = await _publish_booking_event(
         db,
         tenant_id=tenant_id,
         booking=booking,
+        event_type=CLIENT_BOOKING_WAITLIST_JOINED,
         gym_config=gym_config,
     )
     return {
@@ -219,6 +275,7 @@ async def create_waiting_booking(
             waiting_position=booking.waiting_position,
             payment_mode=booking.payment_mode,
             sessions_deducted=int(booking.sessions_deducted or 0),
+            pubsub=pubsub or None,
         ),
     }
 
@@ -246,17 +303,21 @@ async def cancel_class_booking(
         gym_config=gym_config,
     )
     db.commit()
-    await BookingNotificationService.publish_cancelled(
-        db,
-        tenant_id=tenant_id,
-        booking=booking,
-        gym_config=gym_config,
-    )
+    pubsub: dict[str, dict[str, str]] = {
+        "booking_cancelled": await _publish_booking_event(
+            db,
+            tenant_id=tenant_id,
+            booking=booking,
+            event_type=CLIENT_BOOKING_CANCELLED,
+            gym_config=gym_config,
+        ),
+    }
     if promoted_booking is not None:
-        await BookingNotificationService.publish_waitlist_promoted(
+        pubsub["waitlist_promoted"] = await _publish_booking_event(
             db,
             tenant_id=tenant_id,
             booking=promoted_booking,
+            event_type=CLIENT_BOOKING_WAITLIST_PROMOTED,
             gym_config=gym_config,
         )
     gym_class = db.query(GymClass).filter(GymClass.id == class_id).first()

@@ -54,6 +54,10 @@ class BookingCreatedData(BaseModel):
     waiting_position: Optional[int] = None
     payment_mode: Optional[str] = None
     sessions_deducted: int = 0
+    pubsub: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Pub/Sub publish debug (event_id, message_id, or error)",
+    )
 
 
 class BookingCreateResponse(BaseModel):

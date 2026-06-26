@@ -81,18 +81,20 @@ def resolve_tenant_for_stripe_session(session_id: str) -> Optional[str]:
         factory = get_session_factory(tenant_id)
         db = factory()
         try:
-            if (
-                db.query(Sale.id)
+            sale = (
+                db.query(Sale)
                 .filter(Sale.gateway_transaction_id == session_id)
                 .first()
-            ):
-                return tenant_id
-            if (
-                db.query(SalesTransactions.id)
+            )
+            if sale is not None:
+                return str(sale.tenant_id or tenant_id)
+            st = (
+                db.query(SalesTransactions)
                 .filter(SalesTransactions.gateway_txn_id == session_id)
                 .first()
-            ):
-                return tenant_id
+            )
+            if st is not None:
+                return str(st.tenant_id or tenant_id)
         except (ProgrammingError, OperationalError):
             continue
         finally:

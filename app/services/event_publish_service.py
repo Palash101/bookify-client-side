@@ -93,44 +93,37 @@ class EventPublishService:
         ordering_key: Optional[str] = None,
     ) -> Optional[PublishedEvent]:
         """
-        Publish only when the tenant has an active email template for ``event_type``.
+        Publish tenant events to Pub/Sub (same as OTP).
 
-        Skips silently when no template is configured. Use for booking, wallet, package, etc.
+        Logs a warning when no active email template exists in DB — consumer still
+        receives the event and resolves templates on its side. Template lookup here
+        is advisory only; we do not block publish (that caused silent drops vs OTP).
         """
         templates = EventPublishService.get_active_email_templates(
             db, tenant_id=tenant_id, event_type=event_type
         )
         if not templates:
-            log.info(
-                "event_publish_skipped_no_template tenant_id=%s event_type=%s data=%s",
+            log.warning(
+                "event_publish_no_active_template tenant_id=%s event_type=%s data=%s "
+                "(publishing anyway; consumer may skip email)",
                 tenant_id,
                 event_type,
                 data,
             )
-            return None
 
-        try:
-            result = await EventPublishService.publish(
-                tenant_id=tenant_id,
-                event_type=event_type,
-                data=data,
-                ordering_key=ordering_key,
-            )
-            log.info(
-                "event_published_with_template tenant_id=%s event_type=%s event_id=%s "
-                "template_count=%s message_id=%s",
-                tenant_id,
-                event_type,
-                result.event_id,
-                len(templates),
-                result.message_id,
-            )
-            return result
-        except Exception:
-            log.exception(
-                "event_publish_failed tenant_id=%s event_type=%s data=%s",
-                tenant_id,
-                event_type,
-                data,
-            )
-            return None
+        result = await EventPublishService.publish(
+            tenant_id=tenant_id,
+            event_type=event_type,
+            data=data,
+            ordering_key=ordering_key,
+        )
+        log.info(
+            "event_published_with_template tenant_id=%s event_type=%s event_id=%s "
+            "template_count=%s message_id=%s",
+            tenant_id,
+            event_type,
+            result.event_id,
+            len(templates),
+            result.message_id,
+        )
+        return result

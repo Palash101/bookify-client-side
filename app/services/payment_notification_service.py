@@ -18,11 +18,11 @@ class PaymentNotificationService:
         tenant_id: str,
         sales_transaction_id: Union[int, str],
     ) -> Optional[PublishedEvent]:
-        return await EventPublishService.publish_with_email_template(
-            db,
+        return await EventPublishService.publish(
             tenant_id=tenant_id,
             event_type=CLIENT_PAYMENT_FAILED,
             data=build_payment_notification_data(
                 sales_transaction_id=str(sales_transaction_id),
             ),
+            ordering_key=str(tenant_id),
         )
