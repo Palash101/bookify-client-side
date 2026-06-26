@@ -35,16 +35,20 @@ def _extract_request_domain(request: Request) -> Optional[str]:
     *dialled* (`api.fitnezstudios.com`), not the calling site, so they are only
     used as a last-resort fallback for non-browser callers.
 
-    The port is stripped so lookups match the value stored on
-    `Organization.domain`.
+    The port is preserved so distinct local origins such as `localhost:3000`
+    and `localhost:3001` resolve to different tenants and match the value
+    stored on `Organization.domain`.
     """
     # Preferred: the frontend origin reported by the browser.
     for header in ("origin", "referer"):
         raw = request.headers.get(header)
         if not raw:
             continue
-        host = urlparse(raw).hostname
-        if host:
+        parsed = urlparse(raw)
+        if parsed.hostname:
+            # netloc keeps the port (and strips any userinfo); lowercase for
+            # case-insensitive host matching (ports are digits, unaffected).
+            host = parsed.netloc.split("@")[-1]
             return host.lower()
 
     # Fallback for non-browser callers that don't send Origin/Referer.
@@ -55,9 +59,6 @@ def _extract_request_domain(request: Request) -> Optional[str]:
     host = raw.split(",")[0].strip()
     if not host:
         return None
-    # Strip port if present.
-    if ":" in host:
-        host = host.split(":", 1)[0]
     return host.lower() or None
 
 
