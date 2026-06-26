@@ -29,6 +29,7 @@ class TenantWebsiteConfigData(BaseModel):
     invoice_prefix: Optional[str] = None
     invoice_footer_note: Optional[str] = None
     social_links: Optional[Dict[str, Any]] = None
+    currency: Optional[str] = None
     is_active: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

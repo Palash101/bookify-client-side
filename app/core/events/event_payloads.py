@@ -35,43 +35,43 @@ DEFAULT_BOOKING_PENDING_PAYMENT_EVENT_DATA: dict[str, str] = {
     "booking_id": "9e1ba01d-91d0-42bc-9db6-18ea3171373d",
 }
 
-# user_id 0cb16132-c289-49ee-bfc4-000e89f417a4
+# wallet_transaction_id — test reference
 DEFAULT_WALLET_TOPUP_SUCCESS_EVENT_DATA: dict[str, str] = {
-    "user_id": "0cb16132-c289-49ee-bfc4-000e89f417a4",
+    "wallet_transaction_id": "00000000-0000-0000-0000-000000000001",
 }
 
 DEFAULT_WALLET_TOPUP_FAILED_EVENT_DATA: dict[str, str] = {
-    "user_id": "0cb16132-c289-49ee-bfc4-000e89f417a4",
+    "wallet_transaction_id": "00000000-0000-0000-0000-000000000001",
 }
 
 DEFAULT_WALLET_DEBITED_EVENT_DATA: dict[str, str] = {
-    "user_id": "0cb16132-c289-49ee-bfc4-000e89f417a4",
+    "wallet_transaction_id": "00000000-0000-0000-0000-000000000001",
 }
 
 
 DEFAULT_PACKAGE_PURCHASED_EVENT_DATA: dict[str, str] = {
-    "package_id": "00000000-0000-0000-0000-000000000001",
+    "user_package_id": "00000000-0000-0000-0000-000000000001",
 }
 
 DEFAULT_PACKAGE_PURCHASE_FAILED_EVENT_DATA: dict[str, str] = {
-    "package_id": "00000000-0000-0000-0000-000000000001",
+    "user_package_id": "00000000-0000-0000-0000-000000000001",
 }
 
 DEFAULT_PAYMENT_FAILED_EVENT_DATA: dict[str, str] = {
-    "order_id": "ed9dbd32-fe50-4531-91de-e7cccc7287dd",
+    "sales_transaction_id": "1",
 }
 
 
-def build_wallet_notification_data(*, user_id: str) -> dict[str, str]:
-    return {"user_id": str(user_id)}
+def build_wallet_notification_data(*, wallet_transaction_id: str) -> dict[str, str]:
+    return {"wallet_transaction_id": str(wallet_transaction_id)}
 
 
-def build_package_notification_data(*, package_id: str) -> dict[str, str]:
-    return {"package_id": str(package_id)}
+def build_package_notification_data(*, user_package_id: str) -> dict[str, str]:
+    return {"user_package_id": str(user_package_id)}
 
 
-def build_payment_notification_data(*, order_id: str) -> dict[str, str]:
-    return {"order_id": str(order_id)}
+def build_payment_notification_data(*, sales_transaction_id: str) -> dict[str, str]:
+    return {"sales_transaction_id": str(sales_transaction_id)}
 
 _BOOKING_EMAIL_EVENTS = (
     CLIENT_BOOKING_CREATED,

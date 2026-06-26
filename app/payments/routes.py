@@ -255,7 +255,7 @@ async def initiate_package_purchase(
         db.add(sale_txn)
         db.flush()
         order.provider_numeric_transaction_id = sale_txn.id
-        ensure_user_package_for_completed_package_sale(
+        user_package = ensure_user_package_for_completed_package_sale(
             db,
             order,
             created_by=current_user.user_type or "member",
@@ -267,13 +267,14 @@ async def initiate_package_purchase(
         await WalletNotificationService.publish_debited(
             db,
             tenant_id=tenant_id,
-            user_id=current_user.id,
+            wallet_transaction_id=wallet_txn.id,
         )
-        await PackageNotificationService.publish_purchased(
-            db,
-            tenant_id=tenant_id,
-            package_id=body.package_id,
-        )
+        if user_package is not None:
+            await PackageNotificationService.publish_purchased(
+                db,
+                tenant_id=tenant_id,
+                user_package_id=user_package.id,
+            )
 
         return {
             "order_id": str(order.id),
@@ -370,11 +371,6 @@ async def initiate_package_purchase(
         txn.status = "failed"
         txn.gateway_txn_id = response.transaction_id or txn.gateway_txn_id or ""
         db.commit()
-        await PackageNotificationService.publish_purchase_failed(
-            db,
-            tenant_id=tenant_id,
-            package_id=body.package_id,
-        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=response.error_message or "Payment initiation failed.",
@@ -487,9 +483,8 @@ async def _handle_payment_callback(
     # ----------------------------------------------------------------
     # Persist result to orders + transaction log
     # ----------------------------------------------------------------
-    package_purchased_id = None
-    package_purchase_failed_id = None
-    payment_failed_order_id = None
+    package_purchased_user_package_id = None
+    payment_failed_sales_transaction_id = None
     if result.order_id:
         try:
             order_uuid = UUID(result.order_id)
@@ -578,12 +573,8 @@ async def _handle_payment_callback(
                         created_by=order.created_by_type or "member",
                         created_by_id=order.created_by_id or order.user_id,
                     )
-                    if (
-                        user_package
-                        and existing_user_package is None
-                        and order.package_id is not None
-                    ):
-                        package_purchased_id = order.package_id
+                    if user_package and existing_user_package is None:
+                        package_purchased_user_package_id = user_package.id
 
             # Prefer updating the initiation ("created") row instead of inserting a second one.
             init_pkg_txn = (
@@ -631,13 +622,7 @@ async def _handle_payment_callback(
                     previous_pkg_status not in ("failed", "cancelled", "success", "succeeded")
                 ):
                     if normalized == "cancelled":
-                        payment_failed_order_id = str(order_uuid)
-                    elif normalized == "failed":
-                        pkg_raw = (init_pkg_txn.extra_metadata or {}).get("package_id")
-                        if pkg_raw:
-                            package_purchase_failed_id = pkg_raw
-                        elif order is not None and order.package_id is not None:
-                            package_purchase_failed_id = order.package_id
+                        payment_failed_sales_transaction_id = str(init_pkg_txn.id)
                 db.commit()
             else:
                 txn = SalesTransactions(
@@ -664,20 +649,14 @@ async def _handle_payment_callback(
                 if order is not None:
                     order.provider_numeric_transaction_id = txn.id
                 if normalized == "cancelled":
-                    payment_failed_order_id = str(order_uuid)
-                elif normalized == "failed":
-                    pkg_id = order.package_id if order else (
-                        audit_sale.package_id if audit_sale else None
-                    )
-                    if pkg_id is not None:
-                        package_purchase_failed_id = pkg_id
+                    payment_failed_sales_transaction_id = str(txn.id)
                 db.commit()
 
     # ----------------------------------------------------------------
     # Persist result to wallet transactions (top-ups)
     # ----------------------------------------------------------------
-    wallet_topup_user_id = None
-    wallet_topup_failed_user_id = None
+    wallet_topup_txn_id = None
+    wallet_topup_failed_txn_id = None
     if result.transaction_id:
         wallet_txn = (
             db.query(WalletTransaction)
@@ -769,18 +748,17 @@ async def _handle_payment_callback(
             # Credit user wallet only on success.
             if user and gateway_status == "succeeded":
                 user.wallet = after
-                wallet_topup_user_id = init_wallet_txn.user_id
+                wallet_topup_txn_id = wallet_txn.id
             elif (
                 gateway_status == "cancelled"
                 and previous_wallet_status not in ("failed", "cancelled", "success", "succeeded")
-                and result.order_id
             ):
-                payment_failed_order_id = result.order_id
+                payment_failed_sales_transaction_id = str(init_wallet_txn.id)
             elif (
                 gateway_status == "failed"
                 and previous_wallet_status not in ("failed", "cancelled", "success", "succeeded")
             ):
-                wallet_topup_failed_user_id = init_wallet_txn.user_id
+                wallet_topup_failed_txn_id = wallet_txn.id
 
     if wallet_txn is None and result.order_id:
         try:
@@ -818,54 +796,61 @@ async def _handle_payment_callback(
                     user.wallet = after
                     wallet_txn.balance_before = before
                     wallet_txn.balance_after = after
-                    wallet_topup_user_id = wallet_txn.user_id
+                    wallet_topup_txn_id = wallet_txn.id
             elif (
                 new_status == "cancelled"
                 and previous_status not in ("failed", "cancelled", "succeeded")
                 and wallet_txn.direction == "credit"
                 and wallet_txn.transaction_type == "wallet_add"
-                and result.order_id
             ):
-                payment_failed_order_id = result.order_id
+                st = (
+                    db.query(SalesTransactions)
+                    .filter(
+                        SalesTransactions.gateway_txn_id == result.transaction_id,
+                        SalesTransactions.source == "wallet",
+                    )
+                    .order_by(SalesTransactions.created_at.desc())
+                    .first()
+                )
+                if st is not None:
+                    payment_failed_sales_transaction_id = str(st.id)
+                elif wallet_txn.linked_sale and wallet_txn.linked_sale.provider_numeric_transaction_id:
+                    payment_failed_sales_transaction_id = str(
+                        wallet_txn.linked_sale.provider_numeric_transaction_id
+                    )
             elif (
                 new_status == "failed"
                 and previous_status not in ("failed", "cancelled", "succeeded")
                 and wallet_txn.direction == "credit"
                 and wallet_txn.transaction_type == "wallet_add"
             ):
-                wallet_topup_failed_user_id = wallet_txn.user_id
+                wallet_topup_failed_txn_id = wallet_txn.id
 
             db.commit()
 
-    if wallet_topup_user_id is not None:
+    if wallet_topup_txn_id is not None:
         await WalletNotificationService.publish_topup_success(
             db,
             tenant_id=tenant_id,
-            user_id=wallet_topup_user_id,
+            wallet_transaction_id=wallet_topup_txn_id,
         )
-    if wallet_topup_failed_user_id is not None:
+    if wallet_topup_failed_txn_id is not None:
         await WalletNotificationService.publish_topup_failed(
             db,
             tenant_id=tenant_id,
-            user_id=wallet_topup_failed_user_id,
+            wallet_transaction_id=wallet_topup_failed_txn_id,
         )
-    if package_purchased_id is not None:
+    if package_purchased_user_package_id is not None:
         await PackageNotificationService.publish_purchased(
             db,
             tenant_id=tenant_id,
-            package_id=package_purchased_id,
+            user_package_id=package_purchased_user_package_id,
         )
-    if package_purchase_failed_id is not None:
-        await PackageNotificationService.publish_purchase_failed(
-            db,
-            tenant_id=tenant_id,
-            package_id=package_purchase_failed_id,
-        )
-    if payment_failed_order_id is not None:
+    if payment_failed_sales_transaction_id is not None:
         await PaymentNotificationService.publish_failed(
             db,
             tenant_id=tenant_id,
-            order_id=payment_failed_order_id,
+            sales_transaction_id=payment_failed_sales_transaction_id,
         )
 
     return {

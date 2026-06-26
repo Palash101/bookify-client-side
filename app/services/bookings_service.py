@@ -1081,7 +1081,7 @@ class BookingsService:
         notes: Optional[str],
         force_waiting: bool = False,
         gym_config: Optional[GymConfigValue] = None,
-    ) -> Tuple[ClassBooking, bool]:
+    ) -> Tuple[ClassBooking, Optional[UUID]]:
         outcome = BookingsService.validate(
             db,
             tenant_id,
@@ -1216,7 +1216,7 @@ class BookingsService:
                 )
 
         db.refresh(booking)
-        return booking, wallet_txn_id is not None
+        return booking, wallet_txn_id
 
     @staticmethod
     def cancel(

@@ -23,7 +23,6 @@ from app.models.sales_transactions import SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
 from app.models.package import Package
-from app.services.wallet_notification_service import WalletNotificationService
 
 
 router = APIRouter(tags=["wallet"])
@@ -100,11 +99,6 @@ async def add_wallet_balance(
     if not response.success:
         init_txn.status = "failed"
         db.commit()
-        await WalletNotificationService.publish_topup_failed(
-            db,
-            tenant_id=str(tenant_id),
-            user_id=current_user.id,
-        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=response.error_message or "Payment initiation failed.",

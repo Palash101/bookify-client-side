@@ -59,22 +59,22 @@ def build_payment_success_response(session_id: Optional[str]) -> JSONResponse:
             db.rollback()
             return _respond(error=debug["error"], **debug)
         db.commit()
-        topup_user_id = debug.get("wallet_topup_user_id")
-        if topup_user_id:
+        topup_wallet_txn_id = debug.get("wallet_topup_wallet_transaction_id")
+        if topup_wallet_txn_id:
             asyncio.run(
                 WalletNotificationService.publish_topup_success(
                     db,
                     tenant_id=tenant_id,
-                    user_id=topup_user_id,
+                    wallet_transaction_id=topup_wallet_txn_id,
                 )
             )
-        package_purchased_id = debug.get("package_purchased_id")
-        if package_purchased_id:
+        package_purchased_user_package_id = debug.get("package_purchased_user_package_id")
+        if package_purchased_user_package_id:
             asyncio.run(
                 PackageNotificationService.publish_purchased(
                     db,
                     tenant_id=tenant_id,
-                    package_id=package_purchased_id,
+                    user_package_id=package_purchased_user_package_id,
                 )
             )
         return _respond(**debug)
@@ -110,7 +110,7 @@ def build_payment_cancel_response(session_id: Optional[str]) -> dict:
     db = get_session_factory(tenant_id)()
     try:
         debug = PaymentCancelService.handle(db, session_id)
-        if debug.get("error") and "payment_failed_order_id" not in debug:
+        if debug.get("error") and "payment_failed_sales_transaction_id" not in debug:
             db.rollback()
             return {
                 "success": False,
@@ -118,13 +118,13 @@ def build_payment_cancel_response(session_id: Optional[str]) -> dict:
                 **debug,
             }
         db.commit()
-        payment_failed_order_id = debug.get("payment_failed_order_id")
-        if payment_failed_order_id:
+        payment_failed_sales_transaction_id = debug.get("payment_failed_sales_transaction_id")
+        if payment_failed_sales_transaction_id:
             asyncio.run(
                 PaymentNotificationService.publish_failed(
                     db,
                     tenant_id=tenant_id,
-                    order_id=payment_failed_order_id,
+                    sales_transaction_id=payment_failed_sales_transaction_id,
                 )
             )
         return {

@@ -116,7 +116,7 @@ async def create_class_booking(
     Validate then create a booking. Re-runs validation on submit (do not trust client-only checks).
     """
     tenant_id = current_user.tenant_id
-    booking, wallet_debited = BookingsService.create(
+    booking, wallet_txn_id = BookingsService.create(
         db,
         tenant_id,
         current_user,
@@ -128,11 +128,11 @@ async def create_class_booking(
         gym_config=gym_config,
     )
     db.commit()
-    if wallet_debited:
+    if wallet_txn_id is not None:
         await WalletNotificationService.publish_debited(
             db,
             tenant_id=tenant_id,
-            user_id=current_user.id,
+            wallet_transaction_id=wallet_txn_id,
         )
     status = (booking.status or "").strip().lower()
     if status == "confirmed":
@@ -185,7 +185,7 @@ async def create_waiting_booking(
     max_waitings controls how many waiting bookings are allowed.
     """
     tenant_id = current_user.tenant_id
-    booking, wallet_debited = BookingsService.create(
+    booking, wallet_txn_id = BookingsService.create(
         db,
         tenant_id,
         current_user,
@@ -198,11 +198,11 @@ async def create_waiting_booking(
         gym_config=gym_config,
     )
     db.commit()
-    if wallet_debited:
+    if wallet_txn_id is not None:
         await WalletNotificationService.publish_debited(
             db,
             tenant_id=tenant_id,
-            user_id=current_user.id,
+            wallet_transaction_id=wallet_txn_id,
         )
     await BookingNotificationService.publish_waitlist_joined(
         db,

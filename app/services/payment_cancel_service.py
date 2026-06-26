@@ -14,7 +14,7 @@ class PaymentCancelService:
     def handle(db: Session, session_id: str) -> dict[str, str]:
         """
         Mark initiation row as cancelled when the user abandons checkout.
-        Returns ``payment_failed_order_id`` only on the first failed/cancel transition.
+        Returns ``payment_failed_sales_transaction_id`` only on the first cancel transition.
         """
         debug: dict[str, str] = {"session_id": session_id}
 
@@ -38,7 +38,19 @@ class PaymentCancelService:
             debug["order_id"] = str(sale.id)
             if previous not in _TERMINAL_TXN_STATUSES:
                 sale.status = "cancelled"
-                debug["payment_failed_order_id"] = str(sale.id)
+                if sale.provider_numeric_transaction_id is not None:
+                    debug["payment_failed_sales_transaction_id"] = str(
+                        sale.provider_numeric_transaction_id
+                    )
+                else:
+                    st = (
+                        db.query(SalesTransactions)
+                        .filter(SalesTransactions.order_id == sale.id)
+                        .order_by(SalesTransactions.created_at.desc())
+                        .first()
+                    )
+                    if st is not None:
+                        debug["payment_failed_sales_transaction_id"] = str(st.id)
             return debug
 
         previous = (init_txn.status or "").lower()
@@ -53,7 +65,6 @@ class PaymentCancelService:
             meta["resolved_by"] = "cancel_redirect"
             meta["last_event"] = "cancel_redirect"
             init_txn.extra_metadata = meta
-            if order_id:
-                debug["payment_failed_order_id"] = str(order_id)
+            debug["payment_failed_sales_transaction_id"] = str(init_txn.id)
 
         return debug

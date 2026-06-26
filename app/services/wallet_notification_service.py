@@ -21,13 +21,15 @@ class WalletNotificationService:
         db: Session,
         *,
         tenant_id: str,
-        user_id: Union[UUID, str],
+        wallet_transaction_id: Union[UUID, str],
     ) -> Optional[PublishedEvent]:
         return await EventPublishService.publish_with_email_template(
             db,
             tenant_id=tenant_id,
             event_type=CLIENT_WALLET_TOPUP_SUCCESS,
-            data=build_wallet_notification_data(user_id=str(user_id)),
+            data=build_wallet_notification_data(
+                wallet_transaction_id=str(wallet_transaction_id),
+            ),
         )
 
     @staticmethod
@@ -35,13 +37,15 @@ class WalletNotificationService:
         db: Session,
         *,
         tenant_id: str,
-        user_id: Union[UUID, str],
+        wallet_transaction_id: Union[UUID, str],
     ) -> Optional[PublishedEvent]:
         return await EventPublishService.publish_with_email_template(
             db,
             tenant_id=tenant_id,
             event_type=CLIENT_WALLET_TOPUP_FAILED,
-            data=build_wallet_notification_data(user_id=str(user_id)),
+            data=build_wallet_notification_data(
+                wallet_transaction_id=str(wallet_transaction_id),
+            ),
         )
 
     @staticmethod
@@ -49,11 +53,13 @@ class WalletNotificationService:
         db: Session,
         *,
         tenant_id: str,
-        user_id: Union[UUID, str],
+        wallet_transaction_id: Union[UUID, str],
     ) -> Optional[PublishedEvent]:
         return await EventPublishService.publish_with_email_template(
             db,
             tenant_id=tenant_id,
             event_type=CLIENT_WALLET_DEBITED,
-            data=build_wallet_notification_data(user_id=str(user_id)),
+            data=build_wallet_notification_data(
+                wallet_transaction_id=str(wallet_transaction_id),
+            ),
         )

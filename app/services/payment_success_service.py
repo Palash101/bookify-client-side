@@ -147,7 +147,7 @@ class PaymentSuccessService:
                 sale.provider_numeric_transaction_id = init_wallet.id
                 if user:
                     user.wallet = after
-                debug["wallet_topup_user_id"] = str(init_wallet.user_id)
+                debug["wallet_topup_wallet_transaction_id"] = str(wtxn.id)
                 debug["sale_created_from_init_wallet"] = "1"
 
         if sale is None:
@@ -177,7 +177,7 @@ class PaymentSuccessService:
                     created_by_id=sale.created_by_id or sale.user_id,
                 )
                 if user_package and existing_user_package is None:
-                    debug["package_purchased_id"] = str(sale.package_id)
+                    debug["package_purchased_user_package_id"] = str(user_package.id)
 
                 # Prefer updating the existing initiation row (created during payment start)
                 # so we don't end up with 2 rows for the same order_id.

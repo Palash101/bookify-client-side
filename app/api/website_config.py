@@ -7,6 +7,7 @@ from app.schemas.tenant_website_config import (
     TenantWebsiteConfigResponse,
 )
 from app.services.tenant_website_config_service import TenantWebsiteConfigService
+from app.services.gym_config_service import GymConfigService
 
 router = APIRouter()
 
@@ -30,5 +31,7 @@ async def get_website_config(
     return {
         "success": True,
         "message": "Website configuration fetched successfully",
-        "data": TenantWebsiteConfigData.model_validate(row),
+        "data": TenantWebsiteConfigData.model_validate(row).model_copy(
+            update={"currency": GymConfigService.get_currency(db, tenant_id)}
+        ),
     }
