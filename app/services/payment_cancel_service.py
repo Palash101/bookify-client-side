@@ -36,7 +36,6 @@ class PaymentCancelService:
 
             previous = (sale.status or "").lower()
             debug["order_id"] = str(sale.id)
-            debug["event_tenant_id"] = str(sale.tenant_id)
             if previous not in _TERMINAL_TXN_STATUSES:
                 sale.status = "cancelled"
                 if sale.provider_numeric_transaction_id is not None:
@@ -57,7 +56,6 @@ class PaymentCancelService:
         previous = (init_txn.status or "").lower()
         meta = dict(init_txn.extra_metadata or {})
         order_id = init_txn.order_id or meta.get("client_order_id")
-        debug["event_tenant_id"] = str(init_txn.tenant_id)
         if order_id:
             debug["order_id"] = str(order_id)
 

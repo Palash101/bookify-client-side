@@ -116,7 +116,7 @@ class Token(BaseModel):
     access_token: str
     refresh_token: Optional[str] = None
     token_type: str
-    user: Optional[User] = None  # Logged-in user details (after verify-otp)
+    user: Optional[UserMeResponse] = None  # Logged-in user details (after verify-otp)
 
 
 class TokenData(BaseModel):

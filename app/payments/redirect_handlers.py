@@ -38,7 +38,6 @@ def _pubsub_debug_fields(
         debug[f"{prefix}_pubsub_event_type"] = published.event_type
         debug[f"{prefix}_pubsub_event_id"] = published.event_id
         debug[f"{prefix}_pubsub_message_id"] = published.message_id
-        debug[f"{prefix}_pubsub_tenant_id"] = published.tenant_id
 
 
 def payment_redirect_base_url(public_api_base: str) -> str:
@@ -81,7 +80,7 @@ async def build_payment_success_response(session_id: Optional[str]) -> JSONRespo
             db.rollback()
             return _respond(error=debug["error"], **debug)
         db.commit()
-        event_tenant_id = debug.get("event_tenant_id") or tenant_id
+        event_tenant_id = tenant_id
         topup_wallet_txn_id = debug.get("wallet_topup_wallet_transaction_id")
         if topup_wallet_txn_id:
             sale = (
@@ -170,7 +169,7 @@ async def build_payment_cancel_response(session_id: Optional[str]) -> dict:
                 **debug,
             }
         db.commit()
-        event_tenant_id = debug.get("event_tenant_id") or tenant_id
+        event_tenant_id = tenant_id
         payment_failed_sales_transaction_id = debug.get("payment_failed_sales_transaction_id")
         if payment_failed_sales_transaction_id:
             try:

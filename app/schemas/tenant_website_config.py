@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 class TenantWebsiteConfigData(BaseModel):
     id: UUID
-    tenant_id: str
     theme_id: Optional[UUID] = None
     theme_name: Optional[str] = None
     about: Optional[str] = None

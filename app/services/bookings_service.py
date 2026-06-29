@@ -536,15 +536,12 @@ class BookingsService:
         """
         Diagnosis for Swagger / logs when DEBUG=True: why CLASS_NOT_IN_YOUR_GYM etc.
         """
-        booking_tid_s = str(booking_tenant_id)
         # Reuse instance from validate() when it passed tenant filter (avoids duplicate gym_classes SELECT)
         row = outcome.gym_class or db.query(GymClass).filter(GymClass.id == class_id).first()
-        trainer_tid: Optional[str] = None
         trainer_email: Optional[str] = None
         if row and row.trainer_id:
             tu = db.query(User).filter(User.id == row.trainer_id).first()
             if tu:
-                trainer_tid = str(tu.tenant_id)
                 trainer_email = tu.email if isinstance(tu.email, str) else None
         programme: Optional[dict[str, Any]] = None
         pid = 0
@@ -556,24 +553,17 @@ class BookingsService:
         if row and pid != 0:
             fp = db.query(FitnessProgram).filter(FitnessProgram.id == pid).first()
             if fp:
-                fp_tid = str(fp.tenant_id)
                 programme = {
                     "id": fp.id,
-                    "tenant_id": fp_tid,
                     "name": (fp.name[:80] + "…") if fp.name and len(fp.name) > 80 else fp.name,
-                    "matches_booking_tenant": fp_tid == booking_tid_s,
                 }
             else:
                 programme = {"error": "no_fitness_program_row", "training_programme_id": pid}
         elif row:
             programme = {"skipped": "training_programme_id is null or 0"}
 
-        api_tid = str(api_key_tenant_id) if api_key_tenant_id else None
         return {
-            "hint": "booking_tenant_id = JWT user's users.tenant_id; api_key_tenant = gym from X-Tenant-Key.",
-            "booking_tenant_id": booking_tid_s,
-            "api_key_tenant_id": api_tid,
-            "api_key_matches_user_tenant": api_tid == booking_tid_s if api_tid else None,
+            "hint": "Debug context for booking validation (DEBUG=true only).",
             "user": {"id": str(user.id), "email": user.email},
             "class": (
                 None
@@ -590,9 +580,7 @@ class BookingsService:
                 if not row or not row.trainer_id
                 else {
                     "user_id": str(row.trainer_id),
-                    "tenant_id": trainer_tid,
                     "email": trainer_email,
-                    "matches_booking_tenant": trainer_tid == booking_tid_s if trainer_tid else None,
                 }
             ),
             "programme": programme,

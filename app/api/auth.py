@@ -15,6 +15,7 @@ from app.schemas.user import (
     ProfileResponse,
     ProfileUpdate,
     MessageResponse,
+    UserMeResponse,
 )
 from app.models.user import User as UserModel
 from app.dependencies import get_current_tenant_id, get_current_active_user
@@ -150,7 +151,7 @@ async def verify_otp_endpoint(
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "user": user,
+        "user": UserMeResponse.model_validate(user),
     }
 
 

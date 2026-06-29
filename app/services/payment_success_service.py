@@ -242,7 +242,6 @@ class PaymentSuccessService:
         if wallet_topup_email_pending(sale):
             debug["wallet_topup_wallet_transaction_id"] = str(sale.wallet_transaction_id)
 
-        debug["event_tenant_id"] = str(sale.tenant_id)
         debug["sale_id"] = str(sale.id)
         debug["sale_status"] = str(sale.status)
         return debug

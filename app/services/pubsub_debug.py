@@ -27,7 +27,6 @@ def pubsub_result_dict(
         out["event_type"] = published.event_type
         out["event_id"] = published.event_id
         out["message_id"] = published.message_id
-        out["tenant_id"] = published.tenant_id
     return out
 
 
