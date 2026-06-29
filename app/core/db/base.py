@@ -20,6 +20,7 @@ from app.models.wallet_transactions import WalletTransaction
 from app.models.class_booking import ClassBooking
 from app.models.user_package import UserPackage
 from app.models.tenant_website_config import TenantWebsiteConfig
+from app.models.tenant_website_sections import TenantWebsiteSection
 from app.models.notification_template import NotificationTemplate
 from app.models.event_event import EventEvent, EventStatus, EventType
 from app.models.event_enroll import EventEnroll
@@ -44,6 +45,7 @@ __all__ = [
     "ClassBooking",
     "UserPackage",
     "TenantWebsiteConfig",
+    "TenantWebsiteSection",
     "NotificationTemplate",
     "EventEvent",
     "EventStatus",
