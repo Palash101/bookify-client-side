@@ -29,7 +29,7 @@ async def get_website_config(
             detail="Website configuration not found for this organization",
         )
 
-    default_config = TenantWebsiteSectionsService.get_active_default_sections(
+    sections = TenantWebsiteSectionsService.get_active_default_sections(
         db,
         tenant_id=tenant_id,
         theme_id=row.theme_id,
@@ -41,7 +41,7 @@ async def get_website_config(
         "data": TenantWebsiteConfigData.model_validate(row).model_copy(
             update={
                 "currency": GymConfigService.get_currency(db, tenant_id),
-                "default_config": default_config,
+                "sections": sections,
             }
         ),
     }
