@@ -169,6 +169,14 @@ async def initiate_package_purchase(
             detail=f"Maximum {pricing.persons} person(s) allowed for this pricing. You requested {persons_requested}.",
         )
 
+    if package:
+        PackagesService.assert_user_can_purchase_package(
+            db,
+            tenant_id=tenant_id,
+            user_id=current_user.id,
+            package=package,
+        )
+
     amount_value = PackagesService.compute_discounted_purchase_amount(pricing)
     discount_meta = PackagesService.build_purchase_discount_metadata(pricing, amount_value)
     currency_code = GymConfigService.get_currency(db, tenant_id)
@@ -522,36 +530,46 @@ async def _handle_payment_callback(
                     meta = init_txn.extra_metadata or {}
                     pkg_raw = meta.get("package_id")
                     pricing_raw = meta.get("package_pricing_id")
-                    order = Sale(
-                        id=order_uuid,
-                        tenant_id=tenant_id,
-                        user_id=init_txn.user_id,
-                        package_id=UUID(str(pkg_raw)) if pkg_raw else None,
-                        product_item_type="package",
-                        type="gateway",
-                        created_by_type=init_txn.created_by_type,
-                        created_by_id=init_txn.created_by_id,
-                        wallet_transaction_id=None,
-                        amount=init_txn.amount or 0,
-                        extra_metadata={
-                            "persons": meta.get("persons"),
-                            "session_type": meta.get("session_type"),
-                            "session_count": meta.get("session_count"),
-                            "package_pricing_id": str(pricing_raw) if pricing_raw else None,
-                            "currency": init_txn.currency or (result.currency or default_currency),
-                            "gateway": (
-                                result.gateway.value
-                                if hasattr(result.gateway, "value")
-                                else str(result.gateway)
-                            ),
-                            "status": _wallet_status_from_gateway(result.status),
-                            "gateway_transaction_id": result.transaction_id,
-                            **PackagesService.discount_metadata_from(meta),
-                        },
+                    duplicate_one_time = bool(
+                        pkg_raw
+                        and PackagesService.is_one_time_duplicate_purchase(
+                            db,
+                            tenant_id=tenant_id,
+                            user_id=init_txn.user_id,
+                            package_id=UUID(str(pkg_raw)),
+                        )
                     )
-                    db.add(order)
-                    db.flush()
-                    init_txn.order_id = order.id
+                    if not duplicate_one_time:
+                        order = Sale(
+                            id=order_uuid,
+                            tenant_id=tenant_id,
+                            user_id=init_txn.user_id,
+                            package_id=UUID(str(pkg_raw)) if pkg_raw else None,
+                            product_item_type="package",
+                            type="gateway",
+                            created_by_type=init_txn.created_by_type,
+                            created_by_id=init_txn.created_by_id,
+                            wallet_transaction_id=None,
+                            amount=init_txn.amount or 0,
+                            extra_metadata={
+                                "persons": meta.get("persons"),
+                                "session_type": meta.get("session_type"),
+                                "session_count": meta.get("session_count"),
+                                "package_pricing_id": str(pricing_raw) if pricing_raw else None,
+                                "currency": init_txn.currency or (result.currency or default_currency),
+                                "gateway": (
+                                    result.gateway.value
+                                    if hasattr(result.gateway, "value")
+                                    else str(result.gateway)
+                                ),
+                                "status": _wallet_status_from_gateway(result.status),
+                                "gateway_transaction_id": result.transaction_id,
+                                **PackagesService.discount_metadata_from(meta),
+                            },
+                        )
+                        db.add(order)
+                        db.flush()
+                        init_txn.order_id = order.id
 
             audit_sale = order or db.query(Sale).filter(Sale.id == order_uuid).first()
             if audit_sale:
@@ -570,19 +588,28 @@ async def _handle_payment_callback(
                     )
 
                 if (order.status or "").lower() in ("succeeded", "success"):
-                    existing_user_package = (
-                        db.query(UserPackage)
-                        .filter(UserPackage.sale_id == order.id)
-                        .first()
-                    )
-                    user_package = ensure_user_package_for_completed_package_sale(
+                    if order.package_id is not None and PackagesService.is_one_time_duplicate_purchase(
                         db,
-                        order,
-                        created_by=order.created_by_type or "member",
-                        created_by_id=order.created_by_id or order.user_id,
-                    )
-                    if user_package and existing_user_package is None:
-                        package_purchased_user_package_id = user_package.id
+                        tenant_id=tenant_id,
+                        user_id=order.user_id,
+                        package_id=order.package_id,
+                        exclude_sale_id=order.id,
+                    ):
+                        order.status = "failed"
+                    else:
+                        existing_user_package = (
+                            db.query(UserPackage)
+                            .filter(UserPackage.sale_id == order.id)
+                            .first()
+                        )
+                        user_package = ensure_user_package_for_completed_package_sale(
+                            db,
+                            order,
+                            created_by=order.created_by_type or "member",
+                            created_by_id=order.created_by_id or order.user_id,
+                        )
+                        if user_package and existing_user_package is None:
+                            package_purchased_user_package_id = user_package.id
 
             # Prefer updating the initiation ("created") row instead of inserting a second one.
             init_pkg_txn = (

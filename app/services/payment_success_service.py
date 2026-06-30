@@ -50,6 +50,14 @@ class PaymentSuccessService:
                     order_uuid = UUID(str(client_order_id))
                     pkg_raw = meta.get("package_id")
                     pricing_raw = meta.get("package_pricing_id")
+                    if pkg_raw and PackagesService.is_one_time_duplicate_purchase(
+                        db,
+                        tenant_id=init_pkg.tenant_id,
+                        user_id=init_pkg.user_id,
+                        package_id=UUID(str(pkg_raw)),
+                    ):
+                        debug["error"] = "package_already_purchased"
+                        return debug
                     default_currency = GymConfigService.get_currency(db, init_pkg.tenant_id)
                     sale = Sale(
                         id=order_uuid,
@@ -168,6 +176,15 @@ class PaymentSuccessService:
         if is_package_sale and sale.package_id is not None:
             apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
             if st in ("succeeded", "success"):
+                if PackagesService.is_one_time_duplicate_purchase(
+                    db,
+                    tenant_id=sale.tenant_id,
+                    user_id=sale.user_id,
+                    package_id=sale.package_id,
+                    exclude_sale_id=sale.id,
+                ):
+                    debug["error"] = "package_already_purchased"
+                    return debug
                 existing_user_package = (
                     db.query(UserPackage).filter(UserPackage.sale_id == sale.id).first()
                 )

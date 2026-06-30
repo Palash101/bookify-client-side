@@ -56,6 +56,83 @@ class PackagesService:
         return {k: meta[k] for k in PackagesService._DISCOUNT_METADATA_KEYS if k in meta}
 
     @staticmethod
+    def is_one_time_package(package: Package) -> bool:
+        return (package.package_type or "").strip().lower() == "one_time"
+
+    @staticmethod
+    def user_has_succeeded_package_purchase(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: uuid.UUID,
+        package_id: uuid.UUID,
+        exclude_sale_id: Optional[uuid.UUID] = None,
+    ) -> bool:
+        """True if the user already has a successful package sale for this package."""
+        q = db.query(Sale.id).filter(
+            Sale.tenant_id == tenant_id,
+            Sale.user_id == user_id,
+            Sale.package_id == package_id,
+            (
+                Sale.type.in_(["package_gateway", "package_wallet"])
+                | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
+                | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
+            ),
+            Sale.package_id.isnot(None),
+            Sale.status.in_(["succeeded", "success"]),
+        )
+        if exclude_sale_id is not None:
+            q = q.filter(Sale.id != exclude_sale_id)
+        return q.first() is not None
+
+    @staticmethod
+    def assert_user_can_purchase_package(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: uuid.UUID,
+        package: Package,
+    ) -> None:
+        """Raise 400 when a one-time package was already purchased by this user."""
+        if not PackagesService.is_one_time_package(package):
+            return
+        if PackagesService.user_has_succeeded_package_purchase(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            package_id=package.id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You have already purchased this package. It can only be bought once.",
+            )
+
+    @staticmethod
+    def is_one_time_duplicate_purchase(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: uuid.UUID,
+        package_id: uuid.UUID,
+        exclude_sale_id: Optional[uuid.UUID] = None,
+    ) -> bool:
+        """Non-HTTP check used on gateway success/callback to block duplicate one-time entitlements."""
+        package = (
+            db.query(Package)
+            .filter(Package.id == package_id, Package.tenant_id == tenant_id)
+            .first()
+        )
+        if package is None or not PackagesService.is_one_time_package(package):
+            return False
+        return PackagesService.user_has_succeeded_package_purchase(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            package_id=package_id,
+            exclude_sale_id=exclude_sale_id,
+        )
+
+    @staticmethod
     def build_purchase_discount_metadata(pricing: PackagePricing, amount_value: float) -> dict[str, Any]:
         if pricing.discount is None or pricing.discount.value is None:
             return {}
