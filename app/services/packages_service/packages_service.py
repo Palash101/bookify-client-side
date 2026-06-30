@@ -11,6 +11,7 @@ from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
 from app.models.sales import Sale
 from app.models.user_package import UserPackage
+from app.schemas.package import PackageResponse
 from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
 from app.services.sale_expiry import compute_sale_expires_at
 
@@ -131,6 +132,58 @@ class PackagesService:
             package_id=package_id,
             exclude_sale_id=exclude_sale_id,
         )
+
+    @staticmethod
+    def package_catalog_flags(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: Optional[uuid.UUID],
+        package: Package,
+    ) -> dict[str, Optional[bool]]:
+        """Purchase flags for catalog APIs when the caller is authenticated."""
+        if user_id is None:
+            return {"already_purchased": None, "can_purchase": None}
+        already = PackagesService.user_has_succeeded_package_purchase(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            package_id=package.id,
+        )
+        can_purchase = not (PackagesService.is_one_time_package(package) and already)
+        return {"already_purchased": already, "can_purchase": can_purchase}
+
+    @staticmethod
+    def should_show_package_in_catalog(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: Optional[uuid.UUID],
+        package: Package,
+    ) -> bool:
+        """Hide one-time packages the user has already purchased from the catalog list."""
+        if user_id is None:
+            return True
+        flags = PackagesService.package_catalog_flags(
+            db, tenant_id=tenant_id, user_id=user_id, package=package
+        )
+        if PackagesService.is_one_time_package(package) and flags["already_purchased"]:
+            return False
+        return True
+
+    @staticmethod
+    def package_to_response(
+        db: Session,
+        *,
+        tenant_id: str,
+        package: Package,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> PackageResponse:
+        base = PackageResponse.model_validate(package)
+        flags = PackagesService.package_catalog_flags(
+            db, tenant_id=tenant_id, user_id=user_id, package=package
+        )
+        return base.model_copy(update=flags)
 
     @staticmethod
     def build_purchase_discount_metadata(pricing: PackagePricing, amount_value: float) -> dict[str, Any]:

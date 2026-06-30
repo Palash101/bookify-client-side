@@ -47,6 +47,8 @@ class PackageResponse(BaseModel):
     package_type: Optional[str] = None
     booking_restriction: Optional[Any] = None
     pricing_list: List[PackagePricingResponse] = []
+    already_purchased: Optional[bool] = None
+    can_purchase: Optional[bool] = None
 
     class Config:
         from_attributes = True

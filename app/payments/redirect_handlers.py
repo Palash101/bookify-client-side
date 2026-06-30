@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from fastapi.responses import JSONResponse
+
 from app.core.db.session import get_session_factory
 from app.payments.tenant_resolve import resolve_tenant_for_stripe_session
 from app.services.payment_cancel_service import PaymentCancelService
@@ -73,7 +75,10 @@ async def build_payment_success_response(session_id: Optional[str]) -> JSONRespo
     if not tenant_id:
         return _respond(error="unable_to_resolve_tenant", session_id=session_id)
 
-    db = get_session_factory(tenant_id)()
+    try:
+        db = get_session_factory(tenant_id)()
+    except RuntimeError:
+        return _respond(error="unable_to_open_tenant_db", session_id=session_id, tenant_id=tenant_id)
     try:
         debug = PaymentSuccessService.handle(db, session_id)
         if debug.get("error"):

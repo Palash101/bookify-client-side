@@ -16,6 +16,12 @@ bearer_scheme = HTTPBearer(
     auto_error=True
 )
 
+optional_bearer_scheme = HTTPBearer(
+    scheme_name="BearerAuthOptional",
+    description="Optional JWT access token",
+    auto_error=False,
+)
+
 
 def get_db(request: Request) -> Generator:
     """
@@ -79,6 +85,39 @@ async def get_current_active_user(
             detail="Your account is inactive. Please contact support to reactivate your account.",
         )
     return current_user
+
+
+async def get_optional_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Return the logged-in user when a valid Bearer token is sent; otherwise None."""
+    if credentials is None:
+        return None
+
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        return None
+
+    user_id_str: str = payload.get("sub")
+    if user_id_str is None:
+        return None
+
+    try:
+        user_id = UUID(user_id_str)
+    except (ValueError, TypeError):
+        return None
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or user.is_active is False:
+        return None
+
+    tid_claim = payload.get("tenant_id")
+    if tid_claim is not None and str(tid_claim) != str(user.tenant_id):
+        return None
+
+    return user
 
 
 async def get_gym_config_for_active_user(
