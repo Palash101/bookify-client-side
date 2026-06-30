@@ -393,23 +393,13 @@ class BookingsService:
         for booking, gym_class, trainer in rows:
             starts_at = _class_starts_at(gym_class, tz) if gym_class is not None else None
             class_name = None
+            booking_type: Optional[str] = None
             if gym_class is not None:
                 class_name = gym_class.title or gym_class.theme_name
+                booking_type = gym_class.booking_type
             trainer_name: Optional[str] = None
             if trainer:
                 trainer_name = f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() or trainer.email
-
-            if booking.status == WAITING_STATUS:
-                out["waiting"].append(
-                    {
-                        "booking_id": str(booking.id),
-                        "order_id": booking.order_id,
-                        "class_name": class_name,
-                        "status": booking.status,
-                        "waiting_position": booking.waiting_position,
-                    }
-                )
-                continue
 
             cancel_deadline_iso: Optional[str] = None
             can_cancel = False
@@ -434,6 +424,7 @@ class BookingsService:
                 "order_id": booking.order_id,
                 "class_id": str(getattr(gym_class, "id", None) or booking.class_id),
                 "class_name": class_name,
+                "booking_type": booking_type,
                 "status": booking.status,
                 "seat_id": booking.seat_id,
                 "date": gym_class.class_date.isoformat() if gym_class and gym_class.class_date else None,
@@ -445,6 +436,11 @@ class BookingsService:
             }
             if cancelled_at_iso is not None:
                 item["cancelled_at"] = cancelled_at_iso
+
+            if booking.status == WAITING_STATUS:
+                item["waiting_position"] = booking.waiting_position
+                out["waiting"].append(item)
+                continue
 
             if starts_at is not None and starts_at > now:
                 out["upcoming"].append(item)

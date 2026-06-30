@@ -116,8 +116,18 @@ class MemberPastBookingItem(BaseModel):
 class MemberWaitingBookingItem(BaseModel):
     booking_id: str
     order_id: Optional[str] = None
+    class_id: str
     class_name: Optional[str] = None
+    booking_type: Optional[str] = None
     status: str
+    seat_id: Optional[str] = None
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    trainer: Optional[str] = None
+    can_cancel: bool = False
+    cancel_deadline: Optional[str] = None
+    cancelled_at: Optional[str] = None
     waiting_position: Optional[int] = None
 
 
