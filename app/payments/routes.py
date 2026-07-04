@@ -22,6 +22,7 @@ from .redirect_handlers import (
     build_payment_cancel_response,
     build_payment_success_response,
 )
+from .return_urls import normalize_checkout_platform
 from .tenant_resolve import resolve_tenant_for_stripe_webhook
 from app.core.db.session import get_session_factory
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
@@ -111,6 +112,10 @@ class PackagePurchaseRequest(BaseModel):
     payment_gateway: Optional[str] = Field(
         default=None,
         description="Which gateway to use (e.g. 'stripe', 'paypal'). If omitted, tenant default is used.",
+    )
+    platform: Literal["web", "app"] = Field(
+        ...,
+        description="Required. Client that started checkout: 'web' redirects to frontend, 'app' uses deep link.",
     )
 
 
@@ -316,6 +321,7 @@ async def initiate_package_purchase(
     # Create a client-side order UUID for the gateway callback correlation.
     # We will create the Sale + UserPackage only after gateway reports success.
     client_order_id = uuid4()
+    checkout_platform = normalize_checkout_platform(body.platform)
 
     # Log initial transaction event (payment initiated; no Sale yet)
     txn = SalesTransactions(
@@ -339,6 +345,7 @@ async def initiate_package_purchase(
             "persons": persons_requested,
             "session_type": pricing.session_type,
             "session_count": pricing.session_count,
+            "checkout_platform": checkout_platform,
             **discount_meta,
         },
     )
@@ -360,6 +367,7 @@ async def initiate_package_purchase(
             "persons": persons_requested,
             "session_type": pricing.session_type,
             "session_count": pricing.session_count,
+            "checkout_platform": checkout_platform,
         },
     )
 

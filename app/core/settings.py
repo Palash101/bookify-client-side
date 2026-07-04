@@ -78,10 +78,20 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = Field(default="Bookify", env="SMTP_FROM_NAME")
     SMTP_USE_TLS: bool = Field(default=True, env="SMTP_USE_TLS")
     
-    # After Stripe (etc.) hits /payment/success on this server, user is redirected here (mobile deep link).
+    # After Stripe (etc.) hits /payment/success on this server, user is redirected here.
+    # Web: prefer tenant Organization.domain, else this origin + /payment-success|/payment-failed.
+    # App: deep links below.
+    PAYMENT_WEB_ORIGIN: str = Field(
+        default="https://bookify-web-app-fawn.vercel.app",
+        env="PAYMENT_WEB_ORIGIN",
+    )
     PAYMENT_SUCCESS_DEEP_LINK: str = Field(
         default="bookify://payment/success",
         env="PAYMENT_SUCCESS_DEEP_LINK",
+    )
+    PAYMENT_CANCEL_DEEP_LINK: str = Field(
+        default="bookify://payment/cancel",
+        env="PAYMENT_CANCEL_DEEP_LINK",
     )
 
     # Environment

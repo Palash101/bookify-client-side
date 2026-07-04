@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Union
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.core.db.session import get_session_factory
+from app.payments.return_urls import build_client_return_url, normalize_checkout_platform
 from app.payments.tenant_resolve import resolve_tenant_for_stripe_session
 from app.services.payment_cancel_service import PaymentCancelService
 from app.services.payment_success_service import PaymentSuccessService
@@ -22,6 +23,24 @@ from app.models.sales import Sale
 from app.services.event_publish_service import PublishedEvent
 
 logger = logging.getLogger(__name__)
+
+
+def _client_redirect(
+    *,
+    session_id: str,
+    success: bool,
+    payload: dict[str, str],
+    tenant_id: Optional[str] = None,
+) -> RedirectResponse:
+    platform = normalize_checkout_platform(payload.get("checkout_platform"))
+    url = build_client_return_url(
+        platform=platform,
+        session_id=session_id,
+        success=success,
+        tenant_id=tenant_id or payload.get("tenant_id"),
+        extra=payload,
+    )
+    return RedirectResponse(url=url, status_code=302)
 
 
 def _pubsub_debug_fields(
@@ -56,8 +75,10 @@ def payment_success_urls(public_api_base: str) -> dict[str, str]:
     }
 
 
-async def build_payment_success_response(session_id: Optional[str]) -> JSONResponse:
-    def _respond(**payload: Optional[str]) -> JSONResponse:
+async def build_payment_success_response(
+    session_id: Optional[str],
+) -> Union[RedirectResponse, JSONResponse]:
+    def _json(**payload: Optional[str]) -> JSONResponse:
         clean = {k: str(v) for k, v in payload.items() if v is not None and str(v) != ""}
         return JSONResponse(
             status_code=200,
@@ -68,8 +89,21 @@ async def build_payment_success_response(session_id: Optional[str]) -> JSONRespo
             },
         )
 
+    tenant_id: Optional[str] = None
+
+    def _respond(**payload: Optional[str]) -> Union[RedirectResponse, JSONResponse]:
+        clean = {k: str(v) for k, v in payload.items() if v is not None and str(v) != ""}
+        if session_id:
+            return _client_redirect(
+                session_id=session_id,
+                success=True,
+                payload=clean,
+                tenant_id=tenant_id,
+            )
+        return _json(**clean)
+
     if not session_id:
-        return _respond(error="missing_session_id")
+        return _json(error="missing_session_id")
 
     tenant_id = resolve_tenant_for_stripe_session(session_id)
     if not tenant_id:
@@ -78,7 +112,11 @@ async def build_payment_success_response(session_id: Optional[str]) -> JSONRespo
     try:
         db = get_session_factory(tenant_id)()
     except RuntimeError:
-        return _respond(error="unable_to_open_tenant_db", session_id=session_id, tenant_id=tenant_id)
+        return _respond(
+            error="unable_to_open_tenant_db",
+            session_id=session_id,
+            tenant_id=tenant_id,
+        )
     try:
         debug = PaymentSuccessService.handle(db, session_id)
         if debug.get("error"):
@@ -146,33 +184,46 @@ async def build_payment_success_response(session_id: Optional[str]) -> JSONRespo
         db.close()
 
 
-async def build_payment_cancel_response(session_id: Optional[str]) -> dict:
+async def build_payment_cancel_response(
+    session_id: Optional[str],
+) -> Union[RedirectResponse, JSONResponse]:
+    def _json(**payload: Optional[str]) -> JSONResponse:
+        clean = {k: str(v) for k, v in payload.items() if v is not None and str(v) != ""}
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": False,
+                "message": "Payment cancelled redirect received",
+                **clean,
+            },
+        )
+
+    tenant_id: Optional[str] = None
+
+    def _respond(**payload: Optional[str]) -> Union[RedirectResponse, JSONResponse]:
+        clean = {k: str(v) for k, v in payload.items() if v is not None and str(v) != ""}
+        if session_id:
+            return _client_redirect(
+                session_id=session_id,
+                success=False,
+                payload=clean,
+                tenant_id=tenant_id,
+            )
+        return _json(**clean)
+
     if not session_id:
-        return {
-            "success": False,
-            "message": "Payment cancelled redirect received",
-            "error": "missing_session_id",
-        }
+        return _json(error="missing_session_id")
 
     tenant_id = resolve_tenant_for_stripe_session(session_id)
     if not tenant_id:
-        return {
-            "success": False,
-            "message": "Payment cancelled redirect received",
-            "error": "unable_to_resolve_tenant",
-            "session_id": session_id,
-        }
+        return _respond(error="unable_to_resolve_tenant", session_id=session_id)
 
     db = get_session_factory(tenant_id)()
     try:
         debug = PaymentCancelService.handle(db, session_id)
         if debug.get("error") and "payment_failed_sales_transaction_id" not in debug:
             db.rollback()
-            return {
-                "success": False,
-                "message": "Payment cancelled redirect received",
-                **debug,
-            }
+            return _respond(**debug)
         db.commit()
         event_tenant_id = tenant_id
         payment_failed_sales_transaction_id = debug.get("payment_failed_sales_transaction_id")
@@ -191,11 +242,7 @@ async def build_payment_cancel_response(session_id: Optional[str]) -> dict:
                     session_id,
                     event_tenant_id,
                 )
-        return {
-            "success": False,
-            "message": "Payment cancelled redirect received",
-            **debug,
-        }
+        return _respond(**debug)
     except Exception:
         logger.exception(
             "payment_cancel failed (session_id=%s, tenant_id=%s)",
@@ -203,11 +250,6 @@ async def build_payment_cancel_response(session_id: Optional[str]) -> dict:
             tenant_id,
         )
         db.rollback()
-        return {
-            "success": False,
-            "message": "Payment cancelled redirect received",
-            "error": "payment_cancel_failed",
-            "session_id": session_id,
-        }
+        return _respond(error="payment_cancel_failed", session_id=session_id)
     finally:
         db.close()

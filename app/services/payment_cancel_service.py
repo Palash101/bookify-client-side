@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
+from app.payments.return_urls import attach_checkout_platform_debug
 
 _TERMINAL_TXN_STATUSES = frozenset({"cancelled", "failed", "success", "succeeded"})
 
@@ -34,6 +35,7 @@ class PaymentCancelService:
                 debug["error"] = "missing_initiation_sales_transaction"
                 return debug
 
+            attach_checkout_platform_debug(debug, sale.extra_metadata)
             previous = (sale.status or "").lower()
             debug["order_id"] = str(sale.id)
             if previous not in _TERMINAL_TXN_STATUSES:
@@ -55,6 +57,7 @@ class PaymentCancelService:
 
         previous = (init_txn.status or "").lower()
         meta = dict(init_txn.extra_metadata or {})
+        attach_checkout_platform_debug(debug, meta)
         order_id = init_txn.order_id or meta.get("client_order_id")
         if order_id:
             debug["order_id"] = str(order_id)

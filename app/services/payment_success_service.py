@@ -10,6 +10,7 @@ from app.models.sales_transactions import SalesTransactions
 from app.models.user import User
 from app.models.user_package import UserPackage
 from app.models.wallet_transactions import WalletTransaction
+from app.payments.return_urls import attach_checkout_platform_debug
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.services.packages_service.packages_service import PackagesService
@@ -29,6 +30,18 @@ class PaymentSuccessService:
         # 1) Sale lookup by gateway session id
         sale = db.query(Sale).filter(Sale.gateway_transaction_id == session_id).first()
         debug["sale_found_by_session"] = "1" if sale else "0"
+        if sale is not None:
+            attach_checkout_platform_debug(debug, sale.extra_metadata)
+
+        # Prefer platform from initiation row (set when checkout started).
+        init_txn = (
+            db.query(SalesTransactions)
+            .filter(SalesTransactions.gateway_txn_id == session_id)
+            .order_by(SalesTransactions.created_at.desc())
+            .first()
+        )
+        if init_txn is not None:
+            attach_checkout_platform_debug(debug, init_txn.extra_metadata)
 
         # 2) If Sale not present, reconstruct it from initiation SalesTransactions (package)
         if sale is None and session_id.startswith("cs_"):
@@ -45,6 +58,7 @@ class PaymentSuccessService:
             debug["init_pkg_found"] = "1" if init_pkg else "0"
             if init_pkg and init_pkg.user_id and isinstance(init_pkg.extra_metadata, dict):
                 meta = init_pkg.extra_metadata or {}
+                attach_checkout_platform_debug(debug, meta)
                 client_order_id = meta.get("client_order_id")
                 if client_order_id:
                     order_uuid = UUID(str(client_order_id))
@@ -78,6 +92,7 @@ class PaymentSuccessService:
                             "currency": init_pkg.currency or default_currency,
                             "gateway": "stripe",
                             "status": "succeeded",
+                            "checkout_platform": debug.get("checkout_platform", "web"),
                             "gateway_transaction_id": session_id,
                             **PackagesService.discount_metadata_from(meta),
                         },
@@ -101,6 +116,7 @@ class PaymentSuccessService:
             )
             debug["init_wallet_found"] = "1" if init_wallet else "0"
             if init_wallet and init_wallet.user_id:
+                attach_checkout_platform_debug(debug, init_wallet.extra_metadata)
                 user = db.query(User).filter(User.id == init_wallet.user_id).first()
                 before = float(user.wallet or 0) if user else 0.0
                 credited = float(init_wallet.amount or 0)
@@ -137,6 +153,7 @@ class PaymentSuccessService:
                         "gateway": "stripe",
                         "status": "succeeded",
                         "gateway_transaction_id": session_id,
+                        "checkout_platform": debug.get("checkout_platform", "web"),
                         SALE_WALLET_TXN_KEY: {
                             "transaction_type": "wallet_add",
                             "status": "succeeded",

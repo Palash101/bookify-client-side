@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -22,6 +22,7 @@ from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_me
 from app.models.sales_transactions import SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
+from app.payments.return_urls import normalize_checkout_platform
 from app.models.package import Package
 
 
@@ -33,6 +34,10 @@ class AddWalletBalanceRequest(BaseModel):
     payment_gateway: Optional[str] = Field(
         default=None,
         description="Which gateway to use (e.g. 'stripe', 'paypal'). If omitted, tenant default is used.",
+    )
+    platform: Literal["web", "app"] = Field(
+        ...,
+        description="Required. Client that started checkout: 'web' redirects to frontend, 'app' uses deep link.",
     )
 
 
@@ -57,6 +62,7 @@ async def add_wallet_balance(
     # Wallet top-up via gateway: at initiation time we only log sales_transactions.
     # Sale + wallet_transactions will be created on callback/success redirect.
     client_order_id = uuid.uuid4()
+    checkout_platform = normalize_checkout_platform(body.platform)
     init_txn = SalesTransactions(
         order_id=None,
         tenant_id=tenant_id,
@@ -76,6 +82,7 @@ async def add_wallet_balance(
             "purpose": "wallet_add",
             "direction": "credit",
             "balance_before": str(balance_before),
+            "checkout_platform": checkout_platform,
         },
     )
     db.add(init_txn)
@@ -92,6 +99,7 @@ async def add_wallet_balance(
         metadata={
             "user_id": str(current_user.id),
             "purpose": "wallet_add",
+            "checkout_platform": checkout_platform,
         },
     )
 
