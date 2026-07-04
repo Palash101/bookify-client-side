@@ -1,8 +1,9 @@
 from typing import Any, Dict, List, Optional
+from datetime import date, datetime
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import func as sa_func_sql
+from sqlalchemy import func as sa_func_sql, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.class_booking import ClassBooking
@@ -13,7 +14,11 @@ from app.models.sales import Sale
 from app.models.user_package import UserPackage
 from app.schemas.package import PackageResponse
 from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
+from app.services.gym_config_service import GymConfigService
 from app.services.sale_expiry import compute_sale_expires_at
+
+# Admin "published" packages use status=active (draft/block are hidden from clients).
+_CATALOG_STATUS = "active"
 
 
 class PackagesService:
@@ -61,6 +66,35 @@ class PackagesService:
         return (package.package_type or "").strip().lower() == "one_time"
 
     @staticmethod
+    def tenant_today(db: Session, tenant_id: str) -> date:
+        gym_config = GymConfigService.get_gym_config(db, tenant_id)
+        tz = GymConfigService.resolve_zoneinfo(gym_config)
+        return datetime.now(tz).date()
+
+    @staticmethod
+    def is_published_package(package: Package) -> bool:
+        """Published packages are stored as status=active."""
+        return (package.status or "").strip().lower() == _CATALOG_STATUS
+
+    @staticmethod
+    def is_visible_by_date(package: Package, today: date) -> bool:
+        """
+        Visibility date is packages.validity_start.
+        Show only when it has arrived (validity_start <= tenant today).
+        """
+        start = package.validity_start
+        if start is None:
+            return True
+        return start <= today
+
+    @staticmethod
+    def is_package_available_in_catalog(package: Package, today: date) -> bool:
+        return (
+            PackagesService.is_published_package(package)
+            and PackagesService.is_visible_by_date(package, today)
+        )
+
+    @staticmethod
     def user_has_succeeded_package_purchase(
         db: Session,
         *,
@@ -94,7 +128,18 @@ class PackagesService:
         user_id: uuid.UUID,
         package: Package,
     ) -> None:
-        """Raise 400 when a one-time package was already purchased by this user."""
+        """Raise 400 when package is not catalog-visible or one-time already purchased."""
+        today = PackagesService.tenant_today(db, tenant_id)
+        if not PackagesService.is_published_package(package):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This package is not available for purchase.",
+            )
+        if not PackagesService.is_visible_by_date(package, today):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This package is not available for purchase yet.",
+            )
         if not PackagesService.is_one_time_package(package):
             return
         if PackagesService.user_has_succeeded_package_purchase(
@@ -161,7 +206,15 @@ class PackagesService:
         user_id: Optional[uuid.UUID],
         package: Package,
     ) -> bool:
-        """Hide one-time packages the user has already purchased from the catalog list."""
+        """
+        Catalog rules:
+        - only published (status=active) packages
+        - visibility date (validity_start) must be on or before tenant today
+        - hide one-time packages the user has already purchased
+        """
+        today = PackagesService.tenant_today(db, tenant_id)
+        if not PackagesService.is_package_available_in_catalog(package, today):
+            return False
         if user_id is None:
             return True
         flags = PackagesService.package_catalog_flags(
@@ -207,14 +260,23 @@ class PackagesService:
         sort_order: str = "asc",
     ) -> List[Package]:
         """
-        List packages for a tenant with optional search and sorting.
+        List catalog packages for a tenant with optional search and sorting.
+        Only published (active) packages whose visibility date has arrived.
         """
+        today = PackagesService.tenant_today(db, tenant_id)
         query = (
             db.query(Package)
             .options(
                 joinedload(Package.pricing_list).joinedload(PackagePricing.discount)
             )
-            .filter(Package.tenant_id == tenant_id)
+            .filter(
+                Package.tenant_id == tenant_id,
+                Package.status == _CATALOG_STATUS,
+                or_(
+                    Package.validity_start.is_(None),
+                    Package.validity_start <= today,
+                ),
+            )
         )
 
         # Simple text search on name

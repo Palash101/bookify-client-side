@@ -31,8 +31,11 @@ async def get_all_packages(
     db: Session = Depends(get_db),
 ):
     """
-    Get all packages for the current tenant with optional search and sorting.
+    Get catalog packages for the current tenant with optional search and sorting.
     Requires X-Tenant-Key header.
+
+    Only published (status=active) packages whose visibility date (validity_start)
+    is on or before the tenant's current date are returned.
 
     When the caller sends a valid Bearer token, purchased one-time packages are
     omitted from the list and each item includes `already_purchased` / `can_purchase`.
@@ -106,7 +109,8 @@ async def get_package_detail(
     Get single package detail by ID. Package must belong to current tenant.
     Requires X-Tenant-Key header.
 
-    Purchased one-time packages are not returned when the caller is authenticated.
+    Draft/blocked packages, packages not yet visible by date, and purchased
+    one-time packages (when authenticated) are not returned.
     """
     package = PackagesService.get_package_detail(db, tenant_id=tenant_id, package_id=package_id)
     user_id = current_user.id if current_user else None
