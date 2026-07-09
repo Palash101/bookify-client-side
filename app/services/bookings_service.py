@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as time_type, timedelta, timezone as dt_timezone
 from decimal import Decimal
@@ -40,6 +41,80 @@ def _append_bfy_wtxn_note(existing: Optional[str], txn_id: UUID, kind: str) -> s
     return f"{base}\n{tag}"
 
 
+_BFY_WTXN_DEBIT_RE = re.compile(
+    r"__bfy_wtxn:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):debit",
+    re.IGNORECASE,
+)
+
+
+def _wallet_debit_txn_id_from_notes(notes: Optional[str]) -> Optional[UUID]:
+    if not notes:
+        return None
+    match = _BFY_WTXN_DEBIT_RE.search(notes)
+    if not match:
+        return None
+    try:
+        return UUID(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _wallet_refund_already_recorded(notes: Optional[str]) -> bool:
+    return bool(notes and "__bfy_wtxn:" in notes and ":refund" in notes)
+
+
+def _refund_wallet_for_cancelled_booking(
+    db: Session,
+    *,
+    user: User,
+    booking: ClassBooking,
+) -> Optional[UUID]:
+    if (booking.payment_mode or "").strip().lower() != "wallet":
+        return None
+    if _wallet_refund_already_recorded(booking.notes):
+        return None
+
+    debit_id = _wallet_debit_txn_id_from_notes(booking.notes)
+    if debit_id is None:
+        return None
+
+    debit_txn = (
+        db.query(WalletTransaction)
+        .filter(
+            WalletTransaction.id == debit_id,
+            WalletTransaction.user_id == user.id,
+            WalletTransaction.direction == "debit",
+        )
+        .first()
+    )
+    if not debit_txn:
+        return None
+
+    amount = Decimal(str(debit_txn.amount or 0))
+    if amount <= 0:
+        return None
+
+    db.refresh(user)
+    bal_before = Decimal(str(user.wallet or 0))
+    bal_after = bal_before + amount
+    refund_txn = WalletTransaction(
+        user_id=user.id,
+        direction="credit",
+        transaction_id=None,
+        amount=amount,
+        currency=debit_txn.currency,
+        balance_before=bal_before,
+        balance_after=bal_after,
+        created_by=user.user_type or "member",
+        created_by_id=user.id,
+    )
+    db.add(refund_txn)
+    db.flush()
+    user.wallet = bal_after
+    booking.notes = _append_bfy_wtxn_note(booking.notes, refund_txn.id, "refund")
+    return refund_txn.id
+
+
 # Bookings that block the user from booking the same class again
 ACTIVE_USER_BOOKING_STATUSES: Tuple[str, ...] = (
     "confirmed",
@@ -53,6 +128,9 @@ OCCUPYING_SLOT_STATUSES: Tuple[str, ...] = ("confirmed", "pending", "pending_pay
 
 WAITING_STATUS = "waiting"
 CANCELLED_STATUS = "cancelled"
+
+# Wallet is charged upfront for any active booking that reserves the member's spot.
+WALLET_CHARGE_STATUSES: Tuple[str, ...] = ("confirmed", "pending", WAITING_STATUS)
 
 
 def _tenant_tz(
@@ -1141,8 +1219,9 @@ class BookingsService:
 
             if payment_mode == "wallet":
                 price = Decimal(str(gym_class.price or 0))
-                # Charge upfront for confirmed + waiting bookings.
-                if price > 0 and status_str in ("confirmed", WAITING_STATUS):
+                # Charge upfront whenever the booking is created (confirmed, pending, or waitlist).
+                if price > 0 and status_str in WALLET_CHARGE_STATUSES:
+                    db.refresh(user)
                     bal_before = Decimal(str(user.wallet or 0))
                     if bal_before < price:
                         raise HTTPException(
@@ -1300,6 +1379,12 @@ class BookingsService:
             booking.cancelled_at = now
             booking.cancelled_by_user_id = user.id
             booking.cancellation_reason = (reason or "").strip() or None
+
+            _refund_wallet_for_cancelled_booking(
+                db,
+                user=user,
+                booking=booking,
+            )
 
             if previous_status == "confirmed":
                 gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
