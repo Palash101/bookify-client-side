@@ -8,7 +8,7 @@ from typing import Optional, Union
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.core.db.session import get_session_factory
-from app.payments.return_urls import build_client_return_url, normalize_checkout_platform
+from app.payments.return_urls import build_client_return_url, normalize_checkout_platform, web_origin_for_tenant
 from app.payments.tenant_resolve import resolve_tenant_for_stripe_session
 from app.services.payment_cancel_service import PaymentCancelService
 from app.services.payment_success_service import PaymentSuccessService
@@ -212,7 +212,12 @@ async def build_payment_cancel_response(
         return _json(**clean)
 
     if not session_id:
-        return _json(error="missing_session_id")
+        # Stripe/PayPal redirect without session id, or someone opened this URL directly.
+        origin = web_origin_for_tenant(None)
+        return RedirectResponse(
+            url=f"{origin}/payment-failed?status=cancelled&error=missing_session_id",
+            status_code=302,
+        )
 
     tenant_id = resolve_tenant_for_stripe_session(session_id)
     if not tenant_id:
