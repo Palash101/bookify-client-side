@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 import uuid
 
 from sqlalchemy.orm import Session
@@ -7,6 +7,26 @@ from app.models.fitness_program import FitnessProgram
 
 
 class FitnessProgramsService:
+    @staticmethod
+    def program_short_payload(program: Optional[FitnessProgram]) -> dict[str, Any]:
+        if not program:
+            return {
+                "id": 0,
+                "name": None,
+                "show_spots_left": None,
+                "spot_name": None,
+                "spots_left_label": None,
+                "training_mode": None,
+            }
+        return {
+            "id": int(program.id),
+            "name": program.name,
+            "show_spots_left": program.show_spots_left,
+            "spot_name": program.spot_name,
+            "spots_left_label": program.spots_left_label,
+            "training_mode": program.training_mode,
+        }
+
     @staticmethod
     def list_programs(
         db: Session,

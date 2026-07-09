@@ -23,6 +23,7 @@ from fastapi import HTTPException, status
 from app.core.settings import settings
 from app.schemas.booking import PaymentMode
 from app.schemas.gym_config_value import GymConfigValue
+from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 
 logger = logging.getLogger(__name__)
@@ -373,10 +374,18 @@ class BookingsService:
         allow_late = bool(cfg.booking_settings.allow_late_cancellations)
 
         trainer_user = aliased(User)
+        program = aliased(FitnessProgram)
         rows = (
-            db.query(ClassBooking, GymClass, trainer_user)
+            db.query(ClassBooking, GymClass, trainer_user, program)
             .outerjoin(GymClass, ClassBooking.class_id == GymClass.id)
             .outerjoin(trainer_user, GymClass.trainer_id == trainer_user.id)
+            .outerjoin(
+                program,
+                and_(
+                    program.id == GymClass.training_programme_id,
+                    program.tenant_id == tenant_id,
+                ),
+            )
             .filter(
                 ClassBooking.tenant_id == tenant_id,
                 ClassBooking.user_id == user.id,
@@ -390,7 +399,7 @@ class BookingsService:
             "past": [],
             "waiting": [],
         }
-        for booking, gym_class, trainer in rows:
+        for booking, gym_class, trainer, training_program in rows:
             starts_at = _class_starts_at(gym_class, tz) if gym_class is not None else None
             class_name = None
             booking_type: Optional[str] = None
@@ -431,6 +440,7 @@ class BookingsService:
                 "start_time": gym_class.start_time.strftime("%H:%M") if gym_class and gym_class.start_time else None,
                 "end_time": gym_class.end_time.strftime("%H:%M") if gym_class and gym_class.end_time else None,
                 "trainer": trainer_name,
+                "program": FitnessProgramsService.program_short_payload(training_program),
                 "can_cancel": can_cancel,
                 "cancel_deadline": cancel_deadline_iso,
             }

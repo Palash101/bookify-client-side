@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from app.schemas.gym_class import ProgramShortResponse
+
 PaymentMode = Literal["cash", "wallet", "package", "gateway", "free"]
 
 
@@ -91,6 +93,7 @@ class MemberUpcomingBookingItem(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     trainer: Optional[str] = None
+    program: Optional[ProgramShortResponse] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
@@ -108,6 +111,7 @@ class MemberPastBookingItem(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     trainer: Optional[str] = None
+    program: Optional[ProgramShortResponse] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
@@ -125,6 +129,7 @@ class MemberWaitingBookingItem(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     trainer: Optional[str] = None
+    program: Optional[ProgramShortResponse] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None

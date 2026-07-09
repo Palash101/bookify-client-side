@@ -23,9 +23,22 @@ class GymClassBase(BaseModel):
     status: Optional[str] = None
 
 
+class ProgramShortResponse(BaseModel):
+    id: int
+    name: Optional[str] = None
+    show_spots_left: Optional[bool] = None
+    spot_name: Optional[str] = None
+    spots_left_label: Optional[str] = None
+    training_mode: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class GymClassResponse(GymClassBase):
     id: UUID
     training_programme_id: Optional[int] = None
+    program: Optional[ProgramShortResponse] = None
     terms_text: Optional[str] = None
     publish_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -55,14 +68,6 @@ class ClassesListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Class details (single class)
 # ---------------------------------------------------------------------------
-
-class ProgramShortResponse(BaseModel):
-    id: int
-    name: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
 
 class TrainerShortResponse(BaseModel):
     id: str

@@ -11,6 +11,7 @@ from app.models.user import User
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
 from app.services.bookings_service import _effective_capacity
+from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 
 ACTIVE_LAYOUT_SEAT_STATUSES = ("confirmed", "pending", "pending_payment", "waiting")
@@ -353,10 +354,7 @@ class ClassesService:
             "layout_id": gym_class.layout_id,
             "layouts": live_layout,
             "fully_booked": ClassesService.fully_booked_for_class(db, gym_class, live_layout),
-            "program": {
-                "id": int(program.id) if program else 0,
-                "name": program.name if program else None,
-            },
+            "program": FitnessProgramsService.program_short_payload(program),
             "trainer": {
                 "id": str(trainer.id) if trainer else "",
                 "name": f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() if trainer else None,

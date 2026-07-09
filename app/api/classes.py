@@ -11,6 +11,7 @@ from app.schemas.gym_class import (
     ClassDetailsOuterResponse,
 )
 from app.services.classes_service.classes_service import ClassesService
+from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 import uuid
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
@@ -69,10 +70,40 @@ async def get_classes_by_date_for_location(
             full = f"{first or ''} {last or ''}".strip()
             trainer_name_by_id[str(tid)] = full or None
 
+    programme_ids = set()
+    for c in classes:
+        pid = getattr(c, "training_programme_id", None)
+        try:
+            pid_int = int(pid) if pid is not None else 0
+        except (TypeError, ValueError):
+            pid_int = 0
+        if pid_int > 0:
+            programme_ids.add(pid_int)
+
+    program_by_id: dict[int, FitnessProgram] = {}
+    if programme_ids:
+        programs = (
+            db.query(FitnessProgram)
+            .filter(
+                FitnessProgram.tenant_id == tenant_id,
+                FitnessProgram.id.in_(list(programme_ids)),
+            )
+            .all()
+        )
+        program_by_id = {int(p.id): p for p in programs}
+
     data = []
     for c in classes:
         item = GymClassResponse.model_validate(c).model_dump()
         item["trainer_name"] = trainer_name_by_id.get(str(getattr(c, "trainer_id", "")))
+        pid = getattr(c, "training_programme_id", None)
+        try:
+            pid_int = int(pid) if pid is not None else 0
+        except (TypeError, ValueError):
+            pid_int = 0
+        item["program"] = FitnessProgramsService.program_short_payload(
+            program_by_id.get(pid_int) if pid_int > 0 else None
+        )
         live_layout = ClassesService._with_live_layout_status(db, c)
         item["layouts"] = live_layout
         item["fully_booked"] = ClassesService.fully_booked_for_class(db, c, live_layout)
