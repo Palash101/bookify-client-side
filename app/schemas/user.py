@@ -27,7 +27,7 @@ class UserCreate(UserBase):
     phone: Optional[str] = None
     phone_country_code: Optional[str] = None  # e.g., "+974"
     dob: Optional[date] = None
-    gender: Optional[str] = None  # "MALE" or "FEMALE"
+    gender: Optional[str] = None  # "male" or "female"
     password: str
     confirm_password: str
     terms_accepted: bool = False
@@ -45,7 +45,7 @@ class UserCreate(UserBase):
                 "phone": "12345678",
                 "phone_country_code": "+974",
                 "dob": "1990-01-01",
-                "gender": "MALE",
+                "gender": "male",
                 "password": "SecurePassword123",
                 "confirm_password": "SecurePassword123",
                 "terms_accepted": True
@@ -213,7 +213,7 @@ class ProfileUpdate(BaseModel):
                 "last_name": "Doe",
                 "phone": "12345678",
                 "phone_country_code": "+974",
-                "gender": "MALE",
+                "gender": "male",
                 "dob": "1990-01-01",
                 "nationality": "Qatar"
             }

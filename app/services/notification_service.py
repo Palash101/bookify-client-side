@@ -15,7 +15,7 @@ from app.core.events.event_types import (
     CLIENT_BOOKING_WAITLIST_PROMOTED,
 )
 from app.core.logging import get_logger
-from app.models.class_booking import ClassBooking
+from app.models.class_booking import ClassBooking, class_booking_status_value
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.event_publish_service import EventPublishService, PublishedEvent
 
@@ -25,7 +25,7 @@ log = get_logger(__name__)
 class BookingNotificationService:
     @staticmethod
     def resolve_event_type(booking: ClassBooking) -> Optional[str]:
-        status = (booking.status or "").strip().lower()
+        status = class_booking_status_value(booking.status)
         if status == "waiting":
             return CLIENT_BOOKING_WAITLIST_JOINED
         if status == "pending_payment":

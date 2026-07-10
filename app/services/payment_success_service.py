@@ -6,7 +6,10 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.sales import Sale, SALE_WALLET_TXN_KEY, backfill_sale_checkout_metadata
-from app.models.sales_transactions import SalesTransactions
+from app.models.sales_transactions import (
+    SalesTransactionStatus,
+    SalesTransactions,
+)
 from app.models.user import User
 from app.models.user_package import UserPackage
 from app.models.wallet_transactions import WalletTransaction
@@ -165,7 +168,7 @@ class PaymentSuccessService:
                 db.flush()
 
                 init_wallet.order_id = sale.id
-                init_wallet.status = "success"
+                init_wallet.status = SalesTransactionStatus.success
                 m = dict(init_wallet.extra_metadata or {})
                 m.setdefault("event", "created")
                 m["resolved_by"] = "success_redirect"
@@ -235,7 +238,7 @@ class PaymentSuccessService:
                         gateway=sale.gateway or "stripe",
                         gateway_txn_id=session_id,
                         source="package",
-                        status="success",
+                        status=SalesTransactionStatus.success,
                         amount=sale.amount,
                         currency=sale.currency,
                         user_id=sale.user_id,
@@ -247,8 +250,8 @@ class PaymentSuccessService:
                     db.flush()
                 else:
                     st_row.order_id = sale.id
-                    if st_row.status != "success":
-                        st_row.status = "success"
+                    if st_row.status != SalesTransactionStatus.success:
+                        st_row.status = SalesTransactionStatus.success
                     if not st_row.gateway:
                         st_row.gateway = sale.gateway or "stripe"
                     if not st_row.payment_method:

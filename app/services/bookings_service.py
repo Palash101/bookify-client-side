@@ -13,7 +13,13 @@ from sqlalchemy import String as SAString, and_, cast, func, or_
 from sqlalchemy.exc import ProgrammingError, OperationalError
 from sqlalchemy.orm import Session, aliased, attributes
 
-from app.models.class_booking import ClassBooking
+from app.models.class_booking import (
+    ClassBooking,
+    ClassBookingStatus,
+    class_booking_status_value,
+    normalize_class_booking_status,
+)
+from app.models.user import normalize_user_gender
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
 from app.models.sales import Sale
@@ -116,21 +122,29 @@ def _refund_wallet_for_cancelled_booking(
 
 
 # Bookings that block the user from booking the same class again
-ACTIVE_USER_BOOKING_STATUSES: Tuple[str, ...] = (
-    "confirmed",
-    "waiting",
-    "pending",
-    "pending_payment",
+ACTIVE_USER_BOOKING_STATUSES: Tuple[ClassBookingStatus, ...] = (
+    ClassBookingStatus.confirmed,
+    ClassBookingStatus.waiting,
+    ClassBookingStatus.pending,
+    ClassBookingStatus.pending_payment,
 )
 
 # Statuses that hold a regular slot (not waitlist).
-OCCUPYING_SLOT_STATUSES: Tuple[str, ...] = ("confirmed", "pending", "pending_payment")
+OCCUPYING_SLOT_STATUSES: Tuple[ClassBookingStatus, ...] = (
+    ClassBookingStatus.confirmed,
+    ClassBookingStatus.pending,
+    ClassBookingStatus.pending_payment,
+)
 
-WAITING_STATUS = "waiting"
-CANCELLED_STATUS = "cancelled"
+WAITING_STATUS = ClassBookingStatus.waiting
+CANCELLED_STATUS = ClassBookingStatus.cancelled
 
 # Wallet is charged upfront for any active booking that reserves the member's spot.
-WALLET_CHARGE_STATUSES: Tuple[str, ...] = ("confirmed", "pending", WAITING_STATUS)
+WALLET_CHARGE_STATUSES: Tuple[ClassBookingStatus, ...] = (
+    ClassBookingStatus.confirmed,
+    ClassBookingStatus.pending,
+    WAITING_STATUS,
+)
 
 
 def _tenant_tz(
@@ -168,16 +182,8 @@ def _normalize_booking_type(raw: Optional[str]) -> str:
 
 def _normalize_user_gender_for_booking(raw: Optional[Any]) -> Optional[str]:
     """Profiles: male | female only for restriction checks; None if unset/nonstandard."""
-    if raw is None:
-        return None
-    s = str(raw).strip().lower()
-    if not s:
-        return None
-    if s in ("male", "m", "man", "men"):
-        return "male"
-    if s in ("female", "f", "woman", "women"):
-        return "female"
-    return None
+    normalized = normalize_user_gender(raw)
+    return normalized.value if normalized is not None else None
 
 
 def _normalize_class_gender_for_booking(raw: Optional[Any]) -> str:
@@ -370,7 +376,7 @@ def _finalize_booking_validation(outcome: "BookingValidationOutcome", payment_mo
         ps = outcome.proposed_status or ""
         if payment_mode == "gateway" and ps in ("confirmed", "pending"):
             outcome.proceed_to = "payment"
-        elif ps == WAITING_STATUS:
+        elif ps == WAITING_STATUS.value:
             outcome.proceed_to = "waitlist"
         elif ps == "pending_payment":
             outcome.proceed_to = "payment"
@@ -512,7 +518,7 @@ class BookingsService:
                 "class_id": str(getattr(gym_class, "id", None) or booking.class_id),
                 "class_name": class_name,
                 "booking_type": booking_type,
-                "status": booking.status,
+                "status": class_booking_status_value(booking.status),
                 "seat_id": booking.seat_id,
                 "date": gym_class.class_date.isoformat() if gym_class and gym_class.class_date else None,
                 "start_time": gym_class.start_time.strftime("%H:%M") if gym_class and gym_class.start_time else None,
@@ -562,17 +568,26 @@ class BookingsService:
             return None
 
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
-        target_status = "confirmed" if cfg.booking_settings.auto_confirm_booking else "pending"
+        target_status = (
+            ClassBookingStatus.confirmed
+            if cfg.booking_settings.auto_confirm_booking
+            else ClassBookingStatus.pending
+        )
         promoted_status = target_status
 
         # Gateway booking should go to payment step after promotion.
-        if waiting_booking.payment_mode == "gateway" and target_status in ("confirmed", "pending"):
-            promoted_status = "pending_payment"
+        if waiting_booking.payment_mode == "gateway" and target_status in (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+        ):
+            promoted_status = ClassBookingStatus.pending_payment
+        else:
+            promoted_status = target_status
 
         waiting_booking.status = promoted_status
         waiting_booking.waiting_position = None
         waiting_booking.promoted_from_waiting_at = now
-        if promoted_status == "confirmed":
+        if promoted_status == ClassBookingStatus.confirmed:
             waiting_booking.confirmed_at = now
             gym_class.booking_counts = int(gym_class.booking_counts or 0) + 1
         return waiting_booking
@@ -1133,9 +1148,9 @@ class BookingsService:
                 else:
                     proposed = "confirmed" if config.booking_settings.auto_confirm_booking else "pending"
             else:
-                proposed = WAITING_STATUS
+                proposed = WAITING_STATUS.value
             outcome.proposed_status = proposed
-            if proposed == WAITING_STATUS:
+            if proposed == WAITING_STATUS.value:
                 outcome.waiting_position = waiting_n + 1
 
         _finalize_booking_validation(outcome, pm)
@@ -1172,7 +1187,7 @@ class BookingsService:
                         msg = v["message"]
                         break
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
-        if force_waiting and outcome.proposed_status != WAITING_STATUS:
+        if force_waiting and outcome.proposed_status != WAITING_STATUS.value:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Class has available slot; use regular booking API.",
@@ -1249,15 +1264,16 @@ class BookingsService:
                     wallet_txn_id = txn.id
                     user.wallet = bal_after
 
+            booking_status = normalize_class_booking_status(status_str)
             booking = ClassBooking(
                 tenant_id=tenant_id,
                 user_id=user.id,
                 class_id=class_id,
                 seat_id=_normalize_seat_label(seat_id),
-                status=status_str,
-                waiting_position=outcome.waiting_position if status_str == WAITING_STATUS else None,
+                status=booking_status,
+                waiting_position=outcome.waiting_position if booking_status == WAITING_STATUS else None,
                 booked_at=now,
-                confirmed_at=now if status_str == "confirmed" else None,
+                confirmed_at=now if booking_status == ClassBookingStatus.confirmed else None,
                 payment_mode=payment_mode,
                 user_package_purchase_id=sale_id,
                 sessions_deducted=sessions_deducted,
@@ -1273,10 +1289,10 @@ class BookingsService:
 
             has_layout = _class_has_layout(gym_class)
             seat_label = _normalize_seat_label(seat_id)
-            if has_layout and seat_label and status_str in OCCUPYING_SLOT_STATUSES:
+            if has_layout and seat_label and booking_status in OCCUPYING_SLOT_STATUSES:
                 _set_layout_seat_status(gym_class, seat_label, "booked")
 
-            if status_str == "confirmed":
+            if booking_status == ClassBookingStatus.confirmed:
                 cap = _effective_capacity(gym_class)
                 current_count = int(gym_class.booking_counts or 0)
                 if cap > 0 and current_count >= cap:
@@ -1314,10 +1330,10 @@ class BookingsService:
         if not booking:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
-        if booking.status in (CANCELLED_STATUS, "completed"):
+        if booking.status in (CANCELLED_STATUS, ClassBookingStatus.completed):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Booking already {booking.status}",
+                detail=f"Booking already {class_booking_status_value(booking.status)}",
             )
 
         gym_class = (
@@ -1386,7 +1402,7 @@ class BookingsService:
                 booking=booking,
             )
 
-            if previous_status == "confirmed":
+            if previous_status == ClassBookingStatus.confirmed:
                 gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
                 promoted_booking = BookingsService._promote_next_waiting(
                     db, tenant_id, gym_class, now, gym_config=cfg

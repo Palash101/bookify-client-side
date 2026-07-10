@@ -5,7 +5,7 @@ from typing import Optional, List, Any
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, func, or_
 
-from app.models.class_booking import ClassBooking
+from app.models.class_booking import ClassBooking, ClassBookingStatus, class_booking_status_value
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.models.fitness_program import FitnessProgram
@@ -14,7 +14,12 @@ from app.services.bookings_service import _effective_capacity
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 
-ACTIVE_LAYOUT_SEAT_STATUSES = ("confirmed", "pending", "pending_payment", "waiting")
+ACTIVE_LAYOUT_SEAT_STATUSES = (
+    ClassBookingStatus.confirmed,
+    ClassBookingStatus.pending,
+    ClassBookingStatus.pending_payment,
+    ClassBookingStatus.waiting,
+)
 
 
 class ClassesService:
@@ -65,7 +70,11 @@ class ClassesService:
         cap = _effective_capacity(gym_class)
         if cap <= 0:
             return False
-        occupying_statuses = ("confirmed", "pending", "pending_payment")
+        occupying_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
         occupying_n = (
             db.query(func.count(ClassBooking.id))
             .filter(
@@ -101,7 +110,7 @@ class ClassesService:
             db.query(func.count(ClassBooking.id))
             .filter(
                 ClassBooking.class_id == gym_class.id,
-                ClassBooking.status == "waiting",
+                ClassBooking.status == ClassBookingStatus.waiting,
             )
             .scalar()
             or 0
@@ -265,7 +274,11 @@ class ClassesService:
         # - total = layouts.totalSeats (if present) else max_bookings (<=0 means unlimited)
         # - booked = active occupying bookings (confirmed/pending/pending_payment)
         total = int(_effective_capacity(gym_class) or 0)
-        occupying_statuses = ("confirmed", "pending", "pending_payment")
+        occupying_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
         occupying_raw = (
             db.query(func.count(ClassBooking.id))
             .filter(
@@ -289,7 +302,7 @@ class ClassesService:
             .filter(
                 ClassBooking.tenant_id == tenant_id,
                 ClassBooking.class_id == class_id,
-                ClassBooking.status == "waiting",
+                ClassBooking.status == ClassBookingStatus.waiting,
             )
             .scalar()
             or 0
@@ -330,7 +343,12 @@ class ClassesService:
         # If there are no layout seats configured, return empty.
 
         # Current user's booking (if any) for this class.
-        active_statuses = ("confirmed", "waiting", "pending", "pending_payment")
+        active_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.waiting,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
         booking = (
             db.query(ClassBooking)
             .filter(
@@ -386,7 +404,7 @@ class ClassesService:
                 "has_booked": booking is not None,
                 "booking_id": str(booking.id) if booking is not None else None,
                 "seat_id": booking.seat_id if booking is not None else None,
-                "status": booking.status if booking is not None else None,
+                "status": class_booking_status_value(booking.status) if booking is not None else None,
                 "waiting_position": booking.waiting_position if booking is not None else None,
                 "payment_mode": booking.payment_mode if booking is not None else None,
                 "package_id": (

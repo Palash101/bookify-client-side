@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
-from app.models.user import User
+from app.models.user import User, normalize_user_gender, user_gender_value
 from app.models.role import Role
 from app.core.security import (
     verify_password,
@@ -131,7 +131,11 @@ class AuthService:
             "first_name": user_data.first_name,
             "last_name": user_data.last_name,
             "phone": phone_number,
-            "gender": user_data.gender,
+            "gender": (
+                normalize_user_gender(user_data.gender).value
+                if normalize_user_gender(user_data.gender) is not None
+                else None
+            ),
             "dob": str(user_data.dob) if user_data.dob else None,
             "skills": None,
             "tenant_id": str(tenant_id),
@@ -450,7 +454,7 @@ class AuthService:
             first_name=cached_user_data["first_name"],
             last_name=cached_user_data["last_name"],
             phone=cached_user_data.get("phone"),
-            gender=cached_user_data.get("gender"),
+            gender=normalize_user_gender(cached_user_data.get("gender")),
             dob=dob,
             skills=cached_user_data.get("skills"),
             is_active=True,

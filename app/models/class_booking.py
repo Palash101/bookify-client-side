@@ -1,17 +1,61 @@
+import enum
+from typing import Any, Optional
+
 from sqlalchemy import (
     Column,
-    String,
-    Integer,
-    Text,
-    ForeignKey,
     DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from app.core.db.session import Base
 import uuid
-from typing import Optional
+
+
+class ClassBookingStatus(str, enum.Enum):
+    confirmed = "confirmed"
+    cancelled = "cancelled"
+    waiting = "waiting"
+    pending = "pending"
+    pending_payment = "pending_payment"
+    completed = "completed"
+
+
+TERMINAL_CLASS_BOOKING_STATUSES = frozenset(
+    {
+        ClassBookingStatus.cancelled,
+        ClassBookingStatus.completed,
+    }
+)
+
+
+def class_booking_status_value(status: Any) -> str:
+    if status is None:
+        return ""
+    if isinstance(status, ClassBookingStatus):
+        return status.value
+    return str(status).strip().lower()
+
+
+def normalize_class_booking_status(value: Any) -> ClassBookingStatus:
+    if isinstance(value, ClassBookingStatus):
+        return value
+    raw = value.value if hasattr(value, "value") else str(value)
+    mapping = {
+        "confirmed": ClassBookingStatus.confirmed,
+        "cancelled": ClassBookingStatus.cancelled,
+        "canceled": ClassBookingStatus.cancelled,
+        "waiting": ClassBookingStatus.waiting,
+        "pending": ClassBookingStatus.pending,
+        "pending_payment": ClassBookingStatus.pending_payment,
+        "completed": ClassBookingStatus.completed,
+    }
+    return mapping.get(raw.strip().lower(), ClassBookingStatus.pending)
 
 
 class ClassBooking(Base):
@@ -25,7 +69,11 @@ class ClassBooking(Base):
 
     seat_id = Column(String(64), nullable=True)
 
-    status = Column(String(20), nullable=False, index=True)
+    status = Column(
+        Enum(ClassBookingStatus, name="class_booking_status_enum", create_type=False),
+        nullable=False,
+        index=True,
+    )
     waiting_position = Column(Integer, nullable=True)
 
     booked_at = Column(DateTime(timezone=True), nullable=True)

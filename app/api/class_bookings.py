@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.db.session import get_db
 from app.core.settings import settings
 from app.dependencies import get_current_active_user, get_gym_config_for_active_user
+from app.models.class_booking import class_booking_status_value
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.schemas.booking import (
@@ -183,7 +184,7 @@ async def create_class_booking(
             tenant_id=tenant_id,
             wallet_transaction_id=wallet_txn_id,
         )
-    status = (booking.status or "").strip().lower()
+    status = class_booking_status_value(booking.status)
     if status == "confirmed":
         pubsub["booking"] = await _publish_booking_event(
             db,
@@ -215,7 +216,7 @@ async def create_class_booking(
         "message": "Booking created",
         "data": BookingCreatedData(
             booking_id=booking.id,
-            status=booking.status,
+            status=class_booking_status_value(booking.status),
             waiting_position=booking.waiting_position,
             payment_mode=booking.payment_mode,
             sessions_deducted=int(booking.sessions_deducted or 0),
@@ -271,7 +272,7 @@ async def create_waiting_booking(
         "message": "Added to waiting list",
         "data": BookingCreatedData(
             booking_id=booking.id,
-            status=booking.status,
+            status=class_booking_status_value(booking.status),
             waiting_position=booking.waiting_position,
             payment_mode=booking.payment_mode,
             sessions_deducted=int(booking.sessions_deducted or 0),
@@ -326,7 +327,7 @@ async def cancel_class_booking(
         "message": "Booking cancelled",
         "data": BookingCancelledData(
             booking_id=booking.id,
-            status=booking.status,
+            status=class_booking_status_value(booking.status),
             cancelled_at=booking.cancelled_at.isoformat() if booking.cancelled_at else None,
             booking_counts=int(gym_class.booking_counts or 0) if gym_class else None,
         ),

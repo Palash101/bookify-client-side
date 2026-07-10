@@ -31,7 +31,12 @@ from app.models.user import User
 from app.models.sales import SALE_WALLET_TXN_KEY, Sale, backfill_sale_checkout_metadata
 from app.models.package_pricing import PackagePricing
 from app.models.package import Package
-from app.models.sales_transactions import SalesTransactions
+from app.models.sales_transactions import (
+    SalesTransactionStatus,
+    SalesTransactions,
+    TERMINAL_SALES_TRANSACTION_STATUSES,
+    sales_transaction_status_from_gateway,
+)
 from app.models.wallet_transactions import WalletTransaction
 from app.models.user_package import UserPackage
 from app.services.sale_expiry import apply_package_expiry_to_sale
@@ -265,7 +270,7 @@ async def initiate_package_purchase(
             gateway="wallet",
             gateway_txn_id=None,
             source="package",
-            status="success",
+            status=SalesTransactionStatus.success,
             amount=amount_value,
             currency=currency_code,
             user_id=current_user.id,
@@ -331,7 +336,7 @@ async def initiate_package_purchase(
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
         source="package",
-        status="pending",
+        status=SalesTransactionStatus.pending,
         amount=amount_value,
         currency=currency_code,
         user_id=current_user.id,
@@ -392,7 +397,7 @@ async def initiate_package_purchase(
 
     if not response.success:
         # Mark initiation log as failed
-        txn.status = "failed"
+        txn.status = SalesTransactionStatus.failed
         txn.gateway_txn_id = response.transaction_id or txn.gateway_txn_id or ""
         db.commit()
         raise HTTPException(
@@ -632,21 +637,14 @@ async def _handle_payment_callback(
                 .first()
             )
 
-            normalized = _wallet_status_from_gateway(result.status)
-            status_value = (
-                "success"
-                if normalized == "succeeded"
-                else "failed"
-                if normalized in ("failed", "cancelled", "reversed")
-                else normalized
-            )
+            status_value = sales_transaction_status_from_gateway(result.status)
             gateway_value = (
                 (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway))
                 or (order.gateway if order else (audit_sale.gateway if audit_sale else ""))
             )
 
             if init_pkg_txn is not None:
-                previous_pkg_status = (init_pkg_txn.status or "").lower()
+                previous_pkg_status = init_pkg_txn.status
                 init_pkg_txn.order_id = order.id if order else order_uuid
                 init_pkg_txn.gateway = gateway_value
                 init_pkg_txn.gateway_txn_id = result.transaction_id or init_pkg_txn.gateway_txn_id or ""
@@ -661,10 +659,8 @@ async def _handle_payment_callback(
                 db.flush()
                 if order is not None:
                     order.provider_numeric_transaction_id = init_pkg_txn.id
-                if (
-                    previous_pkg_status not in ("failed", "cancelled", "success", "succeeded")
-                ):
-                    if normalized == "cancelled":
+                if previous_pkg_status not in TERMINAL_SALES_TRANSACTION_STATUSES:
+                    if status_value == SalesTransactionStatus.cancelled:
                         payment_failed_sales_transaction_id = str(init_pkg_txn.id)
                 db.commit()
             else:
@@ -691,7 +687,7 @@ async def _handle_payment_callback(
                 db.flush()
                 if order is not None:
                     order.provider_numeric_transaction_id = txn.id
-                if normalized == "cancelled":
+                if status_value == SalesTransactionStatus.cancelled:
                     payment_failed_sales_transaction_id = str(txn.id)
                 db.commit()
 
@@ -726,7 +722,7 @@ async def _handle_payment_callback(
             before = float(user.wallet or 0) if user else 0.0
             credited = float(init_wallet_txn.amount or 0)
             after = before + credited
-            previous_wallet_status = (init_wallet_txn.status or "").lower()
+            previous_wallet_status = init_wallet_txn.status
 
             wallet_txn = WalletTransaction(
                 user_id=init_wallet_txn.user_id,
@@ -771,11 +767,7 @@ async def _handle_payment_callback(
 
             # Update the initiation row instead of inserting a second sales_transactions row.
             init_wallet_txn.order_id = sale.id
-            init_wallet_txn.status = (
-                "success"
-                if _wallet_status_from_gateway(result.status) == "succeeded"
-                else "failed"
-            )
+            init_wallet_txn.status = sales_transaction_status_from_gateway(result.status)
             init_wallet_txn.gateway = (
                 result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)
             )
@@ -794,12 +786,12 @@ async def _handle_payment_callback(
                 wallet_topup_txn_id = wallet_txn.id
             elif (
                 gateway_status == "cancelled"
-                and previous_wallet_status not in ("failed", "cancelled", "success", "succeeded")
+                and previous_wallet_status not in TERMINAL_SALES_TRANSACTION_STATUSES
             ):
                 payment_failed_sales_transaction_id = str(init_wallet_txn.id)
             elif (
                 gateway_status == "failed"
-                and previous_wallet_status not in ("failed", "cancelled", "success", "succeeded")
+                and previous_wallet_status not in TERMINAL_SALES_TRANSACTION_STATUSES
             ):
                 wallet_topup_failed_txn_id = wallet_txn.id
 
@@ -1008,7 +1000,7 @@ async def get_sales_transactions(
             "is_package_purchase": is_package_purchase,
             "gateway": st.gateway if st else sale.gateway,
             "gateway_txn_id": st.gateway_txn_id if st else sale.gateway_transaction_id,
-            "status": st.status if st else sale.status,
+            "status": (st.status.value if st else sale.status),
             "amount": st.amount if st is not None and st.amount is not None else sale.amount,
             "currency": st.currency if st is not None and st.currency is not None else sale.currency,
             "package_id": sale.package_id,

@@ -19,7 +19,7 @@ from app.schemas.transactions import (
     PurchasesHistoryDataResponse,
 )
 from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_meta
-from app.models.sales_transactions import SalesTransactions
+from app.models.sales_transactions import SalesTransactionStatus, SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
 from app.payments.return_urls import normalize_checkout_platform
@@ -70,7 +70,7 @@ async def add_wallet_balance(
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
         source="wallet",
-        status="pending",
+        status=SalesTransactionStatus.pending,
         amount=body.amount,
         currency=str(currency_code).upper(),
         user_id=current_user.id,
@@ -105,7 +105,7 @@ async def add_wallet_balance(
 
     response = gateway.create_payment(payment_request)
     if not response.success:
-        init_txn.status = "failed"
+        init_txn.status = SalesTransactionStatus.failed
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
