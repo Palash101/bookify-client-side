@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from typing import Optional, Any, List, Union
 from datetime import date as DateType, time, datetime
 from uuid import UUID
@@ -30,6 +30,10 @@ class ProgramShortResponse(BaseModel):
     spot_name: Optional[str] = None
     spots_left_label: Optional[str] = None
     training_mode: Optional[str] = None
+
+    @field_serializer("show_spots_left")
+    def serialize_show_spots_left(self, value: Optional[bool]) -> Optional[bool]:
+        return True if value is True else None
 
     class Config:
         from_attributes = True

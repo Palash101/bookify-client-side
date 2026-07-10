@@ -8,6 +8,11 @@ from app.models.fitness_program import FitnessProgram
 
 class FitnessProgramsService:
     @staticmethod
+    def normalize_show_spots_left(value: Optional[bool]) -> Optional[bool]:
+        """Only expose true when explicitly enabled; otherwise null (not false)."""
+        return True if value is True else None
+
+    @staticmethod
     def program_short_payload(program: Optional[FitnessProgram]) -> dict[str, Any]:
         if not program:
             return {
@@ -21,7 +26,9 @@ class FitnessProgramsService:
         return {
             "id": int(program.id),
             "name": program.name,
-            "show_spots_left": program.show_spots_left,
+            "show_spots_left": FitnessProgramsService.normalize_show_spots_left(
+                program.show_spots_left
+            ),
             "spot_name": program.spot_name,
             "spots_left_label": program.spots_left_label,
             "training_mode": program.training_mode,

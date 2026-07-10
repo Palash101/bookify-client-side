@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from typing import Optional, List
 
 
@@ -26,6 +26,10 @@ class FitnessProgramResponse(BaseModel):
     training_mode: Optional[str] = None
     gender_restriction: Optional[str] = None
     display_position: Optional[int] = None
+
+    @field_serializer("show_spots_left")
+    def serialize_show_spots_left(self, value: Optional[bool]) -> Optional[bool]:
+        return True if value is True else None
 
     class Config:
         from_attributes = True
