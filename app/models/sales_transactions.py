@@ -18,10 +18,10 @@ from app.core.db.session import Base
 
 
 class SalesTransactionStatus(str, enum.Enum):
-    pending = "Pending"
-    failed = "Failed"
-    success = "Success"
-    cancelled = "Cancelled"
+    pending = "pending"
+    failed = "failed"
+    success = "success"
+    cancelled = "cancelled"
 
 
 TERMINAL_SALES_TRANSACTION_STATUSES = frozenset(
@@ -98,12 +98,7 @@ class SalesTransactions(Base):
     gateway_txn_id = Column(Text, nullable=True, index=True)
 
     status = Column(
-        Enum(
-            SalesTransactionStatus,
-            name="sales_transaction_status",
-            create_type=False,
-            values_callable=lambda enum_cls: [member.value for member in enum_cls],
-        ),
+        Enum(SalesTransactionStatus, name="sales_transaction_status", create_type=False),
         nullable=False,
         server_default=SalesTransactionStatus.pending.value,
     )
