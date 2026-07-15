@@ -30,6 +30,7 @@ class TenantWebsiteConfigData(BaseModel):
     social_links: Optional[Dict[str, Any]] = None
     sections: Optional[Any] = None
     currency: Optional[str] = None
+    timezone: Optional[str] = None
     is_active: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

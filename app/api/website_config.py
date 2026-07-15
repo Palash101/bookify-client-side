@@ -35,13 +35,16 @@ async def get_website_config(
         theme_id=row.theme_id,
     )
 
+    gym_config = GymConfigService.get_gym_config(db, tenant_id)
+
     return {
         "success": True,
         "message": "Website configuration fetched successfully",
         "data": TenantWebsiteConfigData.model_validate(row).model_copy(
             update={
-                "currency": GymConfigService.get_currency(db, tenant_id),
+                "currency": gym_config.resolved_currency(),
                 "sections": sections,
+                "timezone": gym_config.resolved_timezone_name(),
             }
         ),
     }
