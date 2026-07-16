@@ -1018,10 +1018,13 @@ async def get_sales_transactions(
 
 
 @router.get("/gateways")
-async def list_active_gateways(tenant_id: str = Depends(get_tenant_id)):
+async def list_active_gateways(
+    tenant_id: str = Depends(get_tenant_id),
+    current_user: User = Depends(get_current_active_user),
+):
     """
     Return which payment gateways are configured for the current tenant.
-    Useful for apps that want to show multiple payment options
+    Requires authentication. Useful for apps that want to show multiple payment options
     (e.g. Stripe / PayPal) based on tenant setup.
     """
     try:

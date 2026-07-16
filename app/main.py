@@ -71,6 +71,7 @@ def custom_openapi():
         f"{api_prefix}/auth/reset-password",
         f"{api_prefix}/auth/profile",
         f"{api_prefix}/auth/edit-profile",
+        f"{api_prefix}/payment/gateways",
     ]
     
     for path, path_item in openapi_schema.get("paths", {}).items():
