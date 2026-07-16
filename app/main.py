@@ -67,6 +67,7 @@ def custom_openapi():
     api_prefix = settings.API_V1_STR.rstrip("/")
     endpoints_needing_bearer = [
         f"{api_prefix}/auth/verify-otp",
+        f"{api_prefix}/auth/resend-otp",
         f"{api_prefix}/auth/reset-password",
         f"{api_prefix}/auth/profile",
         f"{api_prefix}/auth/edit-profile",

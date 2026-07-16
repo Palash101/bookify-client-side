@@ -13,7 +13,7 @@ from app.core.security import (
     verify_refresh_token,
     verify_token,
 )
-from app.core.otp_utils import create_otp, verify_otp_any_purpose
+from app.core.otp_utils import create_otp, get_otp, verify_otp_any_purpose
 from app.core.events.event_types import CLIENT_LOGIN_OTP
 from app.services.event_publish_service import EventPublishService
 from app.core.logging import get_logger
@@ -327,10 +327,7 @@ class AuthService:
         return email
 
     @staticmethod
-    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[str]]:
-        """
-        Email + tenant_id from Bearer verification JWT (OTP flow).
-        """
+    def _parse_bearer_token(authorization: Optional[str]) -> str:
         if not authorization:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -347,8 +344,34 @@ class AuthService:
                 detail="Invalid authorization header format. Use 'Bearer <token>'",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        return token
+
+    @staticmethod
+    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[str]]:
+        """
+        Email + tenant_id from Bearer verification JWT (OTP flow).
+        """
+        email, otp_tenant_id, _purpose = AuthService.extract_verification_session(
+            authorization
+        )
+        return email, otp_tenant_id
+
+    @staticmethod
+    def extract_verification_session(
+        authorization: Optional[str],
+    ) -> Tuple[str, Optional[str], str]:
+        """
+        Email, tenant_id, and purpose from Bearer verification JWT (OTP flow).
+        """
+        token = AuthService._parse_bearer_token(authorization)
         claims = extract_verification_claims(token)
         if not claims or not claims.get("email"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification token",
+            )
+        purpose = claims.get("purpose")
+        if purpose not in CLIENT_OTP_EVENT_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid or expired verification token",
@@ -358,7 +381,66 @@ class AuthService:
         otp_tenant_id: Optional[str] = None
         if tid_raw:
             otp_tenant_id = str(tid_raw)
-        return email, otp_tenant_id
+        return email, otp_tenant_id, purpose
+
+    @staticmethod
+    async def resend_otp(
+        db: Session,
+        authorization: Optional[str],
+        tenant_id: Optional[str] = None,
+    ) -> Tuple[str, str, str, str]:
+        """
+        Resend OTP using the verification Bearer token from login/register/forgot-password.
+        Returns (verification_token, otp_code, email, purpose).
+        """
+        email, otp_tenant_id, purpose = AuthService.extract_verification_session(
+            authorization
+        )
+        effective_tenant = otp_tenant_id or tenant_id
+        if not effective_tenant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Verification token missing tenant. Request OTP again with "
+                    "X-Tenant-Key on login, register, or forgot-password."
+                ),
+            )
+        if (
+            tenant_id is not None
+            and otp_tenant_id is not None
+            and otp_tenant_id != tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X-Tenant-Key does not match the tenant on your verification session.",
+            )
+
+        user_data: Optional[Dict[str, Any]] = None
+        if purpose == "register":
+            cached = get_otp(email, purpose, tenant_id=effective_tenant)
+            if not cached or not cached.get("user_data"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Registration session expired. Please register again.",
+                )
+            user_data = cached["user_data"]
+            full_name = AuthService._full_name(
+                user_data.get("first_name"),
+                user_data.get("last_name"),
+                email,
+            )
+        else:
+            user = AuthService.get_user_for_login(db, email, effective_tenant)
+            full_name = AuthService._user_full_name(user)
+
+        token, otp_code = await AuthService.send_client_otp(
+            email=email,
+            purpose=purpose,
+            tenant_id=effective_tenant,
+            full_name=full_name,
+            user_data=user_data,
+        )
+        return token, otp_code, email, purpose
 
     @staticmethod
     def assert_forgot_password_verification_token(authorization: Optional[str]) -> None:

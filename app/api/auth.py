@@ -155,6 +155,43 @@ async def verify_otp_endpoint(
     }
 
 
+@router.post("/resend-otp", response_model=OTPResponse)
+async def resend_otp(
+    request: Request,
+    tenant_id: str = Depends(get_current_tenant_id),
+    db: Session = Depends(get_db),
+):
+    """
+    Resend OTP for login, register, or forgot-password flows.
+
+    Send the verification Bearer token from /login, /register, or /forgot-password
+    in the Authorization header. A new OTP is generated and emailed; the response
+    includes a fresh verification token for /verify-otp or /reset-password.
+    """
+    authorization = request.headers.get("Authorization")
+    verification_token, otp_code, email, purpose = await AuthService.resend_otp(
+        db, authorization, tenant_id=tenant_id
+    )
+
+    if purpose == "register":
+        message = (
+            "OTP resent to your email. Please verify to activate your account."
+        )
+    elif purpose == "password_reset":
+        message = "OTP resent to your email. Please verify to reset your password."
+    else:
+        message = "OTP resent to your email. Please verify to complete login."
+
+    log.info(
+        "resend_otp_request email=%s tenant_id=%s purpose=%s",
+        email,
+        tenant_id,
+        purpose,
+    )
+
+    return _otp_response(message, verification_token, email, otp_code)
+
+
 @router.post("/forgot-password", response_model=PasswordResetResponse)
 async def forgot_password(
     reset_data: PasswordResetRequest,
