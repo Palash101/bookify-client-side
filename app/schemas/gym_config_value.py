@@ -9,6 +9,9 @@ ORG_CONFIG_KEYS = (
     "organizationConfig",
     "organisation_config",
     "organisationConfig",
+    # DB typo seen in shared-001 gym_config rows
+    "orgnization_config",
+    "orgnizationConfig",
 )
 
 TIMEZONE_KEYS = (
