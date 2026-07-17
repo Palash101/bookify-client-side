@@ -1,5 +1,6 @@
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError, OperationalError
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,16 +24,42 @@ COMMON_TZ_ABBREVS = {
 
 class GymConfigService:
     @staticmethod
+    def _fetch_gym_config_row(db: Session, tenant_id: str) -> Optional[TenantSetting]:
+        def _ordered(query):
+            return query.order_by(TenantSetting.updated_at.desc())
+
+        key_match = func.lower(TenantSetting.setting_key) == GYM_CONFIG_KEY
+        type_match = TenantSetting.value["type"].astext == GYM_CONFIG_KEY
+
+        row = _ordered(
+            db.query(TenantSetting).filter(
+                key_match,
+                TenantSetting.tenant_id == tenant_id,
+            )
+        ).first()
+        if row:
+            return row
+
+        row = _ordered(
+            db.query(TenantSetting).filter(
+                type_match,
+                TenantSetting.tenant_id == tenant_id,
+            )
+        ).first()
+        if row:
+            return row
+
+        # Per-tenant DB may store a single gym_config row without tenant_id match.
+        row = _ordered(db.query(TenantSetting).filter(key_match)).first()
+        if row:
+            return row
+
+        return _ordered(db.query(TenantSetting).filter(type_match)).first()
+
+    @staticmethod
     def get_gym_config(db: Session, tenant_id: str) -> GymConfigValue:
         try:
-            row = (
-                db.query(TenantSetting)
-                .filter(
-                    TenantSetting.tenant_id == tenant_id,
-                    TenantSetting.setting_key == GYM_CONFIG_KEY,
-                )
-                .first()
-            )
+            row = GymConfigService._fetch_gym_config_row(db, tenant_id)
         except (ProgrammingError, OperationalError):
             # Settings table might not exist in some tenant DBs.
             try:
@@ -40,28 +67,21 @@ class GymConfigService:
             except Exception:
                 pass
             return GymConfigValue()
-        if not row or row.value is None or row.is_enabled is False:
+        if not row or row.value is None:
             return GymConfigValue()
         return GymConfigValue.from_json(row.value)
 
     @staticmethod
     def get_raw(db: Session, tenant_id: str) -> Optional[dict]:
         try:
-            row = (
-                db.query(TenantSetting)
-                .filter(
-                    TenantSetting.tenant_id == tenant_id,
-                    TenantSetting.setting_key == GYM_CONFIG_KEY,
-                )
-                .first()
-            )
+            row = GymConfigService._fetch_gym_config_row(db, tenant_id)
         except (ProgrammingError, OperationalError):
             try:
                 db.rollback()
             except Exception:
                 pass
             return None
-        if not row or row.value is None or row.is_enabled is False:
+        if not row or row.value is None:
             return None
         parsed = GymConfigValue.from_json(row.value)
         dumped = parsed.model_dump()

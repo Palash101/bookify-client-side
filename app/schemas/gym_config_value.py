@@ -4,6 +4,86 @@ import json
 from pydantic import BaseModel, ConfigDict, Field, AliasChoices
 
 
+ORG_CONFIG_KEYS = (
+    "organization_config",
+    "organizationConfig",
+    "organisation_config",
+    "organisationConfig",
+)
+
+TIMEZONE_KEYS = (
+    "timezone",
+    "timeZone",
+    "time_zone",
+    "Timezone",
+    "timeone",  # common typo in stored JSON
+    "Timeone",
+)
+
+
+def _parse_json_mapping(raw: Any) -> Optional[dict]:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(raw, dict):
+        return None
+    return raw
+
+
+def _extract_organization_config(raw: dict) -> dict:
+    for key in ORG_CONFIG_KEYS:
+        org = raw.get(key)
+        if org is None:
+            continue
+        parsed = _parse_json_mapping(org)
+        if parsed is not None:
+            return parsed
+    return {}
+
+
+def _extract_timezone(org: dict) -> Optional[str]:
+    for key in TIMEZONE_KEYS:
+        value = org.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def normalize_gym_config_payload(raw: Any) -> Optional[dict]:
+    """
+    Normalize settings.gym_config.value into the shape expected by GymConfigValue.
+    Handles camelCase keys, nested value/data wrappers, and JSON strings.
+    """
+    data = _parse_json_mapping(raw)
+    if data is None:
+        return None
+
+    for wrapper_key in ("value", "data", "config"):
+        wrapped = data.get(wrapper_key)
+        if wrapped is not None:
+            parsed = _parse_json_mapping(wrapped)
+            if parsed is not None:
+                data = parsed
+                break
+
+    org = _extract_organization_config(data)
+    if org:
+        normalized_org = dict(org)
+        tz = _extract_timezone(org)
+        if tz:
+            normalized_org["timezone"] = tz
+        currency = org.get("currency") or org.get("Currency")
+        if currency is not None and str(currency).strip():
+            normalized_org["currency"] = str(currency).strip()
+        data = {**data, "organization_config": normalized_org}
+
+    return data
+
+
 class OrganizationConfig(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
@@ -13,7 +93,7 @@ class OrganizationConfig(BaseModel):
     )
     timezone: Optional[str] = Field(
         default=None,
-        validation_alias=AliasChoices("timezone", "timeZone", "time_zone", "Timezone"),
+        validation_alias=AliasChoices(*TIMEZONE_KEYS),
     )
 
 
@@ -74,9 +154,12 @@ class GymConfigValue(BaseModel):
       (booking code can ignore them until supported).
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    organization_config: OrganizationConfig = Field(default_factory=OrganizationConfig)
+    organization_config: OrganizationConfig = Field(
+        default_factory=OrganizationConfig,
+        validation_alias=AliasChoices(*ORG_CONFIG_KEYS),
+    )
     payment_pricing: PaymentPricingConfig = Field(default_factory=PaymentPricingConfig)
     booking_settings: BookingSettingsConfig = Field(default_factory=BookingSettingsConfig)
     attendance_check_in: AttendanceCheckInConfig = Field(default_factory=AttendanceCheckInConfig)
@@ -96,13 +179,7 @@ class GymConfigValue(BaseModel):
 
     @classmethod
     def from_json(cls, raw: Any) -> "GymConfigValue":
-        if raw is None:
+        normalized = normalize_gym_config_payload(raw)
+        if not normalized:
             return cls()
-        if isinstance(raw, str):
-            try:
-                raw = json.loads(raw)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                return cls()
-        if not isinstance(raw, dict):
-            return cls()
-        return cls.model_validate(raw)
+        return cls.model_validate(normalized)

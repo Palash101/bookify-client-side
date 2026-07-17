@@ -44,8 +44,7 @@ async def get_website_config(
             update={
                 "currency": gym_config.resolved_currency(),
                 "sections": sections,
-                # settings.gym_config.organization_config.timezone
-                "timezone": gym_config.resolved_timezone_name(),
+                "timezone": GymConfigService.get_timezone_name(db, tenant_id),
             }
         ),
     }
