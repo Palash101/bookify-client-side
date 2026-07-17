@@ -1,13 +1,20 @@
 from typing import Any, Optional
+import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, AliasChoices
 
 
 class OrganizationConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    currency: Optional[str] = None
-    timezone: Optional[str] = None
+    currency: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("currency", "Currency"),
+    )
+    timezone: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("timezone", "timeZone", "time_zone", "Timezone"),
+    )
 
 
 class PaymentPricingConfig(BaseModel):
@@ -83,11 +90,19 @@ class GymConfigValue(BaseModel):
         return raw.upper() if raw else default
 
     def resolved_timezone_name(self, default: str = "UTC") -> str:
+        """Timezone from settings.gym_config.organization_config.timezone only."""
         raw = (self.organization_config.timezone or "").strip()
         return raw if raw else default
 
     @classmethod
     def from_json(cls, raw: Any) -> "GymConfigValue":
-        if raw is None or not isinstance(raw, dict):
+        if raw is None:
+            return cls()
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return cls()
+        if not isinstance(raw, dict):
             return cls()
         return cls.model_validate(raw)

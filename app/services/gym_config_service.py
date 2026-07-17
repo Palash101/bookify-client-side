@@ -9,7 +9,7 @@ from app.schemas.gym_config_value import GymConfigValue
 
 GYM_CONFIG_KEY = "gym_config"
 
-# Map common DB abbreviations to IANA timezone names (zoneinfo does not accept "IST" etc.)
+# Map common DB abbreviations / typos to IANA timezone names
 COMMON_TZ_ABBREVS = {
     "IST": "Asia/Kolkata",
     "GST": "Asia/Dubai",
@@ -17,6 +17,7 @@ COMMON_TZ_ABBREVS = {
     "AST": "Asia/Riyadh",
     "PKT": "Asia/Karachi",
     "UTC": "UTC",
+    "ASIA/KOLKATTA": "Asia/Kolkata",  # common misspelling
 }
 
 
@@ -62,20 +63,47 @@ class GymConfigService:
             return None
         if not row or row.value is None or row.is_enabled is False:
             return None
+        parsed = GymConfigValue.from_json(row.value)
+        dumped = parsed.model_dump()
+        # Prefer original dict shape when available
         if isinstance(row.value, dict):
             return row.value
-        return None
+        return dumped if dumped else None
 
     @staticmethod
     def get_currency(db: Session, tenant_id: str, default: str = "QAR") -> str:
         return GymConfigService.get_gym_config(db, tenant_id).resolved_currency(default)
 
     @staticmethod
-    def resolve_zoneinfo(cfg: GymConfigValue) -> ZoneInfo:
-        tz_name = cfg.resolved_timezone_name()
-        tz_key = tz_name.upper()
-        if tz_key in COMMON_TZ_ABBREVS:
-            tz_name = COMMON_TZ_ABBREVS[tz_key]
+    def _normalize_timezone_name(tz_name: str, default: str = "UTC") -> str:
+        raw = (tz_name or "").strip()
+        if not raw:
+            return default
+        mapped = COMMON_TZ_ABBREVS.get(raw.upper())
+        if mapped:
+            return mapped
+        try:
+            ZoneInfo(raw)
+            return raw
+        except ZoneInfoNotFoundError:
+            return default
+
+    @staticmethod
+    def get_timezone_name(db: Session, tenant_id: str, default: str = "UTC") -> str:
+        """
+        Timezone from settings where setting_key='gym_config':
+        value.organization_config.timezone
+        """
+        cfg = GymConfigService.get_gym_config(db, tenant_id)
+        tz_name = cfg.resolved_timezone_name(default="")
+        return GymConfigService._normalize_timezone_name(tz_name, default=default)
+
+    @staticmethod
+    def resolve_zoneinfo(cfg: GymConfigValue, fallback_tz_name: Optional[str] = None) -> ZoneInfo:
+        tz_name = cfg.resolved_timezone_name(default="")
+        if not tz_name and fallback_tz_name:
+            tz_name = fallback_tz_name
+        tz_name = GymConfigService._normalize_timezone_name(tz_name or "")
         try:
             return ZoneInfo(tz_name)
         except ZoneInfoNotFoundError:
@@ -83,6 +111,8 @@ class GymConfigService:
 
     @staticmethod
     def get_timezone(db: Session, tenant_id: str) -> ZoneInfo:
-        return GymConfigService.resolve_zoneinfo(
-            GymConfigService.get_gym_config(db, tenant_id)
-        )
+        tz_name = GymConfigService.get_timezone_name(db, tenant_id)
+        try:
+            return ZoneInfo(tz_name)
+        except ZoneInfoNotFoundError:
+            return ZoneInfo("UTC")
