@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.dependencies import get_current_tenant_id, get_db
+from app.dependencies import get_current_tenant_id, get_read_db
 from app.schemas.tenant_website_config import (
     TenantWebsiteConfigData,
     TenantWebsiteConfigResponse,
@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("", response_model=TenantWebsiteConfigResponse)
 async def get_website_config(
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Get branding / website configuration for the current organization.

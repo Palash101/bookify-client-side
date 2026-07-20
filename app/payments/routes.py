@@ -25,7 +25,7 @@ from .redirect_handlers import (
 from .return_urls import normalize_checkout_platform
 from .tenant_resolve import resolve_tenant_for_stripe_webhook
 from app.core.db.session import get_session_factory
-from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
+from app.dependencies import get_current_tenant_id, get_current_active_user, get_read_db, get_write_db
 from app.core.settings import settings
 from app.models.user import User
 from app.models.sales import SALE_WALLET_TXN_KEY, Sale, backfill_sale_checkout_metadata
@@ -140,7 +140,7 @@ async def initiate_package_purchase(
     body: PackagePurchaseRequest,
     tenant_id: str = Depends(get_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Package purchase.
@@ -932,7 +932,7 @@ async def get_sales_transactions(
     limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
     include_wallet_add: bool = Query(False, description="Include wallet top-ups in results"),
 ):
     """

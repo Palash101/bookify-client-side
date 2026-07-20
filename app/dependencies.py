@@ -2,7 +2,11 @@ from typing import Generator, Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from app.core.db.session import get_db as tenant_get_db
+from app.core.db.session import (
+    get_db as tenant_get_db,
+    get_read_db as tenant_get_read_db,
+    get_write_db as tenant_get_write_db,
+)
 from app.core.security import verify_token
 from app.models.user import User
 from app.models.master_org import Organization
@@ -25,16 +29,24 @@ optional_bearer_scheme = HTTPBearer(
 
 def get_db(request: Request) -> Generator:
     """
-    Tenant-scoped database dependency.
-
-    Uses `TenantMiddleware` -> `request.state.tenant_id` to connect to the correct tenant DB.
+    Tenant-scoped write DB dependency (primary). Prefer get_read_db / get_write_db.
     """
-    yield from tenant_get_db(request)
+    yield from tenant_get_db(request, read_only=False)
+
+
+def get_read_db(request: Request) -> Generator:
+    """Tenant-scoped read DB — use for GET APIs."""
+    yield from tenant_get_read_db(request)
+
+
+def get_write_db(request: Request) -> Generator:
+    """Tenant-scoped write DB — use for POST/PUT/PATCH/DELETE APIs."""
+    yield from tenant_get_write_db(request)
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_read_db)
 ) -> User:
     """
     Get current authenticated user from token.
@@ -89,7 +101,7 @@ async def get_current_active_user(
 
 async def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ) -> Optional[User]:
     """Return the logged-in user when a valid Bearer token is sent; otherwise None."""
     if credentials is None:
@@ -122,7 +134,7 @@ async def get_optional_current_user(
 
 async def get_gym_config_for_active_user(
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ) -> GymConfigValue:
     """
     Reads TenantSetting gym_config once per request.

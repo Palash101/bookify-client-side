@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db
 from app.dependencies import get_current_tenant_id, get_current_active_user
 from app.schemas.gym_class import (
     GymClassResponse,
@@ -37,7 +37,7 @@ async def get_classes_by_date_for_location(
         "asc", description="Sort direction: asc or desc"
     ),
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Location-scoped classes list.
@@ -126,7 +126,7 @@ async def get_class_details_for_location(
     class_id: uuid.UUID,
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Location-scoped class details.

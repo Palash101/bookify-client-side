@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db
 from app.dependencies import get_current_tenant_id
 from app.schemas.fitness_program import (
     FitnessProgramResponse,
@@ -30,7 +30,7 @@ async def get_training_programs_for_location(
         "asc", description="Sort direction: asc or desc"
     ),
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Location-scoped training programs.

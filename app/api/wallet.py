@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import String
 
 from app.dependencies import get_current_active_user, get_current_tenant_id, get_gym_config_for_active_user
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db, get_write_db
 from app.models.user import User
 from app.models.wallet_transactions import WalletTransaction
 from app.schemas.gym_config_value import GymConfigValue
@@ -46,7 +46,7 @@ async def add_wallet_balance(
     body: AddWalletBalanceRequest,
     tenant_id=Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
 ):
     """
@@ -132,7 +132,7 @@ async def add_wallet_balance(
 async def get_wallet_balance(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
 ):
     # Tenant header ka mismatch ho sakta hai (token kis tenant ka hai us par depend karta hai).
@@ -162,7 +162,7 @@ async def get_wallet_balance(
 async def get_wallet_transactions(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
     limit: int = Query(20, ge=1, le=100),
 ):
     # Transactions are scoped to current_user via user_id; tenant header mismatch shouldn't block.
@@ -210,7 +210,7 @@ async def get_wallet_transactions(
 async def get_purchases_history(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
     limit: int = Query(50, ge=1, le=200),
 ):
     """

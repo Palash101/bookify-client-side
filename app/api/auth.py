@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from app.core.db.session import get_db
+from app.core.db.session import get_write_db
 from app.schemas.user import (
     UserCreate,
     Token,
@@ -44,7 +44,7 @@ def _otp_response(message: str, token: str, email: str, otp_code: str) -> dict:
 async def login(
     user_credentials: OTPRequest,
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     User login endpoint - sends OTP to email.
@@ -74,7 +74,7 @@ async def login(
 async def register(
     user_data: UserCreate,
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     User registration endpoint - validates data, sends OTP, but does NOT save user.
@@ -109,7 +109,7 @@ async def register(
 async def verify_otp_endpoint(
     otp_data: OTPVerify,
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_write_db)
 ):
     """
     Verify OTP and return access token.
@@ -159,7 +159,7 @@ async def verify_otp_endpoint(
 async def resend_otp(
     request: Request,
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Resend OTP for login, register, or forgot-password flows.
@@ -196,7 +196,7 @@ async def resend_otp(
 async def forgot_password(
     reset_data: PasswordResetRequest,
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Forgot password - email bhejo, OTP email par aayega.
@@ -221,7 +221,7 @@ async def forgot_password(
 async def reset_password(
     reset_data: PasswordResetVerify,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
     tenant_id: str = Depends(get_current_tenant_id),
 ):
     """
@@ -285,7 +285,7 @@ async def reset_password(
 @router.post("/refresh-token", response_model=RefreshTokenResponse)
 async def refresh_token(
     token_data: RefreshTokenRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_write_db)
 ):
     """
     Refresh access token using refresh token.
@@ -320,7 +320,7 @@ async def get_me(
 async def update_me(
     profile_data: ProfileUpdate,
     current_user: UserModel = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_write_db)
 ):
     """
     Update current authenticated user (me).

@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_optional_current_user
 from app.schemas.package import (
     AllPackagesListResponse,
@@ -28,7 +28,7 @@ async def get_all_packages(
     ),
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: Optional[User] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Get catalog packages for the current tenant with optional search and sorting.
@@ -72,7 +72,7 @@ async def get_all_packages(
 async def get_active_packages(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     All successful, non-expired package purchases for the current user on this tenant.
@@ -103,7 +103,7 @@ async def get_package_detail(
     package_id: uuid.UUID,
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: Optional[User] = Depends(get_optional_current_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Get single package detail by ID. Package must belong to current tenant.

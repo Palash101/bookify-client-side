@@ -4,7 +4,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db, get_write_db
 from app.dependencies import get_current_active_user
 from app.models.user import User
 from app.schemas.event import (
@@ -26,7 +26,7 @@ async def get_active_events(
     ),
     sort_order: str = Query("asc", description="Sort direction: asc or desc"),
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     List active events for the logged-in user's gym (users.tenant_id).
@@ -51,7 +51,7 @@ async def get_active_events(
 async def enroll_in_event(
     event_id: uuid.UUID,
     current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Enroll the logged-in user in an active event for their gym.

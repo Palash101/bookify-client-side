@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db, get_write_db
 from app.core.settings import settings
 from app.dependencies import get_current_active_user, get_gym_config_for_active_user
 from app.models.class_booking import class_booking_status_value
@@ -87,7 +87,7 @@ async def _publish_wallet_debited(
 async def get_member_bookings(
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     tenant_id = current_user.tenant_id
     return BookingsService.list_member_bookings(
@@ -105,7 +105,7 @@ async def validate_class_booking(
     body: BookingRequestBody,
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Run all booking rules (gym_config, capacity/waitlist, payment path, seat) without writing data.
@@ -160,7 +160,7 @@ async def create_class_booking(
     body: BookingRequestBody,
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Validate then create a booking. Re-runs validation on submit (do not trust client-only checks).
@@ -234,7 +234,7 @@ async def create_waiting_booking(
     body: BookingRequestBody,
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     """
     Add member to waitlist only when class is full.
@@ -291,7 +291,7 @@ async def cancel_class_booking(
     body: BookingCancelRequestBody,
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_write_db),
 ):
     tenant_id = current_user.tenant_id
     booking, promoted_booking = BookingsService.cancel(

@@ -2,7 +2,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from app.core.db.session import get_db
+from app.core.db.session import get_read_db
 from app.dependencies import get_current_tenant_id
 from app.schemas.location import LocationResponse, LocationsListResponse
 from app.services.locations_service.locations_service import LocationsService
@@ -21,7 +21,7 @@ async def get_locations(
         "asc", description="Sort direction: asc or desc"
     ),
     tenant_id: str = Depends(get_current_tenant_id),
-    db: Session = Depends(get_db),
+    db: Session = Depends(get_read_db),
 ):
     """
     Get all active locations for the current tenant with optional search and sorting.
