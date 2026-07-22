@@ -771,6 +771,7 @@ class BookingsService:
                         waiting_booking.sessions_deducted = deducted
                     else:
                         waiting_booking.sessions_deducted = 1
+                    db.flush()
         return waiting_booking
 
     @staticmethod
@@ -1485,6 +1486,7 @@ class BookingsService:
                 booking.sessions_deducted = deducted
             else:
                 booking.sessions_deducted = 1
+            db.flush()
 
         if booking_status == ClassBookingStatus.confirmed:
             cap = _effective_capacity(gym_class)
