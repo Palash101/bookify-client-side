@@ -84,29 +84,95 @@ def _wallet_user(db: Session, user: User) -> User:
     return db_user
 
 
+def _wallet_debit_consumed(
+    db: Session,
+    user_id: UUID,
+    debit_id: UUID,
+    *,
+    exclude_booking_id: UUID,
+) -> bool:
+    """True when another booking row already references this wallet debit."""
+    marker = f"__bfy_wtxn:{debit_id}:debit"
+    return (
+        db.query(ClassBooking.id)
+        .filter(
+            ClassBooking.user_id == user_id,
+            ClassBooking.id != exclude_booking_id,
+            ClassBooking.notes.contains(marker),
+        )
+        .first()
+        is not None
+    )
+
+
+def _resolve_wallet_debit_txn(
+    db: Session,
+    *,
+    user: User,
+    booking: ClassBooking,
+    gym_class: GymClass,
+) -> Optional[WalletTransaction]:
+    """Find the wallet debit for a class booking (notes marker, else time+amount fallback)."""
+    debit_id = _wallet_debit_txn_id_from_notes(booking.notes)
+    if debit_id is not None:
+        txn = (
+            db.query(WalletTransaction)
+            .filter(
+                WalletTransaction.id == debit_id,
+                WalletTransaction.user_id == user.id,
+                WalletTransaction.direction == "debit",
+            )
+            .first()
+        )
+        if txn:
+            return txn
+
+    price = Decimal(str(gym_class.price or 0))
+    if price <= 0:
+        return None
+    ref_time = booking.booked_at or booking.created_at
+    if ref_time is None:
+        return None
+
+    window = timedelta(minutes=15)
+    candidates = (
+        db.query(WalletTransaction)
+        .filter(
+            WalletTransaction.user_id == user.id,
+            WalletTransaction.direction == "debit",
+            WalletTransaction.amount == price,
+            WalletTransaction.created_at >= ref_time - window,
+            WalletTransaction.created_at <= ref_time + window,
+        )
+        .order_by(WalletTransaction.created_at.asc())
+        .all()
+    )
+    for txn in candidates:
+        if _wallet_debit_consumed(db, user.id, txn.id, exclude_booking_id=booking.id):
+            continue
+        if debit_id is None:
+            booking.notes = _append_bfy_wtxn_note(booking.notes, txn.id, "debit")
+        return txn
+    return None
+
+
 def _refund_wallet_for_cancelled_booking(
     db: Session,
     *,
     user: User,
     booking: ClassBooking,
+    gym_class: GymClass,
+    within_free_window: bool,
 ) -> Optional[UUID]:
     if (booking.payment_mode or "").strip().lower() != "wallet":
+        return None
+    if not within_free_window:
         return None
     if _wallet_refund_already_recorded(booking.notes):
         return None
 
-    debit_id = _wallet_debit_txn_id_from_notes(booking.notes)
-    if debit_id is None:
-        return None
-
-    debit_txn = (
-        db.query(WalletTransaction)
-        .filter(
-            WalletTransaction.id == debit_id,
-            WalletTransaction.user_id == user.id,
-            WalletTransaction.direction == "debit",
-        )
-        .first()
+    debit_txn = _resolve_wallet_debit_txn(
+        db, user=user, booking=booking, gym_class=gym_class
     )
     if not debit_txn:
         return None
@@ -1379,6 +1445,7 @@ class BookingsService:
         # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
         if wallet_txn_id is not None:
             booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
+            db.flush()
 
         if (
             payment_mode == "package"
@@ -1536,6 +1603,8 @@ class BookingsService:
                 db,
                 user=user,
                 booking=booking,
+                gym_class=gym_class,
+                within_free_window=within_free_window,
             )
 
             if previous_status == ClassBookingStatus.confirmed:
