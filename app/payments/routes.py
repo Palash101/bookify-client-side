@@ -145,8 +145,9 @@ async def initiate_package_purchase(
     """
     Package purchase.
 
-    - **Gateway package:** `sales` + `sales_transactions` (+ `user_packages` when payment succeeds).
-    - **Wallet balance package:** `wallet_transactions` (debit) + `sales` + `sales_transactions` + `user_packages`.
+    - **Gateway package:** `sales_transactions` at initiation; `sales` + `user_packages` on success.
+    - **Wallet balance package:** `wallet_transactions` (debit) + `sales` + `user_packages` only
+      (no `sales_transactions` — wallet spend is not cash revenue).
     """
     # Derive amount/currency from selected package pricing (incl. discount)
     pricing_query = (
@@ -263,24 +264,6 @@ async def initiate_package_purchase(
                     tzinfo=tz,
                 )
 
-        sale_txn = SalesTransactions(
-            order_id=order.id,
-            tenant_id=order.tenant_id,
-            payment_method="cash",
-            gateway="wallet",
-            gateway_txn_id=None,
-            source="package",
-            status=SalesTransactionStatus.success,
-            amount=amount_value,
-            currency=currency_code,
-            user_id=current_user.id,
-            created_by_type=current_user.user_type or "member",
-            created_by_id=current_user.id,
-            extra_metadata={"event": "created"},
-        )
-        db.add(sale_txn)
-        db.flush()
-        order.provider_numeric_transaction_id = sale_txn.id
         user_package = ensure_user_package_for_completed_package_sale(
             db,
             order,
@@ -936,20 +919,17 @@ async def get_sales_transactions(
     include_wallet_add: bool = Query(False, description="Include wallet top-ups in results"),
 ):
     """
-    Current user's sales transaction history (package gateway/wallet payments).
+    Cash-revenue transaction history: gateway package purchases and optional wallet top-ups.
+    Wallet-balance package purchases are excluded (see GET /wallet/transactions/purchases).
     """
-    type_filter = ["package_gateway", "package_wallet"]
-
-    # Sale is source of truth; package_wallet rows may have no sales_transactions (by design).
     sales = (
         db.query(Sale)
         .filter(
             Sale.user_id == current_user.id,
             Sale.tenant_id == tenant_id,
             (
-                (Sale.type.in_(type_filter))
+                (Sale.type == "package_gateway")
                 | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
-                | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
             )
             | (
                 include_wallet_add

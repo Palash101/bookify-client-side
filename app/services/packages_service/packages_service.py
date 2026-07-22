@@ -79,13 +79,16 @@ class PackagesService:
     @staticmethod
     def is_visible_by_date(package: Package, today: date) -> bool:
         """
-        Visibility date is packages.validity_start.
-        Show only when it has arrived (validity_start <= tenant today).
+        Catalog visibility window uses packages.validity_start and packages.validity_end.
+        Show only when validity_start has arrived and validity_end has not passed.
         """
         start = package.validity_start
-        if start is None:
-            return True
-        return start <= today
+        if start is not None and start > today:
+            return False
+        end = package.validity_end
+        if end is not None and end < today:
+            return False
+        return True
 
     @staticmethod
     def is_package_available_in_catalog(package: Package, today: date) -> bool:
@@ -136,6 +139,14 @@ class PackagesService:
                 detail="This package is not available for purchase.",
             )
         if not PackagesService.is_visible_by_date(package, today):
+            if (
+                package.validity_end is not None
+                and package.validity_end < today
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This package is no longer available for purchase.",
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This package is not available for purchase yet.",
@@ -209,7 +220,8 @@ class PackagesService:
         """
         Catalog rules:
         - only published (status=active) packages
-        - visibility date (validity_start) must be on or before tenant today
+        - validity_start must be on or before tenant today
+        - validity_end must be on or after tenant today (when set)
         - hide one-time packages the user has already purchased
         """
         today = PackagesService.tenant_today(db, tenant_id)
@@ -261,7 +273,7 @@ class PackagesService:
     ) -> List[Package]:
         """
         List catalog packages for a tenant with optional search and sorting.
-        Only published (active) packages whose visibility date has arrived.
+        Only published (active) packages within the validity window.
         """
         today = PackagesService.tenant_today(db, tenant_id)
         query = (
@@ -275,6 +287,10 @@ class PackagesService:
                 or_(
                     Package.validity_start.is_(None),
                     Package.validity_start <= today,
+                ),
+                or_(
+                    Package.validity_end.is_(None),
+                    Package.validity_end >= today,
                 ),
             )
         )
