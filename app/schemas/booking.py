@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
@@ -87,6 +88,8 @@ class MemberUpcomingBookingItem(BaseModel):
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = None
     status: str
     seat_id: Optional[str] = None
     date: Optional[str] = None
@@ -105,6 +108,8 @@ class MemberPastBookingItem(BaseModel):
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = None
     status: str
     seat_id: Optional[str] = None
     date: Optional[str] = None
@@ -123,6 +128,8 @@ class MemberWaitingBookingItem(BaseModel):
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = None
     status: str
     seat_id: Optional[str] = None
     date: Optional[str] = None

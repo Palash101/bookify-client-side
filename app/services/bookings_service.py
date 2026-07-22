@@ -371,6 +371,22 @@ def _class_price_decimal(gym_class: GymClass) -> Decimal:
         return Decimal("0")
 
 
+def _member_booking_amount_fields(
+    gym_class: Optional[GymClass],
+    gym_config: GymConfigValue,
+) -> dict[str, Any]:
+    """Paid classes (e.g. booking_type=price) include charge amount on member booking lists."""
+    if gym_class is None or not _class_is_paid(gym_class):
+        return {}
+    price = _class_price_decimal(gym_class)
+    if price <= 0:
+        return {}
+    return {
+        "amount": price,
+        "currency": gym_config.resolved_currency(),
+    }
+
+
 def _normalize_seat_label(raw: Optional[str]) -> Optional[str]:
     if raw is None:
         return None
@@ -665,6 +681,7 @@ class BookingsService:
                 "program": FitnessProgramsService.program_short_payload(training_program),
                 "can_cancel": can_cancel,
                 "cancel_deadline": cancel_deadline_iso,
+                **_member_booking_amount_fields(gym_class, cfg),
             }
             if cancelled_at_iso is not None:
                 item["cancelled_at"] = cancelled_at_iso
