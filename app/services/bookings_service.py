@@ -258,10 +258,28 @@ _PACKAGE_ONLY_BOOKING_TYPES = frozenset(
     }
 )
 
+_PAID_BOOKING_TYPES = frozenset(
+    {
+        "price",
+        "priced",
+        "paid",
+        "drop_in",
+        "dropin",
+        "pay_per_class",
+        "pay_per_session",
+    }
+)
+
 
 def _class_is_package_only(booking_type: Optional[str]) -> bool:
     t = _normalize_booking_type(booking_type)
     return t in _PACKAGE_ONLY_BOOKING_TYPES
+
+
+def _class_is_paid(gym_class: GymClass) -> bool:
+    if _class_price_decimal(gym_class) > 0:
+        return True
+    return _normalize_booking_type(gym_class.booking_type) in _PAID_BOOKING_TYPES
 
 
 def _class_price_decimal(gym_class: GymClass) -> Decimal:
@@ -322,6 +340,24 @@ def _effective_capacity(gym_class: GymClass) -> int:
     if layout_seats is not None:
         return int(layout_seats)
     return int(gym_class.max_bookings or 0)
+
+
+def _layout_seat_exists(gym_class: GymClass, seat_id: str) -> Optional[str]:
+    """Return an error message when the seat id is not in the class layout."""
+    layouts = getattr(gym_class, "layouts", None)
+    if layouts in (None, "", [], {}):
+        return "Class layout is not configured"
+    if not isinstance(layouts, dict):
+        return "Invalid class layout format"
+    seats = layouts.get("seats")
+    if not isinstance(seats, list):
+        return "Invalid class layout seats data"
+    for seat in seats:
+        if not isinstance(seat, dict):
+            continue
+        if str(seat.get("id")) == seat_id:
+            return None
+    return "Seat id not found in class layout"
 
 
 def _layout_seat_status(gym_class: GymClass, seat_id: str) -> tuple[Optional[str], Optional[str]]:
@@ -849,10 +885,9 @@ class BookingsService:
                 return outcome
         outcome.set_check("booking_cutoff_time", True)
 
-        # Class billing mode: package-type → package only; price > 0 → wallet/gateway; else → free only.
+        # Class billing mode: package-type → package only; price > 0 / paid type → wallet/gateway; else → free only.
         pkg_only = _class_is_package_only(gym_class.booking_type)
-        class_price = _class_price_decimal(gym_class)
-        is_paid = class_price > 0
+        is_paid = _class_is_paid(gym_class)
         if pkg_only:
             allowed_pm: frozenset[str] = frozenset({"package"})
         elif is_paid:
@@ -1112,18 +1147,16 @@ class BookingsService:
                         True,
                         message="Seat selection not required for waitlist booking",
                     )
+            elif not has_slot:
+                outcome.set_check(
+                    "seat_selection",
+                    True,
+                    message="Seat selection not required for waitlist booking",
+                )
             else:
-                seat_status, seat_err = _layout_seat_status(gym_class, seat_label)
+                seat_err = _layout_seat_exists(gym_class, seat_label)
                 if seat_err:
                     outcome.set_check("seat_selection", False, message=seat_err)
-                    _finalize_booking_validation(outcome, pm)
-                    return outcome
-                if seat_status and seat_status != "available":
-                    outcome.set_check(
-                        "seat_selection",
-                        False,
-                        message=f"Seat {seat_label} is not available",
-                    )
                     _finalize_booking_validation(outcome, pm)
                     return outcome
                 taken = (
@@ -1282,11 +1315,14 @@ class BookingsService:
                     user.wallet = bal_after
 
             booking_status = normalize_class_booking_status(status_str)
+            seat_label_for_booking = _normalize_seat_label(seat_id)
+            if booking_status not in OCCUPYING_SLOT_STATUSES:
+                seat_label_for_booking = None
             booking = ClassBooking(
                 tenant_id=tenant_id,
                 user_id=user.id,
                 class_id=class_id,
-                seat_id=_normalize_seat_label(seat_id),
+                seat_id=seat_label_for_booking,
                 status=booking_status,
                 waiting_position=outcome.waiting_position if booking_status == WAITING_STATUS else None,
                 booked_at=now,
@@ -1305,9 +1341,8 @@ class BookingsService:
                 booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
 
             has_layout = _class_has_layout(gym_class)
-            seat_label = _normalize_seat_label(seat_id)
-            if has_layout and seat_label and booking_status in OCCUPYING_SLOT_STATUSES:
-                _set_layout_seat_status(gym_class, seat_label, "booked")
+            if has_layout and seat_label_for_booking and booking_status in OCCUPYING_SLOT_STATUSES:
+                _set_layout_seat_status(gym_class, seat_label_for_booking, "booked")
 
             if booking_status == ClassBookingStatus.confirmed:
                 cap = _effective_capacity(gym_class)
