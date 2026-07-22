@@ -257,6 +257,7 @@ def record_booking_refund_credit(
     sale: Sale,
     booking: ClassBooking,
     sessions: int = 1,
+    notes: str = "Booking cancelled — session refunded",
 ) -> Optional[UserPackageTracking]:
     """
     Cancel within free window: credit / refund / 1.
@@ -288,7 +289,7 @@ def record_booking_refund_credit(
         sessions=sessions,
         balance_after=balance_after,
         reference_id=booking.id,
-        notes="Booking cancelled — session refunded",
+        notes=notes,
     )
     db.add(row)
     db.flush()

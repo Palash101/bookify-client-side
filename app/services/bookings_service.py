@@ -739,13 +739,24 @@ class BookingsService:
         else:
             promoted_status = target_status
 
+        original_waiting_position = waiting_booking.waiting_position
+
         waiting_booking.status = promoted_status
         waiting_booking.waiting_position = None
         waiting_booking.promoted_from_waiting_at = now
+
+        occupies_slot = promoted_status in (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+        )
+
         if promoted_status == ClassBookingStatus.confirmed:
             waiting_booking.confirmed_at = now
+
+        if occupies_slot:
             gym_class.booking_counts = int(gym_class.booking_counts or 0) + 1
 
+            # Session is deducted at waitlist join; only legacy rows need debit on promote.
             if (
                 waiting_booking.payment_mode == "package"
                 and waiting_booking.user_package_purchase_id is not None
@@ -761,6 +772,14 @@ class BookingsService:
                 )
                 if package_sale is not None:
                     remaining = sessions_remaining_for_sale(db, package_sale)
+                    if remaining is not None and remaining < 1:
+                        waiting_booking.status = WAITING_STATUS
+                        waiting_booking.waiting_position = original_waiting_position
+                        waiting_booking.promoted_from_waiting_at = None
+                        waiting_booking.confirmed_at = None
+                        gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
+                        return None
+
                     if remaining is not None:
                         deducted = apply_package_session_debit_for_booking(
                             db,
@@ -768,6 +787,13 @@ class BookingsService:
                             booking=waiting_booking,
                             notes="Class booking (promoted from waiting)",
                         )
+                        if deducted == 0:
+                            waiting_booking.status = WAITING_STATUS
+                            waiting_booking.waiting_position = original_waiting_position
+                            waiting_booking.promoted_from_waiting_at = None
+                            waiting_booking.confirmed_at = None
+                            gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
+                            return None
                         waiting_booking.sessions_deducted = deducted
                     else:
                         waiting_booking.sessions_deducted = 1
@@ -1398,7 +1424,7 @@ class BookingsService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Package purchase not found",
                 )
-            if status_str == "confirmed":
+            if status_str in ("confirmed", WAITING_STATUS.value):
                 rem = sessions_remaining_for_sale(db, package_sale)
                 if rem is not None and rem < 1:
                     raise HTTPException(
@@ -1468,15 +1494,20 @@ class BookingsService:
         if (
             payment_mode == "package"
             and package_sale is not None
-            and booking_status == ClassBookingStatus.confirmed
+            and booking_status in (ClassBookingStatus.confirmed, WAITING_STATUS)
         ):
+            debit_notes = (
+                "Class booking (waitlist)"
+                if booking_status == WAITING_STATUS
+                else "Class booking"
+            )
             remaining = sessions_remaining_for_sale(db, package_sale)
             if remaining is not None:
                 deducted = apply_package_session_debit_for_booking(
                     db,
                     sale=package_sale,
                     booking=booking,
-                    notes="Class booking",
+                    notes=debit_notes,
                 )
                 if deducted == 0:
                     raise HTTPException(
@@ -1500,7 +1531,6 @@ class BookingsService:
                 min(cap, current_count + 1) if cap > 0 else current_count + 1
             )
 
-        db.refresh(booking)
         return booking, wallet_txn_id
 
     @staticmethod
@@ -1598,13 +1628,23 @@ class BookingsService:
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
             if package_sale is not None and user_package is not None:
-                if within_free_window:
+                sessions_to_restore = int(booking.sessions_deducted or 0)
+                if previous_status == WAITING_STATUS:
                     record_booking_refund_credit(
                         db,
                         user_package=user_package,
                         sale=package_sale,
                         booking=booking,
-                        sessions=int(booking.sessions_deducted or 0),
+                        sessions=sessions_to_restore,
+                        notes="Waitlist cancelled — session refunded",
+                    )
+                elif within_free_window:
+                    record_booking_refund_credit(
+                        db,
+                        user_package=user_package,
+                        sale=package_sale,
+                        booking=booking,
+                        sessions=sessions_to_restore,
                     )
                 else:
                     record_late_cancel_audit(
