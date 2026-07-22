@@ -145,6 +145,7 @@ WALLET_CHARGE_STATUSES: Tuple[ClassBookingStatus, ...] = (
     ClassBookingStatus.pending,
     WAITING_STATUS,
 )
+_WALLET_CHARGE_STATUS_VALUES = frozenset(s.value for s in WALLET_CHARGE_STATUSES)
 
 
 def _tenant_tz(
@@ -1248,113 +1249,107 @@ class BookingsService:
         if payment_mode == "gateway" and status_str in ("confirmed", "pending"):
             status_str = "pending_payment"
 
-        # Resolve timezone before opening a nested transaction.
+        # Resolve timezone before persisting the booking.
         now = datetime.now(_tenant_tz(db, tenant_id, gym_config=outcome.gym_config))
 
-        tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
-        with tx_ctx:
-            sessions_deducted = 0
-            wallet_txn_id: Optional[UUID] = None
-            sale_id: Optional[UUID] = None
+        sessions_deducted = 0
+        wallet_txn_id: Optional[UUID] = None
+        sale_id: Optional[UUID] = None
 
-            if payment_mode == "package" and user_package_purchase_id:
-                sale_id = user_package_purchase_id
-                sale = (
-                    db.query(Sale)
-                    .filter(
-                        Sale.id == sale_id,
-                        Sale.tenant_id == tenant_id,
-                        Sale.user_id == user.id,
-                    )
-                    .first()
+        if payment_mode == "package" and user_package_purchase_id:
+            sale_id = user_package_purchase_id
+            sale = (
+                db.query(Sale)
+                .filter(
+                    Sale.id == sale_id,
+                    Sale.tenant_id == tenant_id,
+                    Sale.user_id == user.id,
                 )
-                if not sale:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Package purchase not found",
-                    )
-                if status_str in ("confirmed", "waiting"):
-                    sessions_deducted = 1
-                    rem = _sessions_remaining_from_sale(sale)
-                    if rem is not None:
-                        meta: dict[str, Any] = dict(sale.extra_metadata or {})
-                        meta["sessions_remaining"] = max(0, rem - 1)
-                        sale.extra_metadata = meta
-                        attributes.flag_modified(sale, "extra_metadata")
-
-            if payment_mode == "wallet":
-                price = Decimal(str(gym_class.price or 0))
-                # Charge upfront whenever the booking is created (confirmed, pending, or waitlist).
-                if price > 0 and status_str in WALLET_CHARGE_STATUSES:
-                    db.refresh(user)
-                    bal_before = Decimal(str(user.wallet or 0))
-                    if bal_before < price:
-                        raise HTTPException(
-                            status_code=status.HTTP_400_BAD_REQUEST,
-                            detail="Insufficient wallet balance",
-                        )
-                    bal_after = bal_before - price
-                    txn = WalletTransaction(
-                        user_id=user.id,
-                        direction="debit",
-                        transaction_id=None,
-                        amount=price,
-                        currency=(
-                            outcome.gym_config.resolved_currency()
-                            if outcome.gym_config
-                            else GymConfigService.get_currency(db, tenant_id)
-                        ),
-                        balance_before=bal_before,
-                        balance_after=bal_after,
-                        created_by=user.user_type or "member",
-                        created_by_id=user.id,
-                    )
-                    db.add(txn)
-                    db.flush()
-                    wallet_txn_id = txn.id
-                    user.wallet = bal_after
-
-            booking_status = normalize_class_booking_status(status_str)
-            seat_label_for_booking = _normalize_seat_label(seat_id)
-            if booking_status not in OCCUPYING_SLOT_STATUSES:
-                seat_label_for_booking = None
-            booking = ClassBooking(
-                tenant_id=tenant_id,
-                user_id=user.id,
-                class_id=class_id,
-                seat_id=seat_label_for_booking,
-                status=booking_status,
-                waiting_position=outcome.waiting_position if booking_status == WAITING_STATUS else None,
-                booked_at=now,
-                confirmed_at=now if booking_status == ClassBookingStatus.confirmed else None,
-                payment_mode=payment_mode,
-                user_package_purchase_id=sale_id,
-                sessions_deducted=sessions_deducted,
-                notes=notes,
+                .first()
             )
-            db.add(booking)
-            db.flush()
-            if not booking.order_id:
-                booking.order_id = f"ORD{str(booking.id).split('-')[0].upper()}"
-            # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
-            if wallet_txn_id is not None:
-                booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
+            if not sale:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Package purchase not found",
+                )
+            if status_str in ("confirmed", "waiting"):
+                sessions_deducted = 1
+                rem = _sessions_remaining_from_sale(sale)
+                if rem is not None:
+                    meta: dict[str, Any] = dict(sale.extra_metadata or {})
+                    meta["sessions_remaining"] = max(0, rem - 1)
+                    sale.extra_metadata = meta
+                    attributes.flag_modified(sale, "extra_metadata")
 
-            has_layout = _class_has_layout(gym_class)
-            if has_layout and seat_label_for_booking and booking_status in OCCUPYING_SLOT_STATUSES:
-                _set_layout_seat_status(gym_class, seat_label_for_booking, "booked")
-
-            if booking_status == ClassBookingStatus.confirmed:
-                cap = _effective_capacity(gym_class)
-                current_count = int(gym_class.booking_counts or 0)
-                if cap > 0 and current_count >= cap:
+        if payment_mode == "wallet":
+            price = Decimal(str(gym_class.price or 0))
+            # Charge upfront whenever the booking is created (confirmed, pending, or waitlist).
+            if price > 0 and status_str in _WALLET_CHARGE_STATUS_VALUES:
+                db.refresh(user)
+                bal_before = Decimal(str(user.wallet or 0))
+                if bal_before < price:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Class is full",
+                        detail="Insufficient wallet balance",
                     )
-                gym_class.booking_counts = (
-                    min(cap, current_count + 1) if cap > 0 else current_count + 1
+                bal_after = bal_before - price
+                txn = WalletTransaction(
+                    user_id=user.id,
+                    direction="debit",
+                    transaction_id=None,
+                    amount=price,
+                    currency=(
+                        outcome.gym_config.resolved_currency()
+                        if outcome.gym_config
+                        else GymConfigService.get_currency(db, tenant_id)
+                    ),
+                    balance_before=bal_before,
+                    balance_after=bal_after,
+                    created_by=user.user_type or "member",
+                    created_by_id=user.id,
                 )
+                db.add(txn)
+                db.flush()
+                wallet_txn_id = txn.id
+                user.wallet = bal_after
+
+        booking_status = normalize_class_booking_status(status_str)
+        seat_label_for_booking = _normalize_seat_label(seat_id)
+        if booking_status not in OCCUPYING_SLOT_STATUSES:
+            seat_label_for_booking = None
+        booking = ClassBooking(
+            tenant_id=tenant_id,
+            user_id=user.id,
+            class_id=class_id,
+            seat_id=seat_label_for_booking,
+            status=booking_status,
+            waiting_position=outcome.waiting_position if booking_status == WAITING_STATUS else None,
+            booked_at=now,
+            confirmed_at=now if booking_status == ClassBookingStatus.confirmed else None,
+            payment_mode=payment_mode,
+            user_package_purchase_id=sale_id,
+            sessions_deducted=sessions_deducted,
+            notes=notes,
+        )
+        db.add(booking)
+        db.flush()
+        if not booking.order_id:
+            booking.order_id = f"ORD{str(booking.id).split('-')[0].upper()}"
+        # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
+        if wallet_txn_id is not None:
+            booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
+
+        if booking_status == ClassBookingStatus.confirmed:
+            cap = _effective_capacity(gym_class)
+            current_count = int(gym_class.booking_counts or 0)
+            if cap > 0 and current_count >= cap:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Class is full",
+                )
+            gym_class.booking_counts = (
+                min(cap, current_count + 1) if cap > 0 else current_count + 1
+            )
 
         db.refresh(booking)
         return booking, wallet_txn_id
@@ -1459,19 +1454,6 @@ class BookingsService:
                 promoted_booking = BookingsService._promote_next_waiting(
                     db, tenant_id, gym_class, now, gym_config=cfg
                 )
-            if seat_label:
-                seat_still_taken = (
-                    db.query(ClassBooking)
-                    .filter(
-                        ClassBooking.class_id == class_id,
-                        cast(ClassBooking.seat_id, SAString) == seat_label,
-                        ClassBooking.id != booking.id,
-                        ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
-                    )
-                    .first()
-                )
-                if not seat_still_taken:
-                    _set_layout_seat_status(gym_class, seat_label, "available")
 
         db.refresh(booking)
         if promoted_booking is not None:

@@ -140,7 +140,21 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         }
     )
 
-# CORS middleware (must be first)
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log unexpected errors and return JSON (so CORS + clients see a real message, not a blank 500)."""
+    logger.exception("Unhandled server error on %s %s", request.method, request.url.path)
+    detail = str(exc) if settings.DEBUG else "Internal server error"
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"success": False, "message": detail, "detail": detail},
+    )
+
+# Tenant validation middleware (inner)
+app.add_middleware(TenantMiddleware)
+
+# CORS middleware (outer — wraps all responses, including TenantMiddleware 401s)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
@@ -148,9 +162,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Tenant validation middleware
-app.add_middleware(TenantMiddleware)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)

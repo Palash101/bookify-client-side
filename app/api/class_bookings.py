@@ -2,7 +2,8 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.db.session import get_db
@@ -41,6 +42,25 @@ from app.core.events.event_payloads import (
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
+
+
+def _commit_booking_or_raise(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        _log.warning("booking_commit_integrity_error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Could not complete booking — seat may already be taken or data conflict.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        _log.exception("booking_commit_db_error")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not save booking. Please try again.",
+        ) from exc
 
 
 async def _publish_booking_event(
@@ -177,7 +197,7 @@ async def create_class_booking(
         body.notes,
         gym_config=gym_config,
     )
-    db.commit()
+    _commit_booking_or_raise(db)
     pubsub: dict[str, dict[str, str]] = {}
     if wallet_txn_id is not None:
         pubsub["wallet_debited"] = await _publish_wallet_debited(
@@ -253,7 +273,7 @@ async def create_waiting_booking(
         force_waiting=True,
         gym_config=gym_config,
     )
-    db.commit()
+    _commit_booking_or_raise(db)
     pubsub: dict[str, dict[str, str]] = {}
     if wallet_txn_id is not None:
         pubsub["wallet_debited"] = await _publish_wallet_debited(
@@ -303,7 +323,7 @@ async def cancel_class_booking(
         reason=body.reason,
         gym_config=gym_config,
     )
-    db.commit()
+    _commit_booking_or_raise(db)
     pubsub: dict[str, dict[str, str]] = {
         "booking_cancelled": await _publish_booking_event(
             db,
