@@ -32,6 +32,13 @@ from app.schemas.booking import PaymentMode
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
+from app.services.user_package_tracking_service import (
+    apply_package_session_debit_for_booking,
+    get_user_package_for_sale,
+    record_booking_refund_credit,
+    record_late_cancel_audit,
+    sessions_remaining_for_sale,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +76,14 @@ def _wallet_refund_already_recorded(notes: Optional[str]) -> bool:
     return bool(notes and "__bfy_wtxn:" in notes and ":refund" in notes)
 
 
+def _wallet_user(db: Session, user: User) -> User:
+    """Load user in the active DB session before wallet balance updates."""
+    db_user = db.get(User, user.id)
+    if db_user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return db_user
+
+
 def _refund_wallet_for_cancelled_booking(
     db: Session,
     *,
@@ -100,23 +115,23 @@ def _refund_wallet_for_cancelled_booking(
     if amount <= 0:
         return None
 
-    db.refresh(user)
-    bal_before = Decimal(str(user.wallet or 0))
+    db_user = _wallet_user(db, user)
+    bal_before = Decimal(str(db_user.wallet or 0))
     bal_after = bal_before + amount
     refund_txn = WalletTransaction(
-        user_id=user.id,
+        user_id=db_user.id,
         direction="credit",
         transaction_id=None,
         amount=amount,
         currency=debit_txn.currency,
         balance_before=bal_before,
         balance_after=bal_after,
-        created_by=user.user_type or "member",
-        created_by_id=user.id,
+        created_by=db_user.user_type or "member",
+        created_by_id=db_user.id,
     )
     db.add(refund_txn)
     db.flush()
-    user.wallet = bal_after
+    db_user.wallet = bal_after
     booking.notes = _append_bfy_wtxn_note(booking.notes, refund_txn.id, "refund")
     return refund_txn.id
 
@@ -424,16 +439,16 @@ def _sessions_remaining_from_sale(sale: Sale) -> Optional[int]:
     return None
 
 
-def _restore_sessions_to_sale(sale: Sale, qty: int) -> None:
-    if qty <= 0:
-        return
-    rem = _sessions_remaining_from_sale(sale)
-    if rem is None:
-        return
-    meta: dict[str, Any] = dict(sale.extra_metadata or {})
-    meta["sessions_remaining"] = max(0, rem + qty)
-    sale.extra_metadata = meta
-    attributes.flag_modified(sale, "extra_metadata")
+def _within_free_cancel_window(
+    *,
+    starts_at: Optional[datetime],
+    now: datetime,
+    cancel_hours: int,
+) -> bool:
+    if starts_at is None:
+        return True
+    cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
+    return now <= cutoff
 
 
 def _finalize_booking_validation(outcome: "BookingValidationOutcome", payment_mode: str) -> None:
@@ -647,6 +662,32 @@ class BookingsService:
         if promoted_status == ClassBookingStatus.confirmed:
             waiting_booking.confirmed_at = now
             gym_class.booking_counts = int(gym_class.booking_counts or 0) + 1
+
+            if (
+                waiting_booking.payment_mode == "package"
+                and waiting_booking.user_package_purchase_id is not None
+                and int(waiting_booking.sessions_deducted or 0) == 0
+            ):
+                package_sale = (
+                    db.query(Sale)
+                    .filter(
+                        Sale.id == waiting_booking.user_package_purchase_id,
+                        Sale.tenant_id == tenant_id,
+                    )
+                    .first()
+                )
+                if package_sale is not None:
+                    remaining = sessions_remaining_for_sale(db, package_sale)
+                    if remaining is not None:
+                        deducted = apply_package_session_debit_for_booking(
+                            db,
+                            sale=package_sale,
+                            booking=waiting_booking,
+                            notes="Class booking (promoted from waiting)",
+                        )
+                        waiting_booking.sessions_deducted = deducted
+                    else:
+                        waiting_booking.sessions_deducted = 1
         return waiting_booking
 
     @staticmethod
@@ -1089,7 +1130,7 @@ class BookingsService:
                         True,
                         expires_at=expires_at_str,
                     )
-                rem = _sessions_remaining_from_sale(sale)
+                rem = sessions_remaining_for_sale(db, sale)
                 if rem is not None and rem < 1:
                     outcome.set_check(
                         "package_sessions",
@@ -1255,10 +1296,11 @@ class BookingsService:
         sessions_deducted = 0
         wallet_txn_id: Optional[UUID] = None
         sale_id: Optional[UUID] = None
+        package_sale: Optional[Sale] = None
 
         if payment_mode == "package" and user_package_purchase_id:
             sale_id = user_package_purchase_id
-            sale = (
+            package_sale = (
                 db.query(Sale)
                 .filter(
                     Sale.id == sale_id,
@@ -1267,26 +1309,25 @@ class BookingsService:
                 )
                 .first()
             )
-            if not sale:
+            if not package_sale:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Package purchase not found",
                 )
-            if status_str in ("confirmed", "waiting"):
-                sessions_deducted = 1
-                rem = _sessions_remaining_from_sale(sale)
-                if rem is not None:
-                    meta: dict[str, Any] = dict(sale.extra_metadata or {})
-                    meta["sessions_remaining"] = max(0, rem - 1)
-                    sale.extra_metadata = meta
-                    attributes.flag_modified(sale, "extra_metadata")
+            if status_str == "confirmed":
+                rem = sessions_remaining_for_sale(db, package_sale)
+                if rem is not None and rem < 1:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="No sessions left on this package",
+                    )
 
         if payment_mode == "wallet":
             price = Decimal(str(gym_class.price or 0))
             # Charge upfront whenever the booking is created (confirmed, pending, or waitlist).
             if price > 0 and status_str in _WALLET_CHARGE_STATUS_VALUES:
-                db.refresh(user)
-                bal_before = Decimal(str(user.wallet or 0))
+                db_user = _wallet_user(db, user)
+                bal_before = Decimal(str(db_user.wallet or 0))
                 if bal_before < price:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -1294,7 +1335,7 @@ class BookingsService:
                     )
                 bal_after = bal_before - price
                 txn = WalletTransaction(
-                    user_id=user.id,
+                    user_id=db_user.id,
                     direction="debit",
                     transaction_id=None,
                     amount=price,
@@ -1305,13 +1346,13 @@ class BookingsService:
                     ),
                     balance_before=bal_before,
                     balance_after=bal_after,
-                    created_by=user.user_type or "member",
-                    created_by_id=user.id,
+                    created_by=db_user.user_type or "member",
+                    created_by_id=db_user.id,
                 )
                 db.add(txn)
                 db.flush()
                 wallet_txn_id = txn.id
-                user.wallet = bal_after
+                db_user.wallet = bal_after
 
         booking_status = normalize_class_booking_status(status_str)
         seat_label_for_booking = _normalize_seat_label(seat_id)
@@ -1338,6 +1379,28 @@ class BookingsService:
         # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
         if wallet_txn_id is not None:
             booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
+
+        if (
+            payment_mode == "package"
+            and package_sale is not None
+            and booking_status == ClassBookingStatus.confirmed
+        ):
+            remaining = sessions_remaining_for_sale(db, package_sale)
+            if remaining is not None:
+                deducted = apply_package_session_debit_for_booking(
+                    db,
+                    sale=package_sale,
+                    booking=booking,
+                    notes="Class booking",
+                )
+                if deducted == 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Failed to deduct package session",
+                    )
+                booking.sessions_deducted = deducted
+            else:
+                booking.sessions_deducted = 1
 
         if booking_status == ClassBookingStatus.confirmed:
             cap = _effective_capacity(gym_class)
@@ -1417,13 +1480,23 @@ class BookingsService:
         previous_status = booking.status
         seat_label = _normalize_seat_label(booking.seat_id)
 
-        # Return package session on cancellation if one was deducted.
+        within_free_window = True
+        cancel_hours = int(cfg.booking_settings.cancellation_window_hours or 0)
+        if starts_at is not None:
+            within_free_window = _within_free_cancel_window(
+                starts_at=starts_at,
+                now=now,
+                cancel_hours=cancel_hours,
+            )
+
+        package_sale: Optional[Sale] = None
+        user_package = None
         if (
             booking.payment_mode == "package"
             and booking.user_package_purchase_id is not None
             and int(booking.sessions_deducted or 0) > 0
         ):
-            sale = (
+            package_sale = (
                 db.query(Sale)
                 .filter(
                     Sale.id == booking.user_package_purchase_id,
@@ -1432,12 +1505,28 @@ class BookingsService:
                 )
                 .first()
             )
-            if sale:
-                _restore_sessions_to_sale(sale, int(booking.sessions_deducted or 0))
+            if package_sale is not None:
+                user_package = get_user_package_for_sale(db, package_sale.id)
 
         promoted_booking: Optional[ClassBooking] = None
         tx_ctx = db.begin_nested() if db.in_transaction() else db.begin()
         with tx_ctx:
+            if package_sale is not None and user_package is not None:
+                if within_free_window:
+                    record_booking_refund_credit(
+                        db,
+                        user_package=user_package,
+                        sale=package_sale,
+                        booking=booking,
+                        sessions=int(booking.sessions_deducted or 0),
+                    )
+                else:
+                    record_late_cancel_audit(
+                        db,
+                        user_package=user_package,
+                        booking=booking,
+                    )
+
             booking.status = CANCELLED_STATUS
             booking.cancelled_at = now
             booking.cancelled_by_user_id = user.id

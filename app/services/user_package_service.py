@@ -8,8 +8,10 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.models.package import Package
 from app.models.sales import Sale
 from app.models.user_package import UserPackage
+from app.services.user_package_tracking_service import record_package_purchase_credit
 
 
 def ensure_user_package_for_completed_package_sale(
@@ -38,17 +40,33 @@ def ensure_user_package_for_completed_package_sale(
     if existing:
         return existing
 
+    session_total = sale.session_count
     row = UserPackage(
         user_id=sale.user_id,
         package_id=sale.package_id,
         pricing_id=sale.pricing_id,
         sale_id=sale.id,
         expire_at=sale.expires_at,
-        session_count=sale.session_count,
+        session_count=session_total,
+        total_session=session_total,
         session_type=sale.session_type,
         person_count=sale.person_count,
         created_by=created_by,
         created_by_id=created_by_id,
     )
     db.add(row)
+    db.flush()
+
+    package_name: Optional[str] = None
+    if sale.package_id is not None:
+        package = db.query(Package).filter(Package.id == sale.package_id).first()
+        if package and package.name:
+            package_name = package.name
+
+    record_package_purchase_credit(
+        db,
+        user_package=row,
+        sale=sale,
+        package_name=package_name,
+    )
     return row

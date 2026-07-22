@@ -15,6 +15,11 @@ from app.models.wallet_transactions import WalletTransaction
 from app.models.tenant_setting import TenantSetting
 from app.models.class_booking import ClassBooking
 from app.models.user_package import UserPackage
+from app.models.user_package_tracking import (
+    SessionTxnSource,
+    SessionTxnType,
+    UserPackageTracking,
+)
 from app.models.tenant_website_config import TenantWebsiteConfig
 from app.models.tenant_website_sections import TenantWebsiteSection
 from app.models.notification_template import NotificationTemplate, NotificationTemplateType
@@ -37,6 +42,9 @@ __all__ = [
     "TenantSetting",
     "ClassBooking",
     "UserPackage",
+    "UserPackageTracking",
+    "SessionTxnType",
+    "SessionTxnSource",
     "TenantWebsiteConfig",
     "TenantWebsiteSection",
     "NotificationTemplate",

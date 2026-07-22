@@ -16,6 +16,7 @@ from app.schemas.package import PackageResponse
 from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
 from app.services.gym_config_service import GymConfigService
 from app.services.sale_expiry import compute_sale_expires_at
+from app.services.user_package_tracking_service import sessions_remaining_for_sale
 
 # Admin "published" packages use status=active (draft/block are hidden from clients).
 _CATALOG_STATUS = "active"
@@ -500,22 +501,20 @@ class PackagesService:
 
             total_sessions: Optional[int] = None
             if not is_unlimited:
-                if up.session_count is not None:
-                    total_sessions = int(up.session_count)
+                if up.total_session is not None:
+                    total_sessions = int(up.total_session)
+                elif sale is not None and sale.session_count is not None:
+                    total_sessions = int(sale.session_count)
                 elif pricing_row is not None and pricing_row.session_count is not None:
                     total_sessions = int(pricing_row.session_count)
 
             sessions_remaining: Optional[int] = None
             if is_unlimited:
                 sessions_remaining = None
-            else:
-                # Prefer sale JSON override (if present), else compute from entitlement total - used
-                if sale is not None:
-                    rem_meta = _sessions_remaining_from_sale(sale)
-                    if rem_meta is not None:
-                        sessions_remaining = max(0, int(rem_meta))
-                if sessions_remaining is None and total_sessions is not None:
-                    sessions_remaining = max(0, total_sessions - sessions_used)
+            elif sale is not None:
+                sessions_remaining = sessions_remaining_for_sale(db, sale)
+            elif total_sessions is not None:
+                sessions_remaining = max(0, total_sessions - sessions_used)
 
             expires_at = up.expire_at or (sale.expires_at if sale is not None else None) or compute_sale_expires_at(
                 sale, package

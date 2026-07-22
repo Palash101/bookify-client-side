@@ -43,6 +43,7 @@ class UserPackage(Base):
 
     expire_at = Column(DateTime(timezone=True), nullable=True)
     session_count = Column(Integer, nullable=True)
+    total_session = Column(Integer, nullable=True)
     # DB uses session_type_enum; store as string (e.g. sessions, class)
     session_type = Column(String(20), nullable=True)
     person_count = Column(Integer, nullable=True)
