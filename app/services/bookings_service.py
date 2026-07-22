@@ -164,6 +164,34 @@ def _class_starts_at(gym_class: GymClass, tz: ZoneInfo) -> Optional[datetime]:
     return datetime(d.year, d.month, d.day, t.hour, t.minute, t.second, tzinfo=tz)
 
 
+def booking_cancel_info(
+    booking: ClassBooking,
+    gym_class: Optional[GymClass],
+    gym_config: GymConfigValue,
+    tz: ZoneInfo,
+    now: Optional[datetime] = None,
+) -> tuple[bool, Optional[str]]:
+    """Return (can_cancel, cancel_deadline_iso) for a booking on a scheduled class."""
+    if now is None:
+        now = datetime.now(tz)
+
+    cancel_deadline_iso: Optional[str] = None
+    can_cancel = False
+    starts_at = _class_starts_at(gym_class, tz) if gym_class is not None else None
+
+    if booking.status != CANCELLED_STATUS and starts_at is not None:
+        cancel_hours = int(gym_config.booking_settings.cancellation_window_hours or 0)
+        allow_late = bool(gym_config.booking_settings.allow_late_cancellations)
+        cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
+        cancel_deadline_iso = cutoff.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
+        if allow_late:
+            can_cancel = booking.status not in (ClassBookingStatus.completed,)
+        else:
+            can_cancel = now <= cutoff and booking.status not in (ClassBookingStatus.completed,)
+
+    return can_cancel, cancel_deadline_iso
+
+
 def _is_cancelled_class(status_value: Optional[str]) -> bool:
     s = (status_value or "").strip().lower()
     return s in ("cancelled", "canceled")
@@ -454,8 +482,6 @@ class BookingsService:
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
         tz = _tenant_tz(db, tenant_id, gym_config=cfg)
         now = datetime.now(tz)
-        cancel_hours = int(cfg.booking_settings.cancellation_window_hours or 0)
-        allow_late = bool(cfg.booking_settings.allow_late_cancellations)
 
         trainer_user = aliased(User)
         program = aliased(FitnessProgram)
@@ -494,15 +520,9 @@ class BookingsService:
             if trainer:
                 trainer_name = f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() or trainer.email
 
-            cancel_deadline_iso: Optional[str] = None
-            can_cancel = False
-            if booking.status != CANCELLED_STATUS and starts_at is not None:
-                cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
-                cancel_deadline_iso = cutoff.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
-                if allow_late:
-                    can_cancel = booking.status not in ("completed",)
-                else:
-                    can_cancel = now <= cutoff and booking.status not in ("completed",)
+            can_cancel, cancel_deadline_iso = booking_cancel_info(
+                booking, gym_class, cfg, tz, now
+            )
 
             cancelled_at_iso: Optional[str] = None
             if booking.status == CANCELLED_STATUS and booking.cancelled_at is not None:

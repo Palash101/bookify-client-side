@@ -10,7 +10,7 @@ from app.models.gym_class import GymClass
 from app.models.user import User
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
-from app.services.bookings_service import _effective_capacity
+from app.services.bookings_service import _effective_capacity, _tenant_tz, booking_cancel_info
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 
@@ -215,11 +215,8 @@ class ClassesService:
         user_id,
     ):
         """
-        Returns a single class details payload.
-
-        Note: Seat layout/bookings tables are not present in current models, so
-        layout seats are synthesized from max_bookings/booking_counts and
-        user_booking is returned as empty.
+        Returns a single class details payload including the current user's active booking
+        (if any) with cancellation eligibility.
         """
         gym_class = (
             db.query(GymClass)
@@ -363,6 +360,15 @@ class ClassesService:
 
         live_layout = ClassesService._with_live_layout_status(db, gym_class)
 
+        tz = _tenant_tz(db, tenant_id, gym_config=gym_config)
+        now = datetime.now(tz)
+        can_cancel = False
+        cancel_deadline: Optional[str] = None
+        if booking is not None:
+            can_cancel, cancel_deadline = booking_cancel_info(
+                booking, gym_class, gym_config, tz, now
+            )
+
         # Prepare response payload expected by schema
         payload = {
             "class_id": str(gym_class.id),
@@ -412,6 +418,8 @@ class ClassesService:
                     if booking is not None and booking.user_package_purchase_id is not None
                     else None
                 ),
+                "can_cancel": can_cancel,
+                "cancel_deadline": cancel_deadline,
             },
         }
         return payload

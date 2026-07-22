@@ -149,6 +149,8 @@ class UserBookingResponse(BaseModel):
     waiting_position: Optional[int] = None
     payment_mode: Optional[str] = None
     package_id: Optional[str] = None
+    can_cancel: bool = False
+    cancel_deadline: Optional[str] = None
 
     class Config:
         from_attributes = True
