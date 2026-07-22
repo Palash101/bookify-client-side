@@ -923,16 +923,6 @@ class BookingsService:
         max_bookings = _effective_capacity(gym_class)
         max_waitings = int(gym_class.max_waitings or 0)
 
-        # One-to-one classes (capacity=1) cannot be double-booked or waitlisted.
-        if max_bookings == 1 and occupying >= 1:
-            outcome.set_check(
-                "one_to_one_available",
-                False,
-                message="This class is already booked by another user",
-            )
-            _finalize_booking_validation(outcome, pm)
-            return outcome
-
         has_slot = max_bookings <= 0 or occupying < max_bookings
         waitlist_ok = (
             not has_slot
@@ -948,8 +938,13 @@ class BookingsService:
         if can_book:
             outcome.set_check("capacity", True, seats_left=seats_left)
             outcome.set_check("max_waiting_reached", True)
+            if max_bookings == 1 and occupying >= 1 and waitlist_ok:
+                outcome.set_check("one_to_one_available", True)
         else:
-            detail = "Class is full"
+            if max_bookings == 1 and occupying >= 1:
+                detail = "This class is already booked by another user"
+            else:
+                detail = "Class is full"
             if not config.booking_settings.allow_waiting_list:
                 detail += " and waiting list is disabled"
             elif max_waitings <= 0:
@@ -963,6 +958,8 @@ class BookingsService:
                 message=detail,
             )
             outcome.set_check("max_waiting_reached", False, message=detail)
+            if max_bookings == 1 and occupying >= 1:
+                outcome.set_check("one_to_one_available", False, message=detail)
 
         if pm == "free":
             fe = config.payment_pricing.enable_free_classes
