@@ -704,10 +704,14 @@ class BookingsService:
         gym_class: GymClass,
         now: datetime,
         gym_config: Optional[GymConfigValue] = None,
+        freed_seat_id: Optional[str] = None,
     ) -> Optional[ClassBooking]:
         """
         Promote oldest waiting booking to an occupying status when a slot is freed.
         Returns the promoted booking, if any.
+
+        Waitlist bookings defer seat selection; when a layout class frees a seat,
+        assign that seat_id on promotion.
         """
         waiting_booking = (
             db.query(ClassBooking)
@@ -798,6 +802,12 @@ class BookingsService:
                     else:
                         waiting_booking.sessions_deducted = 1
                     db.flush()
+
+            # Waitlist bookings intentionally have no seat until promotion.
+            if _class_has_layout(gym_class) and not waiting_booking.seat_id:
+                seat_to_assign = _normalize_seat_label(freed_seat_id)
+                if seat_to_assign:
+                    waiting_booking.seat_id = seat_to_assign
         return waiting_booking
 
     @staticmethod
@@ -1669,7 +1679,12 @@ class BookingsService:
             if previous_status == ClassBookingStatus.confirmed:
                 gym_class.booking_counts = max(0, int(gym_class.booking_counts or 0) - 1)
                 promoted_booking = BookingsService._promote_next_waiting(
-                    db, tenant_id, gym_class, now, gym_config=cfg
+                    db,
+                    tenant_id,
+                    gym_class,
+                    now,
+                    gym_config=cfg,
+                    freed_seat_id=seat_label,
                 )
 
         db.refresh(booking)

@@ -17,6 +17,7 @@ from app.schemas.transactions import (
     PurchasesHistoryResponse,
     PurchaseHistoryItemResponse,
     PurchasesHistoryDataResponse,
+    PaginationMeta,
 )
 from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_meta
 from app.models.sales_transactions import SalesTransactionStatus, SalesTransactions
@@ -163,15 +164,22 @@ async def get_wallet_transactions(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
 ):
     # Transactions are scoped to current_user via user_id; tenant header mismatch shouldn't block.
     _ = tenant_id
 
+    base_query = db.query(WalletTransaction).filter(
+        WalletTransaction.user_id == current_user.id
+    )
+    total = base_query.count()
+    offset = (page - 1) * limit
+    total_pages = (total + limit - 1) // limit if total else 0
+
     txns = (
-        db.query(WalletTransaction)
-        .filter(WalletTransaction.user_id == current_user.id)
-        .order_by(WalletTransaction.created_at.desc())
+        base_query.order_by(WalletTransaction.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -200,6 +208,13 @@ async def get_wallet_transactions(
             for t in txns
         ],
         "count": len(txns),
+        "pagination": PaginationMeta(
+            page=page,
+            limit=limit,
+            total=total,
+            total_pages=total_pages,
+            has_more=page < total_pages,
+        ),
     }
 
 
@@ -211,6 +226,7 @@ async def get_purchases_history(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
 ):
     """
@@ -222,15 +238,22 @@ async def get_purchases_history(
     """
     # Scope by token user tenant (security). Header mismatch shouldn't block.
     scoped_tenant_id = current_user.tenant_id
+    _ = tenant_id
+
+    filters = (
+        Sale.user_id == current_user.id,
+        Sale.tenant_id == scoped_tenant_id,
+    )
+    total = db.query(Sale).filter(*filters).count()
+    offset = (page - 1) * limit
+    total_pages = (total + limit - 1) // limit if total else 0
 
     sales = (
         db.query(Sale, Package.name.label("package_name"))
         .outerjoin(Package, Package.id == Sale.package_id)
-        .filter(
-            Sale.user_id == current_user.id,
-            Sale.tenant_id == scoped_tenant_id,
-        )
+        .filter(*filters)
         .order_by(Sale.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -268,5 +291,15 @@ async def get_purchases_history(
         elif sale.type in ("package_wallet", "wallet") and (sale.product_item_type or "") == "package":
             data.package_wallet_purchases.append(item)
 
-    return PurchasesHistoryResponse(data=data)
+    return PurchasesHistoryResponse(
+        data=data,
+        count=len(sales),
+        pagination=PaginationMeta(
+            page=page,
+            limit=limit,
+            total=total,
+            total_pages=total_pages,
+            has_more=page < total_pages,
+        ),
+    )
 

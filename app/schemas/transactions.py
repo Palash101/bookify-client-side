@@ -31,11 +31,20 @@ class WalletTransactionItemResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class PaginationMeta(BaseModel):
+    page: int
+    limit: int
+    total: int
+    total_pages: int
+    has_more: bool
+
+
 class WalletTransactionsListResponse(BaseModel):
     success: bool = True
     message: str = "Wallet transactions fetched successfully"
     data: List[WalletTransactionItemResponse] = []
     count: int = 0
+    pagination: Optional[PaginationMeta] = None
 
 
 class WalletBalanceResponse(BaseModel):
@@ -116,4 +125,6 @@ class PurchasesHistoryResponse(BaseModel):
     success: bool = True
     message: str = "Purchases history fetched successfully"
     data: PurchasesHistoryDataResponse
+    count: int = 0
+    pagination: Optional[PaginationMeta] = None
 
