@@ -2,7 +2,7 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -108,10 +108,17 @@ async def get_member_bookings(
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
 ):
     tenant_id = current_user.tenant_id
     return BookingsService.list_member_bookings(
-        db, tenant_id, current_user, gym_config=gym_config
+        db,
+        tenant_id,
+        current_user,
+        gym_config=gym_config,
+        page=page,
+        limit=limit,
     )
 
 

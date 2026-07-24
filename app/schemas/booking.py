@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import AliasChoices, BaseModel, Field
 
 from app.schemas.gym_class import ProgramShortResponse
+from app.schemas.transactions import PaginationMeta
 
 PaymentMode = Literal["cash", "wallet", "package", "gateway", "free"]
 
@@ -147,3 +148,5 @@ class MemberBookingsResponse(BaseModel):
     upcoming: list[MemberUpcomingBookingItem] = Field(default_factory=list)
     past: list[MemberPastBookingItem] = Field(default_factory=list)
     waiting: list[MemberWaitingBookingItem] = Field(default_factory=list)
+    count: int = 0
+    pagination: Optional[PaginationMeta] = None

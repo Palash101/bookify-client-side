@@ -612,10 +612,20 @@ class BookingsService:
         tenant_id: str,
         user: User,
         gym_config: Optional[GymConfigValue] = None,
-    ) -> dict[str, list[dict[str, Any]]]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> dict[str, Any]:
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
         tz = _tenant_tz(db, tenant_id, gym_config=cfg)
         now = datetime.now(tz)
+
+        booking_filters = (
+            ClassBooking.tenant_id == tenant_id,
+            ClassBooking.user_id == user.id,
+        )
+        total = db.query(ClassBooking).filter(*booking_filters).count()
+        offset = (page - 1) * limit
+        total_pages = (total + limit - 1) // limit if total else 0
 
         trainer_user = aliased(User)
         program = aliased(FitnessProgram)
@@ -630,15 +640,14 @@ class BookingsService:
                     program.tenant_id == tenant_id,
                 ),
             )
-            .filter(
-                ClassBooking.tenant_id == tenant_id,
-                ClassBooking.user_id == user.id,
-            )
+            .filter(*booking_filters)
             .order_by(ClassBooking.created_at.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
 
-        out: dict[str, list[dict[str, Any]]] = {
+        out: dict[str, Any] = {
             "upcoming": [],
             "past": [],
             "waiting": [],
@@ -695,6 +704,16 @@ class BookingsService:
                 out["upcoming"].append(item)
             else:
                 out["past"].append(item)
+
+        page_count = len(out["upcoming"]) + len(out["past"]) + len(out["waiting"])
+        out["count"] = page_count
+        out["pagination"] = {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+            "has_more": page < total_pages,
+        }
         return out
 
     @staticmethod
