@@ -18,6 +18,7 @@ from app.schemas.transactions import (
     PurchaseHistoryItemResponse,
     PurchasesHistoryDataResponse,
     PaginationMeta,
+    normalize_display_status,
 )
 from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_meta
 from app.models.sales_transactions import SalesTransactionStatus, SalesTransactions
@@ -195,7 +196,7 @@ async def get_wallet_transactions(
                 "direction": t.direction,
                 "transaction_type": t.transaction_type,
                 "transaction_id": t.transaction_id,
-                "status": t.status,
+                "status": normalize_display_status(t.status),
                 "metadata": t.metadata_,
                 "amount": t.amount,
                 "currency": t.currency,
@@ -272,7 +273,7 @@ async def get_purchases_history(
             sale_id=sale.id,
             type=sale.type,
             purchased_at=purchased_at,
-            status=sale.status,
+            status=normalize_display_status(sale.status),
             amount=sale.amount,
             currency=sale.currency,
             payment_method=payment_method,

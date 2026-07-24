@@ -54,7 +54,7 @@ from app.services.event_tenant import (
     event_tenant_id_from_sale,
     event_tenant_id_from_user_package_id,
 )
-from app.schemas.transactions import SalesTransactionsListResponse
+from app.schemas.transactions import SalesTransactionsListResponse, normalize_display_status
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
@@ -980,7 +980,7 @@ async def get_sales_transactions(
             "is_package_purchase": is_package_purchase,
             "gateway": st.gateway if st else sale.gateway,
             "gateway_txn_id": st.gateway_txn_id if st else sale.gateway_transaction_id,
-            "status": (st.status.value if st else sale.status),
+            "status": normalize_display_status(st.status.value if st else sale.status),
             "amount": st.amount if st is not None and st.amount is not None else sale.amount,
             "currency": st.currency if st is not None and st.currency is not None else sale.currency,
             "package_id": sale.package_id,

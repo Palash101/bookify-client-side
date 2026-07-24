@@ -8,6 +8,15 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+def normalize_display_status(status: Optional[str]) -> Optional[str]:
+    """Map stored 'succeeded' to API-facing 'success'."""
+    if status is None:
+        return None
+    if str(status).lower() == "succeeded":
+        return "success"
+    return status
+
+
 class WalletTransactionItemResponse(BaseModel):
     id: UUID
     user_id: UUID
