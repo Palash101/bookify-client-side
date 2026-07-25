@@ -823,7 +823,7 @@ class AuthService:
     def deactivate_account(db: Session, user: User, reason: str) -> User:
         """
         Soft-delete / deactivate the current user account.
-        Stores the deletion reason on the user for support/audit.
+        Stores deletion_reason + deactivated_at on dedicated user columns.
         """
         reason_text = (reason or "").strip()
         if not reason_text:
@@ -839,14 +839,17 @@ class AuthService:
                 detail="Your account is already deactivated.",
             )
 
-        skills = user.skills if isinstance(user.skills, dict) else {}
-        skills = dict(skills)
-        skills["deletion_reason"] = reason_text
-        skills["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+        # Clean up earlier mistaken write into skills JSONB (if present).
+        if isinstance(user.skills, dict):
+            skills = dict(user.skills)
+            skills.pop("deletion_reason", None)
+            skills.pop("deactivated_at", None)
+            user.skills = skills or None
+            flag_modified(user, "skills")
 
-        user.skills = skills
-        flag_modified(user, "skills")
         user.is_active = False
+        user.deletion_reason = reason_text
+        user.deactivated_at = datetime.now(timezone.utc)
 
         db.commit()
         db.refresh(user)

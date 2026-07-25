@@ -71,6 +71,10 @@ class User(Base):
     # user_type: "member", "client", "admin" etc.
     user_type = Column(String(20), nullable=False, server_default="member")
 
+    # Soft-delete / account deactivation audit
+    deletion_reason = Column(Text, nullable=True)
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
+
     # Wallet balance (amount available for purchases)
     wallet = Column(Numeric(12, 2), nullable=True, server_default="0")
     
