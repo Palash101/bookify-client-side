@@ -48,6 +48,17 @@ class PaginationMeta(BaseModel):
     has_more: bool
 
 
+def build_pagination(page: int, limit: int, total: int) -> PaginationMeta:
+    total_pages = (total + limit - 1) // limit if total else 0
+    return PaginationMeta(
+        page=page,
+        limit=limit,
+        total=total,
+        total_pages=total_pages,
+        has_more=page < total_pages,
+    )
+
+
 class WalletTransactionsListResponse(BaseModel):
     success: bool = True
     message: str = "Wallet transactions fetched successfully"
@@ -99,6 +110,7 @@ class SalesTransactionsListResponse(BaseModel):
     message: str = "Sales transactions fetched successfully"
     data: List[SalesTransactionItemResponse] = []
     count: int = 0
+    pagination: Optional[PaginationMeta] = None
 
 
 class PurchaseHistoryItemResponse(BaseModel):

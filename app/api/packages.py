@@ -10,6 +10,7 @@ from app.schemas.package import (
     ActivePackagesListResponse,
     ActivePackageData,
 )
+from app.schemas.transactions import build_pagination, normalize_display_status
 from app.services.packages_service.packages_service import PackagesService
 from app.models.user import User
 import uuid
@@ -26,6 +27,8 @@ async def get_all_packages(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
@@ -56,6 +59,9 @@ async def get_all_packages(
             db, tenant_id=tenant_id, user_id=user_id, package=p
         )
     ]
+    total = len(visible)
+    offset = (page - 1) * limit
+    page_items = visible[offset : offset + limit]
     return {
         "success": True,
         "message": "Packages fetched successfully",
@@ -63,9 +69,10 @@ async def get_all_packages(
             PackagesService.package_to_response(
                 db, tenant_id=tenant_id, package=p, user_id=user_id
             )
-            for p in visible
+            for p in page_items
         ],
-        "count": len(visible),
+        "count": len(page_items),
+        "pagination": build_pagination(page, limit, total),
     }
 
 
@@ -74,28 +81,45 @@ async def get_active_packages(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
 ):
     """
     All successful, non-expired package purchases for the current user on this tenant.
     Newest first. Use each item's `id` (sale id) as `user_package_purchase_id` when booking.
     """
-    entries = PackagesService.get_active_packages_for_user(
-        db, tenant_id=tenant_id, user_id=current_user.id
+    entries, total = PackagesService.get_active_packages_for_user(
+        db,
+        tenant_id=tenant_id,
+        user_id=current_user.id,
+        page=page,
+        limit=limit,
     )
 
-    if not entries:
+    data = []
+    for e in entries:
+        item = ActivePackageData.model_validate(e)
+        if item.status:
+            item = item.model_copy(
+                update={"status": normalize_display_status(item.status) or item.status}
+            )
+        data.append(item)
+
+    if not data and total == 0:
         return {
             "success": True,
             "message": "No active packages found",
             "data": [],
             "count": 0,
+            "pagination": build_pagination(page, limit, 0),
         }
 
     return {
         "success": True,
         "message": "Active packages fetched successfully",
-        "data": [ActivePackageData.model_validate(e) for e in entries],
-        "count": len(entries),
+        "data": data,
+        "count": len(data),
+        "pagination": build_pagination(page, limit, total),
     }
 
 

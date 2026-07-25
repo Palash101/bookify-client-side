@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from app.models.event_event import EventStatus, EventType
+from app.schemas.transactions import PaginationMeta
 
 
 class EventResponse(BaseModel):
@@ -32,6 +33,7 @@ class EventsListResponse(BaseModel):
     message: str = "Active events fetched successfully"
     data: List[EventResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 class EventEnrollResponse(BaseModel):

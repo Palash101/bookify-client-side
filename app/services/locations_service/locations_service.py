@@ -14,7 +14,9 @@ class LocationsService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[Location]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[Location], int]:
         """
         List locations for a tenant with optional search and sorting.
         """
@@ -42,5 +44,7 @@ class LocationsService:
             # Default ordering by name
             query = query.order_by(Location.name)
 
-        return query.all()
+        total = query.count()
+        offset = (page - 1) * limit
+        return query.offset(offset).limit(limit).all(), total
 

@@ -17,7 +17,9 @@ class EventsService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[EventEvent]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[EventEvent], int]:
         query = db.query(EventEvent).filter(
             EventEvent.tenant_id == tenant_id,
             EventEvent.status == EventStatus.active,
@@ -48,7 +50,9 @@ class EventsService:
                 EventEvent.created_at.desc(),
             )
 
-        return query.all()
+        total = query.count()
+        offset = (page - 1) * limit
+        return query.offset(offset).limit(limit).all(), total
 
     @staticmethod
     def enroll_user(

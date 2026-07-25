@@ -43,7 +43,9 @@ class FitnessProgramsService:
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         only_active: bool = True,
-    ) -> List[FitnessProgram]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[FitnessProgram], int]:
         """
         List training programs for a tenant with optional filters.
         """
@@ -75,6 +77,8 @@ class FitnessProgramsService:
             # Default order by display_position then created_at
             query = query.order_by(FitnessProgram.display_position, FitnessProgram.created_at)
 
-        return query.all()
+        total = query.count()
+        offset = (page - 1) * limit
+        return query.offset(offset).limit(limit).all(), total
 
 

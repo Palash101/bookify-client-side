@@ -9,6 +9,7 @@ from app.schemas.fitness_program import (
     FitnessProgramResponse,
     FitnessProgramsListResponse,
 )
+from app.schemas.transactions import build_pagination
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 import uuid
 
@@ -29,6 +30,8 @@ async def get_training_programs_for_location(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
@@ -36,7 +39,7 @@ async def get_training_programs_for_location(
     Location-scoped training programs.
     Route: /api/v1/locations/{location_id}/training-programs
     """
-    programs = FitnessProgramsService.list_programs(
+    programs, total = FitnessProgramsService.list_programs(
         db,
         tenant_id=tenant_id,
         location_id=location_id,
@@ -44,6 +47,8 @@ async def get_training_programs_for_location(
         sort_by=sort_by,
         sort_order=sort_order,
         only_active=True,
+        page=page,
+        limit=limit,
     )
 
     return {
@@ -51,5 +56,5 @@ async def get_training_programs_for_location(
         "message": "Training programs fetched successfully",
         "data": [FitnessProgramResponse.model_validate(p) for p in programs],
         "count": len(programs),
+        "pagination": build_pagination(page, limit, total),
     }
-

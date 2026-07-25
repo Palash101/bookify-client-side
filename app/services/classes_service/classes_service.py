@@ -127,7 +127,9 @@ class ClassesService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[GymClass]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[GymClass], int]:
         """
         List classes for a tenant in a date range, with optional search and sorting.
         Rules:
@@ -205,7 +207,9 @@ class ClassesService:
 
             result.append(gym_class)
 
-        return result
+        total = len(result)
+        offset = (page - 1) * limit
+        return result[offset : offset + limit], total
 
     @staticmethod
     def get_class_details(

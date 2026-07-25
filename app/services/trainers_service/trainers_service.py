@@ -17,13 +17,15 @@ class TrainersService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[User]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[User], int]:
         """
         List trainers (users) whose roles.key is one of role_keys, with optional search/sort.
         """
         keys = tuple(k for k in role_keys if k)
         if not keys:
-            return []
+            return [], 0
 
         query = (
             db.query(User)
@@ -56,7 +58,9 @@ class TrainersService:
             # Default ordering by name
             query = query.order_by(User.first_name, User.last_name)
 
-        return query.all()
+        total = query.count()
+        offset = (page - 1) * limit
+        return query.offset(offset).limit(limit).all(), total
 
     @staticmethod
     def list_trainers_by_role_key(
@@ -67,7 +71,9 @@ class TrainersService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[User]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[User], int]:
         """Backward-compatible: single role key."""
         return TrainersService.list_trainers_by_role_keys(
             db,
@@ -77,5 +83,7 @@ class TrainersService:
             search=search,
             sort_by=sort_by,
             sort_order=sort_order,
+            page=page,
+            limit=limit,
         )
 

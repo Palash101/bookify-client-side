@@ -54,7 +54,11 @@ from app.services.event_tenant import (
     event_tenant_id_from_sale,
     event_tenant_id_from_user_package_id,
 )
-from app.schemas.transactions import SalesTransactionsListResponse, normalize_display_status
+from app.schemas.transactions import (
+    SalesTransactionsListResponse,
+    normalize_display_status,
+    build_pagination,
+)
 
 # Use a single, consistent tag name for Swagger ("payments")
 router = APIRouter(prefix="/payment", tags=["payments"])
@@ -912,6 +916,7 @@ async def _handle_payment_callback(
 
 @router.get("/sales-transactions", response_model=SalesTransactionsListResponse)
 async def get_sales_transactions(
+    page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
@@ -922,7 +927,7 @@ async def get_sales_transactions(
     Cash-revenue transaction history: gateway package purchases and optional wallet top-ups.
     Wallet-balance package purchases are excluded (see GET /wallet/transactions/purchases).
     """
-    sales = (
+    base_query = (
         db.query(Sale)
         .filter(
             Sale.user_id == current_user.id,
@@ -938,9 +943,10 @@ async def get_sales_transactions(
             ),
         )
         .order_by(Sale.created_at.desc())
-        .limit(limit)
-        .all()
     )
+    total = base_query.count()
+    offset = (page - 1) * limit
+    sales = base_query.offset(offset).limit(limit).all()
     sale_ids = [s.id for s in sales]
     latest_st_by_order: dict = {}
     if sale_ids:
@@ -994,6 +1000,7 @@ async def get_sales_transactions(
         "message": "Sales transactions fetched successfully",
         "data": [_row(sale) for sale in sales],
         "count": len(sales),
+        "pagination": build_pagination(page, limit, total),
     }
 
 

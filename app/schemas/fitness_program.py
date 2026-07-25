@@ -1,6 +1,8 @@
 from pydantic import BaseModel, field_serializer
 from typing import Optional, List
 
+from app.schemas.transactions import PaginationMeta
+
 
 class FitnessProgramResponse(BaseModel):
     id: int
@@ -40,6 +42,7 @@ class FitnessProgramsListResponse(BaseModel):
     message: str = "Training programs fetched successfully"
     data: List[FitnessProgramResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 class FitnessProgramDetailResponse(BaseModel):

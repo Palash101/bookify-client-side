@@ -4,6 +4,8 @@ from datetime import date, datetime
 from uuid import UUID
 from decimal import Decimal
 
+from app.schemas.transactions import PaginationMeta
+
 
 class PackageDiscountResponse(BaseModel):
     id: UUID
@@ -59,6 +61,7 @@ class AllPackagesListResponse(BaseModel):
     message: str = "Packages fetched successfully"
     data: List[PackageResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 class PackageDetailResponse(BaseModel):
@@ -102,3 +105,4 @@ class ActivePackagesListResponse(BaseModel):
     message: str = "Active packages fetched successfully"
     data: List[ActivePackageData]
     count: int
+    pagination: Optional[PaginationMeta] = None

@@ -433,7 +433,9 @@ class PackagesService:
         db: Session,
         tenant_id: str,
         user_id: uuid.UUID,
-    ) -> List[Dict[str, Any]]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[Dict[str, Any]], int]:
         """
         Active packages for this user+tenant.
         Source of truth is `user_packages` (entitlements). We optionally join `sales`
@@ -442,7 +444,7 @@ class PackagesService:
         from sqlalchemy.sql import func as sa_func
 
         out: List[Dict[str, Any]] = []
-        rows = (
+        base_query = (
             db.query(UserPackage, Sale)
             # We only want "active packages" that can actually be used for booking,
             # so require a real Sale row for the entitlement.
@@ -462,8 +464,10 @@ class PackagesService:
                 ),
             )
             .order_by(UserPackage.created_at.desc())
-            .all()
         )
+        total = base_query.count()
+        offset = (page - 1) * limit
+        rows = base_query.offset(offset).limit(limit).all()
 
         for up, sale in rows:
             package = (
@@ -544,5 +548,5 @@ class PackagesService:
                 }
             )
 
-        return out
+        return out, total
 
