@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from fastapi import HTTPException, status
 from app.models.user import User, normalize_user_gender, user_gender_value
 from app.models.role import Role
@@ -18,7 +19,7 @@ from app.core.events.event_types import CLIENT_LOGIN_OTP
 from app.services.event_publish_service import EventPublishService
 from app.core.logging import get_logger
 from app.schemas.user import UserCreate, ProfileUpdate
-from datetime import timedelta, date as date_type
+from datetime import datetime, timedelta, timezone, date as date_type
 from app.core.settings import settings
 from typing import Optional, Dict, Any, Tuple
 import uuid
@@ -816,4 +817,42 @@ class AuthService:
         
         db.commit()
         db.refresh(user)
+        return user
+
+    @staticmethod
+    def deactivate_account(db: Session, user: User, reason: str) -> User:
+        """
+        Soft-delete / deactivate the current user account.
+        Stores the deletion reason on the user for support/audit.
+        """
+        reason_text = (reason or "").strip()
+        if not reason_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reason is required to delete your account.",
+            )
+
+        user = db.merge(user)
+        if user.is_active is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Your account is already deactivated.",
+            )
+
+        skills = user.skills if isinstance(user.skills, dict) else {}
+        skills = dict(skills)
+        skills["deletion_reason"] = reason_text
+        skills["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+
+        user.skills = skills
+        flag_modified(user, "skills")
+        user.is_active = False
+
+        db.commit()
+        db.refresh(user)
+        log.info(
+            "account_deactivated user_id=%s tenant_id=%s",
+            user.id,
+            user.tenant_id,
+        )
         return user

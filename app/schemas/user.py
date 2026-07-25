@@ -220,6 +220,17 @@ class ProfileUpdate(BaseModel):
         }
 
 
+class DeleteAccountRequest(BaseModel):
+    reason: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "reason": "No longer using the app",
+            }
+        }
+
+
 class MessageResponse(BaseModel):
     success: bool = True
     message: str

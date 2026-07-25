@@ -14,6 +14,7 @@ from app.schemas.user import (
     RefreshTokenResponse,
     ProfileResponse,
     ProfileUpdate,
+    DeleteAccountRequest,
     MessageResponse,
     UserMeResponse,
 )
@@ -331,4 +332,21 @@ async def update_me(
         "success": True,
         "message": "Profile updated successfully",
         "data": updated_user
+    }
+
+
+@router.post("/delete-account", response_model=MessageResponse)
+async def delete_account(
+    body: DeleteAccountRequest,
+    current_user: UserModel = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete (deactivate) the current authenticated user's account.
+    Requires authentication. Body must include a reason.
+    """
+    AuthService.deactivate_account(db, current_user, body.reason)
+    return {
+        "success": True,
+        "message": "Your account has been deactivated successfully.",
     }
