@@ -12,6 +12,8 @@ class PackageDiscountResponse(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     value: Optional[Decimal] = None
+    validity_start: Optional[date] = None
+    validity_end: Optional[date] = None
     type: Optional[str] = None
     created_at: Optional[datetime] = None
 

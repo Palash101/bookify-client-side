@@ -12,7 +12,7 @@ from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
 from app.models.sales import Sale
 from app.models.user_package import UserPackage
-from app.schemas.package import PackageResponse
+from app.schemas.package import PackagePricingResponse, PackageResponse
 from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
 from app.services.gym_config_service import GymConfigService
 from app.services.sale_expiry import compute_sale_expires_at
@@ -24,10 +24,31 @@ _CATALOG_STATUS = "active"
 
 class PackagesService:
     @staticmethod
-    def compute_discounted_purchase_amount(pricing: PackagePricing) -> float:
+    def is_discount_valid(discount: Optional[PackageDiscount], today: date) -> bool:
+        """
+        Discount is active when tenant today is within validity_start..validity_end (inclusive).
+        Missing start/end dates mean no bound on that side.
+        """
+        if discount is None:
+            return False
+        start = discount.validity_start
+        if start is not None and start > today:
+            return False
+        end = discount.validity_end
+        if end is not None and end < today:
+            return False
+        return True
+
+    @staticmethod
+    def compute_discounted_purchase_amount(
+        pricing: PackagePricing,
+        *,
+        today: Optional[date] = None,
+    ) -> float:
         """
         Final charge for a package pricing row after its linked discount (if any).
         Discount types: flat/fixed (subtract amount) or percentage/percent (reduce by %).
+        Expired or not-yet-active discounts are ignored when `today` is provided.
         """
         if pricing.price is None:
             raise ValueError("Package pricing has no price configured")
@@ -35,6 +56,8 @@ class PackagesService:
         base = float(pricing.price)
         discount: Optional[PackageDiscount] = pricing.discount
         if discount is None or discount.value is None:
+            return round(base, 2)
+        if today is not None and not PackagesService.is_discount_valid(discount, today):
             return round(base, 2)
 
         discount_value = float(discount.value)
@@ -238,6 +261,18 @@ class PackagesService:
         return True
 
     @staticmethod
+    def pricing_to_response(
+        pricing: PackagePricing,
+        today: date,
+    ) -> PackagePricingResponse:
+        item = PackagePricingResponse.model_validate(pricing)
+        if pricing.discount is not None and not PackagesService.is_discount_valid(
+            pricing.discount, today
+        ):
+            return item.model_copy(update={"discount_id": None, "discount": None})
+        return item
+
+    @staticmethod
     def package_to_response(
         db: Session,
         *,
@@ -245,15 +280,27 @@ class PackagesService:
         package: Package,
         user_id: Optional[uuid.UUID] = None,
     ) -> PackageResponse:
+        today = PackagesService.tenant_today(db, tenant_id)
         base = PackageResponse.model_validate(package)
         flags = PackagesService.package_catalog_flags(
             db, tenant_id=tenant_id, user_id=user_id, package=package
         )
-        return base.model_copy(update=flags)
+        pricing_list = [
+            PackagesService.pricing_to_response(pricing, today)
+            for pricing in package.pricing_list
+        ]
+        return base.model_copy(update={**flags, "pricing_list": pricing_list})
 
     @staticmethod
-    def build_purchase_discount_metadata(pricing: PackagePricing, amount_value: float) -> dict[str, Any]:
+    def build_purchase_discount_metadata(
+        pricing: PackagePricing,
+        amount_value: float,
+        *,
+        today: Optional[date] = None,
+    ) -> dict[str, Any]:
         if pricing.discount is None or pricing.discount.value is None:
+            return {}
+        if today is not None and not PackagesService.is_discount_valid(pricing.discount, today):
             return {}
         original_price = float(pricing.price)
         return {

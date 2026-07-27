@@ -192,8 +192,11 @@ async def initiate_package_purchase(
             package=package,
         )
 
-    amount_value = PackagesService.compute_discounted_purchase_amount(pricing)
-    discount_meta = PackagesService.build_purchase_discount_metadata(pricing, amount_value)
+    today = PackagesService.tenant_today(db, tenant_id)
+    amount_value = PackagesService.compute_discounted_purchase_amount(pricing, today=today)
+    discount_meta = PackagesService.build_purchase_discount_metadata(
+        pricing, amount_value, today=today
+    )
     currency_code = GymConfigService.get_currency(db, tenant_id)
 
     # --------------------------
