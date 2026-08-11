@@ -89,6 +89,13 @@ class ClassBooking(Base):
         ForeignKey("sales.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # packages.id when payment_mode is package (denormalized from the sale)
+    package_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("packages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # Human-readable booking order reference e.g. ORD1A2B3C4D
     order_id = Column(String(50), nullable=True, index=True)

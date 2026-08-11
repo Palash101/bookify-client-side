@@ -1435,6 +1435,7 @@ class BookingsService:
         sessions_deducted = 0
         wallet_txn_id: Optional[UUID] = None
         sale_id: Optional[UUID] = None
+        resolved_package_id: Optional[UUID] = None
         package_sale: Optional[Sale] = None
 
         if payment_mode == "package" and user_package_purchase_id:
@@ -1453,6 +1454,7 @@ class BookingsService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Package purchase not found",
                 )
+            resolved_package_id = package_sale.package_id
             if status_str in ("confirmed", WAITING_STATUS.value):
                 rem = sessions_remaining_for_sale(db, package_sale)
                 if rem is not None and rem < 1:
@@ -1508,6 +1510,7 @@ class BookingsService:
             confirmed_at=now if booking_status == ClassBookingStatus.confirmed else None,
             payment_mode=payment_mode,
             user_package_purchase_id=sale_id,
+            package_id=resolved_package_id,
             sessions_deducted=sessions_deducted,
             notes=notes,
         )
