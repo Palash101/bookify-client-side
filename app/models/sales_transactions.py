@@ -77,7 +77,7 @@ class SalesTransactions(Base):
     # DB uses bigint / bigserial (not UUID).
     id = Column(BigInteger, primary_key=True, autoincrement=True)
 
-    order_id = Column(
+    sales_id = Column(
         UUID(as_uuid=True),
         ForeignKey("sales.id", ondelete="CASCADE"),
         nullable=True,

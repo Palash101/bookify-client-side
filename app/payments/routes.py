@@ -320,7 +320,7 @@ async def initiate_package_purchase(
 
     # Log initial transaction event (payment initiated; no Sale yet)
     txn = SalesTransactions(
-        order_id=None,
+        sales_id=None,
         tenant_id=tenant_id,
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
@@ -572,7 +572,7 @@ async def _handle_payment_callback(
                         )
                         db.add(order)
                         db.flush()
-                        init_txn.order_id = order.id
+                        init_txn.sales_id = order.id
 
             audit_sale = order or db.query(Sale).filter(Sale.id == order_uuid).first()
             if audit_sale:
@@ -635,7 +635,7 @@ async def _handle_payment_callback(
 
             if init_pkg_txn is not None:
                 previous_pkg_status = init_pkg_txn.status
-                init_pkg_txn.order_id = order.id if order else order_uuid
+                init_pkg_txn.sales_id = order.id if order else order_uuid
                 init_pkg_txn.gateway = gateway_value
                 init_pkg_txn.gateway_txn_id = result.transaction_id or init_pkg_txn.gateway_txn_id or ""
                 init_pkg_txn.status = status_value
@@ -655,7 +655,7 @@ async def _handle_payment_callback(
                 db.commit()
             else:
                 txn = SalesTransactions(
-                    order_id=order.id if order else order_uuid,
+                    sales_id=order.id if order else order_uuid,
                     tenant_id=tenant_id,
                     payment_method="gateway",
                     gateway=gateway_value,
@@ -753,10 +753,10 @@ async def _handle_payment_callback(
             )
             db.add(sale)
             db.flush()
-            init_wallet_txn.order_id = sale.id
+            init_wallet_txn.sales_id = sale.id
 
             # Update the initiation row instead of inserting a second sales_transactions row.
-            init_wallet_txn.order_id = sale.id
+            init_wallet_txn.sales_id = sale.id
             init_wallet_txn.status = sales_transaction_status_from_gateway(result.status)
             init_wallet_txn.gateway = (
                 result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)
@@ -898,8 +898,8 @@ async def _handle_payment_callback(
             .first()
         )
         failed_sale = None
-        if failed_st and failed_st.order_id:
-            failed_sale = db.query(Sale).filter(Sale.id == failed_st.order_id).first()
+        if failed_st and failed_st.sales_id:
+            failed_sale = db.query(Sale).filter(Sale.id == failed_st.sales_id).first()
         await PaymentNotificationService.publish_failed(
             db,
             tenant_id=event_tenant_id_from_sale(failed_sale, tenant_id),
@@ -951,20 +951,20 @@ async def get_sales_transactions(
     offset = (page - 1) * limit
     sales = base_query.offset(offset).limit(limit).all()
     sale_ids = [s.id for s in sales]
-    latest_st_by_order: dict = {}
+    latest_st_by_sale: dict = {}
     if sale_ids:
         st_rows = (
             db.query(SalesTransactions)
-            .filter(SalesTransactions.order_id.in_(sale_ids))
+            .filter(SalesTransactions.sales_id.in_(sale_ids))
             .order_by(SalesTransactions.created_at.desc())
             .all()
         )
         for st in st_rows:
-            if st.order_id not in latest_st_by_order:
-                latest_st_by_order[st.order_id] = st
+            if st.sales_id not in latest_st_by_sale:
+                latest_st_by_sale[st.sales_id] = st
 
     def _row(sale: Sale) -> dict[str, Any]:
-        st = latest_st_by_order.get(sale.id)
+        st = latest_st_by_sale.get(sale.id)
         is_package_purchase = (sale.type in ("package_gateway", "package_wallet")) or (
             sale.type == "gateway" and sale.product_item_type == "package"
         ) or (
@@ -972,7 +972,7 @@ async def get_sales_transactions(
         )
         return {
             "id": st.id if st else sale.id,
-            "order_id": sale.id,
+            "sales_id": sale.id,
             "type": sale.type,
             "payment_method": "wallet"
             if sale.type in ("package_wallet", "wallet")

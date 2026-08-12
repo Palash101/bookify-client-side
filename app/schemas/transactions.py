@@ -81,7 +81,7 @@ class SalesTransactionItemResponse(BaseModel):
 
     # sales_transactions.id is bigint; wallet-only sales rows use sale id (UUID).
     id: Union[int, UUID]
-    order_id: UUID
+    sales_id: UUID
 
     # wallet_add | package_gateway | package_wallet
     type: str

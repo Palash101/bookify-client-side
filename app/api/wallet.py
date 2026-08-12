@@ -66,7 +66,7 @@ async def add_wallet_balance(
     client_order_id = uuid.uuid4()
     checkout_platform = normalize_checkout_platform(body.platform)
     init_txn = SalesTransactions(
-        order_id=None,
+        sales_id=None,
         tenant_id=tenant_id,
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,

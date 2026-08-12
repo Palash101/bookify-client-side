@@ -102,7 +102,7 @@ class PaymentSuccessService:
                     )
                     db.add(sale)
                     db.flush()
-                    init_pkg.order_id = sale.id
+                    init_pkg.sales_id = sale.id
                     debug["sale_created_from_init_pkg"] = "1"
 
         # 3) If still no Sale, reconstruct it from initiation SalesTransactions (wallet top-up)
@@ -167,7 +167,7 @@ class PaymentSuccessService:
                 db.add(sale)
                 db.flush()
 
-                init_wallet.order_id = sale.id
+                init_wallet.sales_id = sale.id
                 init_wallet.status = SalesTransactionStatus.success
                 m = dict(init_wallet.extra_metadata or {})
                 m.setdefault("event", "created")
@@ -218,7 +218,7 @@ class PaymentSuccessService:
                     debug["package_purchased_user_package_id"] = str(user_package.id)
 
                 # Prefer updating the existing initiation row (created during payment start)
-                # so we don't end up with 2 rows for the same order_id.
+                # so we don't end up with 2 rows for the same sales_id.
                 st_row = (
                     db.query(SalesTransactions)
                     .filter(
@@ -232,7 +232,7 @@ class PaymentSuccessService:
 
                 if st_row is None:
                     st_row = SalesTransactions(
-                        order_id=sale.id,
+                        sales_id=sale.id,
                         tenant_id=sale.tenant_id,
                         payment_method="gateway",
                         gateway=sale.gateway or "stripe",
@@ -249,7 +249,7 @@ class PaymentSuccessService:
                     db.add(st_row)
                     db.flush()
                 else:
-                    st_row.order_id = sale.id
+                    st_row.sales_id = sale.id
                     if st_row.status != SalesTransactionStatus.success:
                         st_row.status = SalesTransactionStatus.success
                     if not st_row.gateway:

@@ -51,7 +51,7 @@ class PaymentCancelService:
                 else:
                     st = (
                         db.query(SalesTransactions)
-                        .filter(SalesTransactions.order_id == sale.id)
+                        .filter(SalesTransactions.sales_id == sale.id)
                         .order_by(SalesTransactions.created_at.desc())
                         .first()
                     )
@@ -62,9 +62,9 @@ class PaymentCancelService:
         previous = init_txn.status
         meta = dict(init_txn.extra_metadata or {})
         attach_checkout_platform_debug(debug, meta)
-        order_id = init_txn.order_id or meta.get("client_order_id")
-        if order_id:
-            debug["order_id"] = str(order_id)
+        sales_id = init_txn.sales_id or meta.get("client_order_id")
+        if sales_id:
+            debug["order_id"] = str(sales_id)
 
         if previous not in TERMINAL_SALES_TRANSACTION_STATUSES:
             init_txn.status = SalesTransactionStatus.cancelled
