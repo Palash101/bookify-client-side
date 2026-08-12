@@ -677,7 +677,7 @@ class BookingsService:
 
             item: dict[str, Any] = {
                 "booking_id": str(booking.id),
-                "order_id": booking.order_id,
+                "booking_ref": booking.booking_ref,
                 "class_id": str(getattr(gym_class, "id", None) or booking.class_id),
                 "class_name": class_name,
                 "booking_type": booking_type,
@@ -1516,8 +1516,7 @@ class BookingsService:
         )
         db.add(booking)
         db.flush()
-        if not booking.order_id:
-            booking.order_id = f"ORD{str(booking.id).split('-')[0].upper()}"
+        # booking_ref is assigned by ClassBooking.before_insert (Snowflake BK-*).
         # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
         if wallet_txn_id is not None:
             booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")

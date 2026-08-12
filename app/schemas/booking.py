@@ -54,6 +54,7 @@ class BookingValidateResponse(BaseModel):
 
 class BookingCreatedData(BaseModel):
     booking_id: UUID
+    booking_ref: Optional[str] = None
     status: str
     waiting_position: Optional[int] = None
     payment_mode: Optional[str] = None
@@ -85,7 +86,7 @@ class BookingCancelResponse(BaseModel):
 
 class MemberUpcomingBookingItem(BaseModel):
     booking_id: str
-    order_id: Optional[str] = None
+    booking_ref: Optional[str] = None
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
@@ -105,7 +106,7 @@ class MemberUpcomingBookingItem(BaseModel):
 
 class MemberPastBookingItem(BaseModel):
     booking_id: str
-    order_id: Optional[str] = None
+    booking_ref: Optional[str] = None
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
@@ -125,7 +126,7 @@ class MemberPastBookingItem(BaseModel):
 
 class MemberWaitingBookingItem(BaseModel):
     booking_id: str
-    order_id: Optional[str] = None
+    booking_ref: Optional[str] = None
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None

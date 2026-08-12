@@ -243,6 +243,7 @@ async def create_class_booking(
         "message": "Booking created",
         "data": BookingCreatedData(
             booking_id=booking.id,
+            booking_ref=booking.booking_ref,
             status=class_booking_status_value(booking.status),
             waiting_position=booking.waiting_position,
             payment_mode=booking.payment_mode,
@@ -299,6 +300,7 @@ async def create_waiting_booking(
         "message": "Added to waiting list",
         "data": BookingCreatedData(
             booking_id=booking.id,
+            booking_ref=booking.booking_ref,
             status=class_booking_status_value(booking.status),
             waiting_position=booking.waiting_position,
             payment_mode=booking.payment_mode,
