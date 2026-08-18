@@ -37,7 +37,7 @@ async def get_all_packages(
     Get catalog packages for the current tenant with optional search and sorting.
     Requires X-Tenant-Key header.
 
-    Only published (status=active) packages within the validity window
+    Only published (status=active), non-private packages within the validity window
     (validity_start on or before today, validity_end on or after today when set)
     are returned.
 
@@ -134,7 +134,7 @@ async def get_package_detail(
     Get single package detail by ID. Package must belong to current tenant.
     Requires X-Tenant-Key header.
 
-    Draft/blocked packages, packages outside the validity window, and purchased
+    Draft/blocked/private packages, packages outside the validity window, and purchased
     one-time packages (when authenticated) are not returned.
     """
     package = PackagesService.get_package_detail(db, tenant_id=tenant_id, package_id=package_id)

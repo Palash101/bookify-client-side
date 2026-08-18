@@ -84,6 +84,28 @@ def _wallet_user(db: Session, user: User) -> User:
     return db_user
 
 
+def _location_id_for_class(
+    db: Session, gym_class: GymClass, tenant_id: str
+) -> Optional[UUID]:
+    """gym_classes has no location_id; resolve via training_programme -> fitness_programs."""
+    prog_id = getattr(gym_class, "training_programme_id", None)
+    try:
+        prog_id_int = int(prog_id) if prog_id is not None else 0
+    except (TypeError, ValueError):
+        prog_id_int = 0
+    if prog_id_int <= 0:
+        return None
+    row = (
+        db.query(FitnessProgram.location_id)
+        .filter(
+            FitnessProgram.id == prog_id_int,
+            FitnessProgram.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    return row.location_id if row else None
+
+
 def _wallet_debit_consumed(
     db: Session,
     user_id: UUID,
@@ -1503,6 +1525,7 @@ class BookingsService:
             tenant_id=tenant_id,
             user_id=user.id,
             class_id=class_id,
+            location_id=_location_id_for_class(db, gym_class, tenant_id),
             seat_id=seat_label_for_booking,
             status=booking_status,
             waiting_position=outcome.waiting_position if booking_status == WAITING_STATUS else None,

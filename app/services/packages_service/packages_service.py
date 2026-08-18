@@ -90,6 +90,10 @@ class PackagesService:
         return (package.package_type or "").strip().lower() == "one_time"
 
     @staticmethod
+    def is_private_package(package: Package) -> bool:
+        return bool(getattr(package, "is_private", False))
+
+    @staticmethod
     def tenant_today(db: Session, tenant_id: str) -> date:
         gym_config = GymConfigService.get_gym_config(db, tenant_id)
         tz = GymConfigService.resolve_zoneinfo(gym_config)
@@ -119,6 +123,7 @@ class PackagesService:
         return (
             PackagesService.is_published_package(package)
             and PackagesService.is_visible_by_date(package, today)
+            and not PackagesService.is_private_package(package)
         )
 
     @staticmethod
@@ -158,6 +163,11 @@ class PackagesService:
         """Raise 400 when package is not catalog-visible or one-time already purchased."""
         today = PackagesService.tenant_today(db, tenant_id)
         if not PackagesService.is_published_package(package):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This package is not available for purchase.",
+            )
+        if PackagesService.is_private_package(package):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="This package is not available for purchase.",
@@ -231,6 +241,8 @@ class PackagesService:
             package_id=package.id,
         )
         can_purchase = not (PackagesService.is_one_time_package(package) and already)
+        if PackagesService.is_private_package(package):
+            can_purchase = False
         return {"already_purchased": already, "can_purchase": can_purchase}
 
     @staticmethod
@@ -244,6 +256,7 @@ class PackagesService:
         """
         Catalog rules:
         - only published (status=active) packages
+        - hide private / staff-only packages
         - validity_start must be on or before tenant today
         - validity_end must be on or after tenant today (when set)
         - hide one-time packages the user has already purchased
@@ -321,7 +334,7 @@ class PackagesService:
     ) -> List[Package]:
         """
         List catalog packages for a tenant with optional search and sorting.
-        Only published (active) packages within the validity window.
+        Only published (active), non-private packages within the validity window.
         """
         today = PackagesService.tenant_today(db, tenant_id)
         query = (
@@ -332,6 +345,7 @@ class PackagesService:
             .filter(
                 Package.tenant_id == tenant_id,
                 Package.status == _CATALOG_STATUS,
+                Package.is_private.is_(False),
                 or_(
                     Package.validity_start.is_(None),
                     Package.validity_start <= today,

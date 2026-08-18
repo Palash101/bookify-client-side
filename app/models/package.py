@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Date, DateTime, Text, ForeignKey
+from sqlalchemy import Column, String, Integer, Boolean, Date, DateTime, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -24,6 +24,8 @@ class Package(Base):
     package_type = Column(String(20), nullable=True)  # e.g. one_time, recurring (package_type_enum)
     tenant_id = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)
     booking_restriction = Column(JSONB, nullable=True)
+    # Hidden from client/website catalog; staff can still assign it from admin.
+    is_private = Column(Boolean, nullable=False, default=False, server_default="false")
 
     # Relationships
     pricing_list = relationship("PackagePricing", back_populates="package", lazy="select", foreign_keys="PackagePricing.package_id")

@@ -50,6 +50,7 @@ class PackageResponse(BaseModel):
     updated_at: Optional[datetime] = None
     package_type: Optional[str] = None
     booking_restriction: Optional[Any] = None
+    is_private: bool = False
     pricing_list: List[PackagePricingResponse] = []
     already_purchased: Optional[bool] = None
     can_purchase: Optional[bool] = None
