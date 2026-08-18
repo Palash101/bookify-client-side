@@ -87,6 +87,9 @@ async def get_active_packages(
     """
     All successful, non-expired package purchases for the current user on this tenant.
     Newest first. Use each item's `id` (sale id) as `user_package_purchase_id` when booking.
+
+    Includes private (`is_private=true`) packages if staff assigned them to this user.
+    Private packages are hidden from the catalog (`GET /packages`) but still show here.
     """
     entries, total = PackagesService.get_active_packages_for_user(
         db,

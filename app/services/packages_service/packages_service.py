@@ -501,6 +501,9 @@ class PackagesService:
         Active packages for this user+tenant.
         Source of truth is `user_packages` (entitlements). We optionally join `sales`
         to enrich with amount/currency and to ensure only succeeded purchases are returned.
+
+        Does not filter on Package.is_private — assigned/purchased private packages
+        still appear so the user can book against them.
         """
         from sqlalchemy.sql import func as sa_func
 
