@@ -26,6 +26,7 @@ from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
 from app.payments.return_urls import normalize_checkout_platform
 from app.models.package import Package
+from app.services.locations_service.locations_service import LocationsService
 
 
 router = APIRouter(tags=["wallet"])
@@ -40,6 +41,10 @@ class AddWalletBalanceRequest(BaseModel):
     platform: Literal["web", "app"] = Field(
         ...,
         description="Required. Client that started checkout: 'web' redirects to frontend, 'app' uses deep link.",
+    )
+    location_id: Optional[uuid.UUID] = Field(
+        default=None,
+        description="Location this top-up belongs to. If omitted and the tenant has exactly one active location, that location is used.",
     )
 
 
@@ -68,6 +73,9 @@ async def add_wallet_balance(
     init_txn = SalesTransactions(
         sales_id=None,
         tenant_id=tenant_id,
+        location_id=LocationsService.resolve_location_id(
+            db, str(tenant_id), body.location_id
+        ),
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,

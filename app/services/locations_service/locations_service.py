@@ -1,11 +1,54 @@
 from typing import List, Optional
+import uuid
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.location import Location
 
 
 class LocationsService:
+    @staticmethod
+    def resolve_location_id(
+        db: Session,
+        tenant_id: str,
+        location_id: Optional[uuid.UUID] = None,
+    ) -> Optional[uuid.UUID]:
+        """
+        Validate an explicit location, or use the tenant's only active location.
+        Multi-location tenants without a provided location_id return None.
+        """
+        if location_id is not None:
+            loc = (
+                db.query(Location.id)
+                .filter(
+                    Location.id == location_id,
+                    Location.tenant_id == tenant_id,
+                    Location.deleted_at.is_(None),
+                )
+                .first()
+            )
+            if loc is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid location_id",
+                )
+            return loc.id
+
+        locations = (
+            db.query(Location.id)
+            .filter(
+                Location.tenant_id == tenant_id,
+                Location.is_active.is_(True),
+                Location.deleted_at.is_(None),
+            )
+            .limit(2)
+            .all()
+        )
+        if len(locations) == 1:
+            return locations[0].id
+        return None
+
     @staticmethod
     def list_locations(
         db: Session,

@@ -69,7 +69,7 @@ class SalesTransactions(Base):
     """
     Timeline rows for a sale. Matches public.sales_transactions (minimal columns):
     payment_method, gateway, gateway_txn_id, status, amount, currency, source,
-    user_id, created_by_type, created_by_id. Package/session snapshot lives on sales.
+    location_id, user_id, created_by_type, created_by_id. Package/session snapshot lives on sales.
     """
 
     __tablename__ = "sales_transactions"
@@ -88,6 +88,13 @@ class SalesTransactions(Base):
         String,
         ForeignKey("tenants.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+
+    location_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("locations.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
 

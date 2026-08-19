@@ -42,6 +42,7 @@ from app.models.user_package import UserPackage
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.services.packages_service.packages_service import PackagesService
+from app.services.locations_service.locations_service import LocationsService
 from app.services.gym_config_service import GymConfigService
 from app.services.package_notification_service import PackageNotificationService
 from app.services.payment_notification_service import PaymentNotificationService
@@ -126,6 +127,10 @@ class PackagePurchaseRequest(BaseModel):
         ...,
         description="Required. Client that started checkout: 'web' redirects to frontend, 'app' uses deep link.",
     )
+    location_id: Optional[UUID] = Field(
+        default=None,
+        description="Location this purchase belongs to. If omitted and the tenant has exactly one active location, that location is used.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +203,9 @@ async def initiate_package_purchase(
         pricing, amount_value, today=today
     )
     currency_code = GymConfigService.get_currency(db, tenant_id)
+    location_id = LocationsService.resolve_location_id(
+        db, tenant_id, body.location_id
+    )
 
     # --------------------------
     # WALLET payment method
@@ -322,6 +330,7 @@ async def initiate_package_purchase(
     txn = SalesTransactions(
         sales_id=None,
         tenant_id=tenant_id,
+        location_id=location_id,
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
@@ -657,6 +666,7 @@ async def _handle_payment_callback(
                 txn = SalesTransactions(
                     sales_id=order.id if order else order_uuid,
                     tenant_id=tenant_id,
+                    location_id=LocationsService.resolve_location_id(db, tenant_id),
                     payment_method="gateway",
                     gateway=gateway_value,
                     gateway_txn_id=result.transaction_id or "",

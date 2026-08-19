@@ -17,6 +17,7 @@ from app.payments.return_urls import attach_checkout_platform_debug
 from app.services.sale_expiry import apply_package_expiry_to_sale
 from app.services.user_package_service import ensure_user_package_for_completed_package_sale
 from app.services.packages_service.packages_service import PackagesService
+from app.services.locations_service.locations_service import LocationsService
 from app.services.gym_config_service import GymConfigService
 from app.services.wallet_notification_service import wallet_topup_email_pending
 
@@ -234,6 +235,10 @@ class PaymentSuccessService:
                     st_row = SalesTransactions(
                         sales_id=sale.id,
                         tenant_id=sale.tenant_id,
+                        location_id=(
+                            getattr(init_txn, "location_id", None)
+                            or LocationsService.resolve_location_id(db, sale.tenant_id)
+                        ),
                         payment_method="gateway",
                         gateway=sale.gateway or "stripe",
                         gateway_txn_id=session_id,
@@ -266,6 +271,10 @@ class PaymentSuccessService:
                         st_row.created_by_type = sale.created_by_type or "member"
                     if st_row.created_by_id is None:
                         st_row.created_by_id = sale.created_by_id or sale.user_id
+                    if st_row.location_id is None:
+                        st_row.location_id = LocationsService.resolve_location_id(
+                            db, sale.tenant_id
+                        )
 
                     m = dict(st_row.extra_metadata or {})
                     m.setdefault("event", "created")
