@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.sales import Sale, SALE_WALLET_TXN_KEY, backfill_sale_checkout_metadata
+from app.models.sales import Sale, find_sale_by_gateway_session, is_package_sale, sale_status_value
 from app.models.sales_transactions import (
     SalesTransactionStatus,
     SalesTransactions,
@@ -32,10 +32,8 @@ class PaymentSuccessService:
         debug: dict[str, str] = {"session_id": session_id}
 
         # 1) Sale lookup by gateway session id
-        sale = db.query(Sale).filter(Sale.gateway_transaction_id == session_id).first()
+        sale = find_sale_by_gateway_session(db, session_id)
         debug["sale_found_by_session"] = "1" if sale else "0"
-        if sale is not None:
-            attach_checkout_platform_debug(debug, sale.extra_metadata)
 
         # Prefer platform from initiation row (set when checkout started).
         init_txn = (
@@ -76,7 +74,6 @@ class PaymentSuccessService:
                     ):
                         debug["error"] = "package_already_purchased"
                         return debug
-                    default_currency = GymConfigService.get_currency(db, init_pkg.tenant_id)
                     sale = Sale(
                         id=order_uuid,
                         tenant_id=init_pkg.tenant_id,
@@ -84,22 +81,8 @@ class PaymentSuccessService:
                         package_id=UUID(str(pkg_raw)) if pkg_raw else None,
                         product_item_type="package",
                         type="gateway",
-                        created_by_type=init_pkg.created_by_type,
-                        created_by_id=init_pkg.created_by_id,
                         wallet_transaction_id=None,
                         amount=init_pkg.amount or 0,
-                        extra_metadata={
-                            "persons": meta.get("persons"),
-                            "session_type": meta.get("session_type"),
-                            "session_count": meta.get("session_count"),
-                            "package_pricing_id": str(pricing_raw) if pricing_raw else None,
-                            "currency": init_pkg.currency or default_currency,
-                            "gateway": "stripe",
-                            "status": "succeeded",
-                            "checkout_platform": debug.get("checkout_platform", "web"),
-                            "gateway_transaction_id": session_id,
-                            **PackagesService.discount_metadata_from(meta),
-                        },
                     )
                     db.add(sale)
                     db.flush()
@@ -137,6 +120,7 @@ class PaymentSuccessService:
                     balance_after=after,
                     created_by=init_wallet.created_by_type,
                     created_by_id=init_wallet.created_by_id,
+                    reference_type="wallet_add",
                 )
                 db.add(wtxn)
                 db.flush()
@@ -147,27 +131,13 @@ class PaymentSuccessService:
                     package_id=wtxn.id,
                     product_item_type="wallet",
                     type="gateway",
-                    created_by_type=init_wallet.created_by_type,
-                    created_by_id=init_wallet.created_by_id,
                     wallet_transaction_id=wtxn.id,
                     amount=init_wallet.amount or 0,
-                    extra_metadata={
-                        "purpose": "wallet_add",
-                        "currency": (init_wallet.currency or default_currency).upper(),
-                        "gateway": "stripe",
-                        "status": "succeeded",
-                        "gateway_transaction_id": session_id,
-                        "checkout_platform": debug.get("checkout_platform", "web"),
-                        SALE_WALLET_TXN_KEY: {
-                            "transaction_type": "wallet_add",
-                            "status": "succeeded",
-                            "tenant_id": str(init_wallet.tenant_id),
-                        },
-                    },
                 )
                 db.add(sale)
                 db.flush()
 
+                wtxn.reference_id = sale.id
                 init_wallet.sales_id = sale.id
                 init_wallet.status = SalesTransactionStatus.success
                 m = dict(init_wallet.extra_metadata or {})
@@ -184,111 +154,110 @@ class PaymentSuccessService:
             debug["error"] = "missing_initiation_sales_transaction"
             return debug
 
-        # 4) Reconcile Sale (metadata + package entitlement)
-        backfill_sale_checkout_metadata(sale, session_id)
-        st = (sale.status or "").lower()
+        # 4) Reconcile package entitlement + sales_transactions status
+        st = (sale_status_value(db, sale) or "").lower()
         if st not in ("succeeded", "success"):
-            sale.status = "succeeded"
             st = "succeeded"
 
-        is_package_sale = (sale.type or "") in ("package_gateway", "package_wallet") or (
-            (sale.type or "") == "gateway" and (sale.product_item_type or "") == "package"
-        )
-        if is_package_sale and sale.package_id is not None:
-            apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
-            if st in ("succeeded", "success"):
-                if PackagesService.is_one_time_duplicate_purchase(
-                    db,
+        if is_package_sale(sale) and sale.package_id is not None:
+            st_row = (
+                db.query(SalesTransactions)
+                .filter(
+                    SalesTransactions.source == "package",
+                    SalesTransactions.gateway_txn_id == session_id,
+                    SalesTransactions.tenant_id == sale.tenant_id,
+                )
+                .order_by(SalesTransactions.created_at.desc())
+                .first()
+            )
+
+            created_by_type = getattr(init_txn, "created_by_type", None) or "member"
+            created_by_id = getattr(init_txn, "created_by_id", None) or sale.user_id
+            default_currency = GymConfigService.get_currency(db, sale.tenant_id)
+
+            if st_row is None:
+                st_row = SalesTransactions(
+                    sales_id=sale.id,
                     tenant_id=sale.tenant_id,
+                    location_id=(
+                        getattr(init_txn, "location_id", None)
+                        or LocationsService.resolve_location_id(db, sale.tenant_id)
+                    ),
+                    payment_method="gateway",
+                    gateway="stripe",
+                    gateway_txn_id=session_id,
+                    source="package",
+                    status=SalesTransactionStatus.success,
+                    amount=sale.amount,
+                    currency=default_currency,
                     user_id=sale.user_id,
-                    package_id=sale.package_id,
-                    exclude_sale_id=sale.id,
-                ):
-                    debug["error"] = "package_already_purchased"
-                    return debug
-                existing_user_package = (
-                    db.query(UserPackage).filter(UserPackage.sale_id == sale.id).first()
+                    created_by_type=created_by_type,
+                    created_by_id=created_by_id,
+                    extra_metadata={"event": "success_redirect"},
                 )
-                user_package = ensure_user_package_for_completed_package_sale(
-                    db,
-                    sale,
-                    created_by=sale.created_by_type or "member",
-                    created_by_id=sale.created_by_id or sale.user_id,
-                )
-                if user_package and existing_user_package is None:
-                    debug["package_purchased_user_package_id"] = str(user_package.id)
-
-                # Prefer updating the existing initiation row (created during payment start)
-                # so we don't end up with 2 rows for the same sales_id.
-                st_row = (
-                    db.query(SalesTransactions)
-                    .filter(
-                        SalesTransactions.source == "package",
-                        SalesTransactions.gateway_txn_id == session_id,
-                        SalesTransactions.tenant_id == sale.tenant_id,
+                db.add(st_row)
+                db.flush()
+            else:
+                st_row.sales_id = sale.id
+                if st_row.status != SalesTransactionStatus.success:
+                    st_row.status = SalesTransactionStatus.success
+                if not st_row.gateway:
+                    st_row.gateway = "stripe"
+                if not st_row.payment_method:
+                    st_row.payment_method = "gateway"
+                if st_row.amount is None:
+                    st_row.amount = sale.amount
+                if not st_row.currency:
+                    st_row.currency = default_currency
+                if st_row.user_id is None:
+                    st_row.user_id = sale.user_id
+                if not st_row.created_by_type:
+                    st_row.created_by_type = created_by_type
+                if st_row.created_by_id is None:
+                    st_row.created_by_id = created_by_id
+                if st_row.location_id is None:
+                    st_row.location_id = LocationsService.resolve_location_id(
+                        db, sale.tenant_id
                     )
-                    .order_by(SalesTransactions.created_at.desc())
-                    .first()
-                )
 
-                if st_row is None:
-                    st_row = SalesTransactions(
-                        sales_id=sale.id,
-                        tenant_id=sale.tenant_id,
-                        location_id=(
-                            getattr(init_txn, "location_id", None)
-                            or LocationsService.resolve_location_id(db, sale.tenant_id)
-                        ),
-                        payment_method="gateway",
-                        gateway=sale.gateway or "stripe",
-                        gateway_txn_id=session_id,
-                        source="package",
-                        status=SalesTransactionStatus.success,
-                        amount=sale.amount,
-                        currency=sale.currency,
-                        user_id=sale.user_id,
-                        created_by_type=sale.created_by_type or "member",
-                        created_by_id=sale.created_by_id or sale.user_id,
-                        extra_metadata={"event": "success_redirect"},
-                    )
-                    db.add(st_row)
-                    db.flush()
-                else:
-                    st_row.sales_id = sale.id
-                    if st_row.status != SalesTransactionStatus.success:
-                        st_row.status = SalesTransactionStatus.success
-                    if not st_row.gateway:
-                        st_row.gateway = sale.gateway or "stripe"
-                    if not st_row.payment_method:
-                        st_row.payment_method = "gateway"
-                    if st_row.amount is None:
-                        st_row.amount = sale.amount
-                    if not st_row.currency:
-                        st_row.currency = sale.currency
-                    if st_row.user_id is None:
-                        st_row.user_id = sale.user_id
-                    if not st_row.created_by_type:
-                        st_row.created_by_type = sale.created_by_type or "member"
-                    if st_row.created_by_id is None:
-                        st_row.created_by_id = sale.created_by_id or sale.user_id
-                    if st_row.location_id is None:
-                        st_row.location_id = LocationsService.resolve_location_id(
-                            db, sale.tenant_id
-                        )
+                m = dict(st_row.extra_metadata or {})
+                m.setdefault("event", "created")
+                m["resolved_by"] = "success_redirect"
+                m["last_event"] = "success_redirect"
+                st_row.extra_metadata = m
+                db.flush()
+                created_by_type = st_row.created_by_type or created_by_type
+                created_by_id = st_row.created_by_id or created_by_id
 
-                    m = dict(st_row.extra_metadata or {})
-                    m.setdefault("event", "created")
-                    m["resolved_by"] = "success_redirect"
-                    m["last_event"] = "success_redirect"
-                    st_row.extra_metadata = m
-                    db.flush()
+            sale.provider_numeric_transaction_id = st_row.id
 
-                sale.provider_numeric_transaction_id = st_row.id
+            if PackagesService.is_one_time_duplicate_purchase(
+                db,
+                tenant_id=sale.tenant_id,
+                user_id=sale.user_id,
+                package_id=sale.package_id,
+                exclude_sale_id=sale.id,
+            ):
+                debug["error"] = "package_already_purchased"
+                return debug
+            existing_user_package = (
+                db.query(UserPackage).filter(UserPackage.sale_id == sale.id).first()
+            )
+            user_package = ensure_user_package_for_completed_package_sale(
+                db,
+                sale,
+                created_by=created_by_type,
+                created_by_id=created_by_id,
+                snapshot=st_row.extra_metadata if isinstance(st_row.extra_metadata, dict) else None,
+            )
+            apply_package_expiry_to_sale(db, sale, sale.tenant_id, overwrite=False)
+            if user_package and existing_user_package is None:
+                debug["package_purchased_user_package_id"] = str(user_package.id)
 
         if wallet_topup_email_pending(sale):
             debug["wallet_topup_wallet_transaction_id"] = str(sale.wallet_transaction_id)
 
         debug["sale_id"] = str(sale.id)
-        debug["sale_status"] = str(sale.status)
+        debug["sale_status"] = sale_status_value(db, sale)
         return debug
 

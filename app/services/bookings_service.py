@@ -22,7 +22,7 @@ from app.models.class_booking import (
 from app.models.user import normalize_user_gender
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
-from app.models.sales import Sale
+from app.models.sales import Sale, sale_expires_at, sale_succeeded_clause
 from app.models.user import User
 from app.models.wallet_transactions import WalletTransaction
 from fastapi import HTTPException, status
@@ -526,21 +526,12 @@ def _set_layout_seat_status(gym_class: GymClass, seat_id: str, status_value: str
 
 
 def _sessions_remaining_from_sale(sale: Sale) -> Optional[int]:
-    meta = sale.extra_metadata or {}
-    if not isinstance(meta, dict):
+    from sqlalchemy.orm import object_session
+
+    db = object_session(sale)
+    if db is None:
         return None
-    # Accept multiple historical key names for compatibility.
-    for key in ("sessions_remaining", "remaining_sessions", "remaining_session", "sessions_left"):
-        if key not in meta:
-            continue
-        v = meta[key]
-        if v is None:
-            continue
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            continue
-    return None
+    return sessions_remaining_for_sale(db, sale)
 
 
 def _within_free_cancel_window(
@@ -1253,7 +1244,7 @@ class BookingsService:
                             | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
                         ),
                         Sale.package_id.isnot(None),
-                        Sale.status.in_(["succeeded", "success"]),
+                        sale_succeeded_clause(),
                     )
                     .first()
                 )
@@ -1270,7 +1261,7 @@ class BookingsService:
             expires_at_str: Optional[str] = None
             rem: Optional[int] = None
             if sale:
-                ex = sale.expires_at
+                ex = sale_expires_at(db, sale)
                 expired = False
                 if ex is not None:
                     ex_aware = ex if ex.tzinfo is not None else ex.replace(tzinfo=dt_timezone.utc)

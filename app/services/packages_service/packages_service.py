@@ -10,10 +10,20 @@ from app.models.class_booking import ClassBooking
 from app.models.package import Package
 from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
-from app.models.sales import Sale
+from app.models.sales import (
+    Sale,
+    sale_currency_value,
+    sale_expires_at,
+    sale_pricing_id,
+    sale_session_count,
+    sale_session_type,
+    sale_status_value,
+    sale_succeeded_clause,
+    sale_txn_snapshot,
+)
 from app.models.user_package import UserPackage
 from app.schemas.package import PackagePricingResponse, PackageResponse
-from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
+from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES
 from app.services.gym_config_service import GymConfigService
 from app.services.sale_expiry import compute_sale_expires_at
 from app.services.user_package_tracking_service import sessions_remaining_for_sale
@@ -146,7 +156,7 @@ class PackagesService:
                 | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
             ),
             Sale.package_id.isnot(None),
-            Sale.status.in_(["succeeded", "success"]),
+            sale_succeeded_clause(),
         )
         if exclude_sale_id is not None:
             q = q.filter(Sale.id != exclude_sale_id)
@@ -427,12 +437,13 @@ class PackagesService:
         except (TypeError, ValueError):
             sessions_used = 0
 
-        meta = order.extra_metadata if isinstance(order.extra_metadata, dict) else {}
+        snap = sale_txn_snapshot(db, order)
+        pricing_id = sale_pricing_id(db, order)
         pricing_row = None
-        if order.pricing_id:
+        if pricing_id:
             pricing_row = (
                 db.query(PackagePricing)
-                .filter(PackagePricing.id == order.pricing_id)
+                .filter(PackagePricing.id == pricing_id)
                 .first()
             )
 
@@ -442,11 +453,13 @@ class PackagesService:
             else False
         )
 
-        session_type = meta.get("session_type")
+        session_type = snap.get("session_type") or sale_session_type(db, order)
         if not session_type and pricing_row is not None:
             session_type = pricing_row.session_type
 
-        total_raw = meta.get("session_count")
+        total_raw = snap.get("session_count")
+        if total_raw is None:
+            total_raw = sale_session_count(db, order)
         if total_raw is None and pricing_row is not None and pricing_row.session_count is not None:
             total_raw = pricing_row.session_count
         total_sessions: Optional[int] = None
@@ -460,13 +473,13 @@ class PackagesService:
         if is_unlimited:
             sessions_remaining = None
         else:
-            rem_meta = _sessions_remaining_from_sale(order)
+            rem_meta = sessions_remaining_for_sale(db, order)
             if rem_meta is not None:
                 sessions_remaining = max(0, int(rem_meta))
             elif total_sessions is not None:
                 sessions_remaining = max(0, total_sessions - sessions_used)
 
-        expires_at = order.expires_at or compute_sale_expires_at(order, package)
+        expires_at = sale_expires_at(db, order) or compute_sale_expires_at(order, package)
 
         return {
             "id": order.id,
@@ -475,12 +488,12 @@ class PackagesService:
             "package_description": package.description,
             "validity_days": package.validity_days,
             "validity_end": package.validity_end,
-            "status": order.status,
+            "status": sale_status_value(db, order),
             "purchased_at": order.created_at,
             "expires_at": expires_at,
             "sale_type": order.type,
             "amount": order.amount,
-            "currency": order.currency,
+            "currency": sale_currency_value(db, order),
             "session_type": session_type,
             "is_unlimited": is_unlimited,
             "session_count": total_sessions,
@@ -518,9 +531,7 @@ class PackagesService:
                 UserPackage.package_id.isnot(None),
                 # Expiry check comes from entitlement row
                 (UserPackage.expire_at.is_(None)) | (UserPackage.expire_at > sa_func.now()),
-                # Tenant scoping and payment constraints live on Sale.
                 (Sale.tenant_id == tenant_id),
-                Sale.status.in_(["succeeded", "success"]),
                 (
                     (Sale.type.in_(["package_gateway", "package_wallet"]))
                     | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
@@ -571,9 +582,11 @@ class PackagesService:
             if not is_unlimited:
                 if up.total_session is not None:
                     total_sessions = int(up.total_session)
-                elif sale is not None and sale.session_count is not None:
-                    total_sessions = int(sale.session_count)
-                elif pricing_row is not None and pricing_row.session_count is not None:
+                elif sale is not None:
+                    count = sale_session_count(db, sale)
+                    if count is not None:
+                        total_sessions = int(count)
+                if total_sessions is None and pricing_row is not None and pricing_row.session_count is not None:
                     total_sessions = int(pricing_row.session_count)
 
             sessions_remaining: Optional[int] = None
@@ -584,9 +597,9 @@ class PackagesService:
             elif total_sessions is not None:
                 sessions_remaining = max(0, total_sessions - sessions_used)
 
-            expires_at = up.expire_at or (sale.expires_at if sale is not None else None) or compute_sale_expires_at(
-                sale, package
-            ) if sale is not None else up.expire_at
+            expires_at = up.expire_at
+            if expires_at is None and sale is not None:
+                expires_at = sale_expires_at(db, sale) or compute_sale_expires_at(sale, package)
 
             out.append(
                 {
@@ -598,12 +611,12 @@ class PackagesService:
                     "booking_restriction": package.booking_restriction,
                     "validity_days": package.validity_days,
                     "validity_end": package.validity_end,
-                    "status": (sale.status if sale is not None else "succeeded"),
+                    "status": (sale_status_value(db, sale) if sale is not None else "succeeded"),
                     "purchased_at": (sale.created_at if sale is not None else up.created_at),
                     "expires_at": expires_at,
                     "sale_type": (sale.type if sale is not None else "package_gateway"),
                     "amount": (sale.amount if sale is not None else None),
-                    "currency": (sale.currency if sale is not None else None),
+                    "currency": (sale_currency_value(db, sale) if sale is not None else None),
                     "session_type": session_type,
                     "is_unlimited": is_unlimited,
                     "session_count": total_sessions,

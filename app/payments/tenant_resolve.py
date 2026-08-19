@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.core.db.master_db import SessionLocal as MasterSessionLocal
 from app.core.db.session import get_session_factory
 from app.models.master_org import Organization
-from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
 from app.models.tenant_setting import TenantSetting
 from app.payments.base import GatewayType
@@ -87,13 +86,6 @@ def resolve_tenant_for_stripe_session(session_id: str) -> Optional[str]:
         except (ProgrammingError, OperationalError, RuntimeError):
             continue
         try:
-            sale = (
-                db.query(Sale)
-                .filter(Sale.gateway_transaction_id == session_id)
-                .first()
-            )
-            if sale is not None:
-                return tenant_id
             st = (
                 db.query(SalesTransactions)
                 .filter(SalesTransactions.gateway_txn_id == session_id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional, Union
 from uuid import UUID
 
-from sqlalchemy.orm import Session, attributes
+from sqlalchemy.orm import Session, object_session
 
 from app.core.events.event_payloads import build_wallet_notification_data
 from app.core.events.event_types import (
@@ -12,17 +12,14 @@ from app.core.events.event_types import (
     CLIENT_WALLET_TOPUP_FAILED,
     CLIENT_WALLET_TOPUP_SUCCESS,
 )
-from app.models.sales import Sale
+from app.models.sales import Sale, latest_sales_transaction, sale_status_value
 from app.services.event_publish_service import EventPublishService, PublishedEvent
 
 WALLET_TOPUP_EMAIL_SENT_KEY = "wallet_topup_email_sent"
 
 
 def is_wallet_topup_sale(sale: Sale) -> bool:
-    if (sale.product_item_type or "") == "wallet":
-        return True
-    meta = sale.extra_metadata or {}
-    return (sale.type or "") == "gateway" and meta.get("purpose") == "wallet_add"
+    return (sale.product_item_type or "") == "wallet"
 
 
 def wallet_topup_email_pending(sale: Sale) -> bool:
@@ -30,16 +27,26 @@ def wallet_topup_email_pending(sale: Sale) -> bool:
         return False
     if not is_wallet_topup_sale(sale):
         return False
-    if (sale.status or "").lower() not in ("succeeded", "success"):
+    db = object_session(sale)
+    if db is None:
         return False
-    return not bool((sale.extra_metadata or {}).get(WALLET_TOPUP_EMAIL_SENT_KEY))
+    if (sale_status_value(db, sale) or "").lower() not in ("succeeded", "success"):
+        return False
+    txn = latest_sales_transaction(db, sale.id)
+    meta = txn.extra_metadata if txn is not None else None
+    return not bool((meta or {}).get(WALLET_TOPUP_EMAIL_SENT_KEY))
 
 
 def mark_wallet_topup_email_sent(sale: Sale) -> None:
-    meta = dict(sale.extra_metadata or {})
+    db = object_session(sale)
+    if db is None:
+        return
+    txn = latest_sales_transaction(db, sale.id)
+    if txn is None:
+        return
+    meta = dict(txn.extra_metadata or {})
     meta[WALLET_TOPUP_EMAIL_SENT_KEY] = True
-    sale.extra_metadata = meta
-    attributes.flag_modified(sale, "extra_metadata")
+    txn.extra_metadata = meta
 
 
 class WalletNotificationService:

@@ -3,15 +3,15 @@ Ledger helpers for user_package_tracking — session credits/debits on package e
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import func
-from sqlalchemy.orm import Session, attributes
+from sqlalchemy.orm import Session
 
 from app.models.class_booking import ClassBooking, ClassBookingStatus
 from app.models.package import Package
-from app.models.sales import Sale
+from app.models.sales import Sale, sale_session_count
 from app.models.user_package import UserPackage
 from app.models.user_package_tracking import (
     SessionTxnSource,
@@ -32,19 +32,6 @@ def get_user_package_for_sale(db: Session, sale_id: UUID) -> Optional[UserPackag
 
 
 def _remaining_from_sale_metadata(sale: Sale) -> Optional[int]:
-    meta = sale.extra_metadata or {}
-    if not isinstance(meta, dict):
-        return None
-    for key in ("sessions_remaining", "remaining_sessions", "remaining_session", "sessions_left"):
-        if key not in meta:
-            continue
-        raw = meta[key]
-        if raw is None:
-            continue
-        try:
-            return max(0, int(raw))
-        except (TypeError, ValueError):
-            continue
     return None
 
 
@@ -81,18 +68,18 @@ def _ledger_debit_total(db: Session, user_package_id: UUID) -> int:
 def _package_session_total(user_package: UserPackage, sale: Sale) -> Optional[int]:
     if user_package.total_session is not None:
         return int(user_package.total_session)
-    if sale.session_count is not None:
-        return int(sale.session_count)
+    from sqlalchemy.orm import object_session as _object_session
+
+    db = _object_session(sale)
+    if db is not None:
+        count = sale_session_count(db, sale)
+        if count is not None:
+            return int(count)
     return None
 
 
 def sync_sale_sessions_remaining(sale: Sale, balance: Optional[int]) -> None:
-    if balance is None:
-        return
-    meta: dict[str, Any] = dict(sale.extra_metadata or {})
-    meta["sessions_remaining"] = max(0, int(balance))
-    sale.extra_metadata = meta
-    attributes.flag_modified(sale, "extra_metadata")
+    return None
 
 
 def sessions_remaining_for_sale(db: Session, sale: Sale) -> Optional[int]:

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.package import Package
 from app.models.sales import Sale
+from app.models.user_package import UserPackage
 
 
 def compute_sale_expires_at(order: Sale, package: Optional[Package]) -> Optional[datetime]:
@@ -38,7 +39,7 @@ def apply_package_expiry_to_sale(
     overwrite: bool = False,
 ) -> None:
     """
-    Set sale.expires_at from linked package when missing (or always if overwrite).
+    Set user_packages.expire_at from linked package when missing (or always if overwrite).
     """
     package = (
         db.query(Package)
@@ -48,5 +49,8 @@ def apply_package_expiry_to_sale(
     computed = compute_sale_expires_at(order, package)
     if computed is None:
         return
-    if overwrite or order.expires_at is None:
-        order.expires_at = computed
+    up = db.query(UserPackage).filter(UserPackage.sale_id == order.id).first()
+    if up is None:
+        return
+    if overwrite or up.expire_at is None:
+        up.expire_at = computed

@@ -20,7 +20,14 @@ from app.schemas.transactions import (
     PaginationMeta,
     normalize_display_status,
 )
-from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_meta
+from app.models.sales import (
+    Sale,
+    sale_currency_value,
+    sale_gateway_txn_id,
+    sale_gateway_value,
+    sale_pricing_id,
+    sale_status_value,
+)
 from app.models.sales_transactions import SalesTransactionStatus, SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
@@ -281,15 +288,15 @@ async def get_purchases_history(
             sale_id=sale.id,
             type=sale.type,
             purchased_at=purchased_at,
-            status=normalize_display_status(sale.status),
+            status=normalize_display_status(sale_status_value(db, sale)),
             amount=sale.amount,
-            currency=sale.currency,
+            currency=sale_currency_value(db, sale),
             payment_method=payment_method,
-            gateway=sale.gateway,
-            gateway_transaction_id=sale.gateway_transaction_id,
+            gateway=sale_gateway_value(db, sale),
+            gateway_transaction_id=sale_gateway_txn_id(db, sale),
             package_id=sale.package_id,
             package_name=package_name,
-            pricing_id=sale.pricing_id,
+            pricing_id=sale_pricing_id(db, sale),
             wallet_transaction_id=sale.wallet_transaction_id,
         )
 

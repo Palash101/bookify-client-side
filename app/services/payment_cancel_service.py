@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.sales import Sale
+from app.models.sales import Sale, find_sale_by_gateway_session, latest_sales_transaction, sale_status_value
 from app.models.sales_transactions import (
     SalesTransactionStatus,
     SalesTransactions,
@@ -30,33 +30,24 @@ class PaymentCancelService:
             .first()
         )
         if init_txn is None:
-            sale = (
-                db.query(Sale)
-                .filter(Sale.gateway_transaction_id == session_id)
-                .first()
-            )
+            sale = find_sale_by_gateway_session(db, session_id)
             if sale is None:
                 debug["error"] = "missing_initiation_sales_transaction"
                 return debug
 
-            attach_checkout_platform_debug(debug, sale.extra_metadata)
-            previous = (sale.status or "").lower()
+            txn = latest_sales_transaction(db, sale.id)
+            attach_checkout_platform_debug(debug, txn.extra_metadata if txn is not None else None)
+            previous = (sale_status_value(db, sale) or "").lower()
             debug["order_id"] = str(sale.id)
             if previous not in _TERMINAL_SALE_STATUSES:
-                sale.status = "cancelled"
+                if txn is not None and txn.status not in TERMINAL_SALES_TRANSACTION_STATUSES:
+                    txn.status = SalesTransactionStatus.cancelled
                 if sale.provider_numeric_transaction_id is not None:
                     debug["payment_failed_sales_transaction_id"] = str(
                         sale.provider_numeric_transaction_id
                     )
-                else:
-                    st = (
-                        db.query(SalesTransactions)
-                        .filter(SalesTransactions.sales_id == sale.id)
-                        .order_by(SalesTransactions.created_at.desc())
-                        .first()
-                    )
-                    if st is not None:
-                        debug["payment_failed_sales_transaction_id"] = str(st.id)
+                elif txn is not None:
+                    debug["payment_failed_sales_transaction_id"] = str(txn.id)
             return debug
 
         previous = init_txn.status

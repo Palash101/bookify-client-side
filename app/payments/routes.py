@@ -7,7 +7,6 @@ The active gateway is resolved per-tenant via the factory.
 
 from typing import Any, Optional, Literal
 from uuid import UUID
-from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, EmailStr, Field
@@ -28,7 +27,14 @@ from app.core.db.session import get_session_factory
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
 from app.core.settings import settings
 from app.models.user import User
-from app.models.sales import SALE_WALLET_TXN_KEY, Sale, backfill_sale_checkout_metadata
+from app.models.sales import (
+    Sale,
+    sale_currency_value,
+    sale_gateway_txn_id,
+    sale_gateway_value,
+    sale_pricing_id,
+    sale_status_value,
+)
 from app.models.package_pricing import PackagePricing
 from app.models.package import Package
 from app.models.sales_transactions import (
@@ -230,6 +236,7 @@ async def initiate_package_purchase(
             balance_after=balance_after,
             created_by=current_user.user_type or "member",
             created_by_id=current_user.id,
+            reference_type="package_wallet_purchase",
         )
         db.add(wallet_txn)
         db.flush()
@@ -242,48 +249,46 @@ async def initiate_package_purchase(
             package_id=body.package_id,
             product_item_type="package",
             type="wallet",
-            created_by_type=current_user.user_type or "member",
-            created_by_id=current_user.id,
             wallet_transaction_id=wallet_txn.id,
             amount=amount_value,
-            extra_metadata={
-                "persons": persons_requested,
-                "session_type": pricing.session_type,
-                "session_count": pricing.session_count,
-                "package_pricing_id": str(pricing.id),
-                "currency": currency_code,
-                "gateway": "wallet",
-                "status": "succeeded",
-                **discount_meta,
-                SALE_WALLET_TXN_KEY: {
-                    "transaction_type": "package_wallet_purchase",
-                    "status": "succeeded",
-                    "purpose": "package_purchase",
-                    "tenant_id": tenant_id,
-                    "package_id": str(body.package_id),
-                    "package_pricing_id": str(pricing.id),
-                },
-            },
         )
         db.add(order)
         db.flush()
+        wallet_txn.reference_id = order.id
 
-        tz = GymConfigService.get_timezone(db, tenant_id)
-        if package:
-            if package.validity_days is not None:
-                order.expires_at = datetime.now(tz) + timedelta(days=package.validity_days)
-            elif package.validity_end is not None:
-                order.expires_at = datetime.combine(
-                    package.validity_end,
-                    datetime.max.time(),
-                    tzinfo=tz,
-                )
+        package_snapshot = {
+            "persons": persons_requested,
+            "session_type": pricing.session_type,
+            "session_count": pricing.session_count,
+            "package_pricing_id": str(pricing.id),
+            **discount_meta,
+        }
+        wallet_sale_txn = SalesTransactions(
+            sales_id=order.id,
+            tenant_id=tenant_id,
+            location_id=location_id,
+            payment_method="wallet",
+            gateway="wallet",
+            gateway_txn_id=None,
+            source="package",
+            status=SalesTransactionStatus.success,
+            amount=amount_value,
+            currency=currency_code,
+            user_id=current_user.id,
+            created_by_type=current_user.user_type or "member",
+            created_by_id=current_user.id,
+            extra_metadata=package_snapshot,
+        )
+        db.add(wallet_sale_txn)
+        db.flush()
+        order.provider_numeric_transaction_id = wallet_sale_txn.id
 
         user_package = ensure_user_package_for_completed_package_sale(
             db,
             order,
             created_by=current_user.user_type or "member",
             created_by_id=current_user.id,
+            snapshot=package_snapshot,
         )
         db.commit()
         db.refresh(order)
@@ -520,6 +525,7 @@ async def _handle_payment_callback(
             order_uuid = None
 
         if order_uuid is not None:
+            init_txn = None
             order = db.query(Sale).filter(
                 Sale.id == order_uuid,
                 Sale.tenant_id == tenant_id,
@@ -559,47 +565,23 @@ async def _handle_payment_callback(
                             package_id=UUID(str(pkg_raw)) if pkg_raw else None,
                             product_item_type="package",
                             type="gateway",
-                            created_by_type=init_txn.created_by_type,
-                            created_by_id=init_txn.created_by_id,
                             wallet_transaction_id=None,
                             amount=init_txn.amount or 0,
-                            extra_metadata={
-                                "persons": meta.get("persons"),
-                                "session_type": meta.get("session_type"),
-                                "session_count": meta.get("session_count"),
-                                "package_pricing_id": str(pricing_raw) if pricing_raw else None,
-                                "currency": init_txn.currency or (result.currency or default_currency),
-                                "gateway": (
-                                    result.gateway.value
-                                    if hasattr(result.gateway, "value")
-                                    else str(result.gateway)
-                                ),
-                                "status": _wallet_status_from_gateway(result.status),
-                                "gateway_transaction_id": result.transaction_id,
-                                **PackagesService.discount_metadata_from(meta),
-                            },
                         )
                         db.add(order)
                         db.flush()
                         init_txn.sales_id = order.id
 
             audit_sale = order or db.query(Sale).filter(Sale.id == order_uuid).first()
-            if audit_sale:
-                backfill_sale_checkout_metadata(audit_sale, result.transaction_id)
+            gateway_status = _wallet_status_from_gateway(result.status)
 
             if order:
-                # Update order status + gateway txn id
-                # Normalize statuses so app can rely on one spelling.
-                # Stripe returns "success" but app expects "succeeded".
-                order.status = _wallet_status_from_gateway(result.status)
-                order.gateway_transaction_id = result.transaction_id or order.gateway_transaction_id
-
                 if order.package_id is not None:
                     apply_package_expiry_to_sale(
                         db, order, tenant_id, overwrite=True
                     )
 
-                if (order.status or "").lower() in ("succeeded", "success"):
+                if gateway_status in ("succeeded", "success"):
                     if order.package_id is not None and PackagesService.is_one_time_duplicate_purchase(
                         db,
                         tenant_id=tenant_id,
@@ -607,18 +589,24 @@ async def _handle_payment_callback(
                         package_id=order.package_id,
                         exclude_sale_id=order.id,
                     ):
-                        order.status = "failed"
+                        gateway_status = "failed"
                     else:
                         existing_user_package = (
                             db.query(UserPackage)
                             .filter(UserPackage.sale_id == order.id)
                             .first()
                         )
+                        init_meta = init_txn.extra_metadata if init_txn is not None else None
                         user_package = ensure_user_package_for_completed_package_sale(
                             db,
                             order,
-                            created_by=order.created_by_type or "member",
-                            created_by_id=order.created_by_id or order.user_id,
+                            created_by=(
+                                init_txn.created_by_type if init_txn is not None else "member"
+                            ),
+                            created_by_id=(
+                                init_txn.created_by_id if init_txn is not None else order.user_id
+                            ),
+                            snapshot=init_meta if isinstance(init_meta, dict) else None,
                         )
                         if user_package and existing_user_package is None:
                             package_purchased_user_package_id = user_package.id
@@ -638,9 +626,8 @@ async def _handle_payment_callback(
 
             status_value = sales_transaction_status_from_gateway(result.status)
             gateway_value = (
-                (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway))
-                or (order.gateway if order else (audit_sale.gateway if audit_sale else ""))
-            )
+                result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)
+            ) or ""
 
             if init_pkg_txn is not None:
                 previous_pkg_status = init_pkg_txn.status
@@ -676,10 +663,13 @@ async def _handle_payment_callback(
                     currency=result.currency,
                     user_id=order.user_id if order else (audit_sale.user_id if audit_sale else None),
                     created_by_type=(
-                        (audit_sale.created_by_type or "member") if audit_sale else "gateway"
+                        getattr(init_pkg_txn, "created_by_type", None)
+                        or (init_txn.created_by_type if init_txn is not None else None)
+                        or "gateway"
                     ),
                     created_by_id=(
-                        (audit_sale.created_by_id or audit_sale.user_id) if audit_sale else None
+                        (audit_sale.user_id if audit_sale else None)
+                        or (order.user_id if order else None)
                     ),
                     extra_metadata={"event": "callback"},
                 )
@@ -734,6 +724,7 @@ async def _handle_payment_callback(
                 balance_after=after if _wallet_status_from_gateway(result.status) == "succeeded" else None,
                 created_by=init_wallet_txn.created_by_type,
                 created_by_id=init_wallet_txn.created_by_id,
+                reference_type="wallet_add",
             )
             db.add(wallet_txn)
             db.flush()
@@ -744,25 +735,12 @@ async def _handle_payment_callback(
                 package_id=wallet_txn.id,
                 product_item_type="wallet",
                 type="gateway",
-                created_by_type=init_wallet_txn.created_by_type,
-                created_by_id=init_wallet_txn.created_by_id,
                 wallet_transaction_id=wallet_txn.id,
                 amount=init_wallet_txn.amount or 0,
-                extra_metadata={
-                    "purpose": "wallet_add",
-                    "currency": (init_wallet_txn.currency or (result.currency or default_currency)).upper(),
-                    "gateway": (result.gateway.value if hasattr(result.gateway, "value") else str(result.gateway)),
-                    "status": _wallet_status_from_gateway(result.status),
-                    "gateway_transaction_id": result.transaction_id,
-                    SALE_WALLET_TXN_KEY: {
-                        "transaction_type": "wallet_add",
-                        "status": _wallet_status_from_gateway(result.status),
-                        "tenant_id": str(init_wallet_txn.tenant_id),
-                    },
-                },
             )
             db.add(sale)
             db.flush()
+            wallet_txn.reference_id = sale.id
             init_wallet_txn.sales_id = sale.id
 
             # Update the initiation row instead of inserting a second sales_transactions row.
@@ -997,13 +975,15 @@ async def get_sales_transactions(
                 )
             ),
             "is_package_purchase": is_package_purchase,
-            "gateway": st.gateway if st else sale.gateway,
-            "gateway_txn_id": st.gateway_txn_id if st else sale.gateway_transaction_id,
-            "status": normalize_display_status(st.status.value if st else sale.status),
+            "gateway": st.gateway if st else sale_gateway_value(db, sale),
+            "gateway_txn_id": st.gateway_txn_id if st else sale_gateway_txn_id(db, sale),
+            "status": normalize_display_status(
+                st.status.value if st else sale_status_value(db, sale)
+            ),
             "amount": st.amount if st is not None and st.amount is not None else sale.amount,
-            "currency": st.currency if st is not None and st.currency is not None else sale.currency,
+            "currency": st.currency if st is not None and st.currency is not None else sale_currency_value(db, sale),
             "package_id": sale.package_id,
-            "pricing_id": sale.pricing_id,
+            "pricing_id": sale_pricing_id(db, sale),
             "wallet_transaction_id": sale.wallet_transaction_id,
             "created_at": st.created_at if st else sale.created_at,
         }
