@@ -111,8 +111,14 @@ def generate_snowflake_id_str() -> str:
 
 
 BOOKING_REF_PREFIX = "BK-"
+TXN_REF_PREFIX = "TXN-"
 
 
 def generate_booking_ref() -> str:
     """Human-readable booking ref, e.g. ``BK-185942817304592384``."""
     return f"{BOOKING_REF_PREFIX}{generate_snowflake_id()}"
+
+
+def generate_txn_ref() -> str:
+    """Human-readable sales txn ref, e.g. ``TXN-185942817304592384``."""
+    return f"{TXN_REF_PREFIX}{generate_snowflake_id()}"

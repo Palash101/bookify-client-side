@@ -10,11 +10,13 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    event,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 
 from app.core.db.session import Base
+from app.core.snowflake import generate_txn_ref
 
 
 class SalesTransactionStatus(str, enum.Enum):
@@ -132,8 +134,24 @@ class SalesTransactions(Base):
     # Extra context for flows where Sale is created only on success.
     extra_metadata = Column(JSONB, nullable=True)
 
+    # Auto-generated ref, e.g. TXN-185942817304592384
+    txn_ref = Column(
+        String(32),
+        unique=True,
+        nullable=False,
+        index=True,
+        default=generate_txn_ref,
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
     )
+
+
+@event.listens_for(SalesTransactions, "before_insert")
+def _assign_txn_ref(mapper, connection, target: SalesTransactions) -> None:
+    """Allocate ``TXN-{snowflake}`` when not already set."""
+    if not getattr(target, "txn_ref", None):
+        target.txn_ref = generate_txn_ref()
