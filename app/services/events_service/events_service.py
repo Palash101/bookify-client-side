@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.models.event_enroll import EventEnroll
 from app.models.event_event import EventEvent, EventStatus
+from app.models.location import Location
+from app.schemas.event import EventResponse
 
 
 class EventsService:
@@ -53,6 +55,53 @@ class EventsService:
         total = query.count()
         offset = (page - 1) * limit
         return query.offset(offset).limit(limit).all(), total
+
+    @staticmethod
+    def _parse_location_id(raw: Optional[str]) -> Optional[UUID]:
+        if not raw:
+            return None
+        try:
+            return UUID(str(raw))
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def events_to_responses(db: Session, events: List[EventEvent]) -> List[EventResponse]:
+        loc_ids: List[UUID] = []
+        for event in events:
+            loc_id = EventsService._parse_location_id(event.location)
+            if loc_id is not None:
+                loc_ids.append(loc_id)
+
+        locations: Dict[str, Location] = {}
+        if loc_ids:
+            rows = db.query(Location).filter(Location.id.in_(loc_ids)).all()
+            locations = {str(row.id): row for row in rows}
+
+        responses: List[EventResponse] = []
+        for event in events:
+            loc = locations.get(str(event.location)) if event.location else None
+            payload = {
+                "id": event.id,
+                "name": event.name,
+                "type": event.type,
+                "status": event.status,
+                "starts_at": event.starts_at,
+                "ends_at": event.ends_at,
+                "max_participants": event.max_participants,
+                "image_path": event.image_path,
+                "location": {
+                    "id": str(loc.id) if loc else (event.location or ""),
+                    "name": loc.name if loc else None,
+                },
+                "description": event.description,
+                "btn_name": event.btn_name,
+                "sort_order": event.sort_order,
+                "created_at": event.created_at,
+                "updated_at": event.updated_at,
+            }
+            responses.append(EventResponse.model_validate(payload))
+        return responses
 
     @staticmethod
     def enroll_user(

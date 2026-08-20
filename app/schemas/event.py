@@ -8,6 +8,11 @@ from app.models.event_event import EventStatus, EventType
 from app.schemas.transactions import PaginationMeta
 
 
+class EventLocationResponse(BaseModel):
+    id: str = ""
+    name: Optional[str] = None
+
+
 class EventResponse(BaseModel):
     id: UUID
     name: str
@@ -17,7 +22,7 @@ class EventResponse(BaseModel):
     ends_at: Optional[datetime] = None
     max_participants: Optional[int] = None
     image_path: Optional[str] = None
-    location: str
+    location: EventLocationResponse
     description: Optional[str] = None
     btn_name: Optional[str] = None
     sort_order: Optional[int] = None
