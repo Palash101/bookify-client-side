@@ -1,12 +1,11 @@
 from fastapi import FastAPI, Request, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.openapi.utils import get_openapi
 from typing import Optional
 from app.core.settings import settings
-from app.core.middleware import TenantMiddleware
+from app.core.middleware import DynamicCORSMiddleware, TenantMiddleware
 from app.api import api_router
 from app.payments.redirect_handlers import (
     build_payment_cancel_response,
@@ -154,9 +153,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 # Tenant validation middleware (inner)
 app.add_middleware(TenantMiddleware)
 
-# CORS middleware (outer — wraps all responses, including TenantMiddleware 401s)
+# CORS middleware (outer — wraps all responses, including TenantMiddleware 401s).
+# Static list covers local/dev; tenant sites come from master organizations.domain.
 app.add_middleware(
-    CORSMiddleware,
+    DynamicCORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],

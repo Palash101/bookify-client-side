@@ -1,4 +1,5 @@
 from fastapi import Request
+from fastapi.middleware.cors import CORSMiddleware as FastAPICORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
@@ -7,6 +8,8 @@ from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
 from app.core.settings import settings
 import logging
+import threading
+import time
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -166,14 +169,76 @@ class TenantMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-class CORSMiddleware(BaseHTTPMiddleware):
+_ORG_HOSTNAME_TTL_SECONDS = 60.0
+_org_hostname_lock = threading.Lock()
+_org_hostnames: set[str] = set()
+_org_hostnames_at: Optional[float] = None
+
+
+def _hostname_from_origin_or_domain(value: str) -> Optional[str]:
+    """Normalize `https://gym.example.com` or `gym.example.com` to a hostname."""
+    raw = str(value or "").strip().rstrip("/").lower()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    host = urlparse(raw).hostname
+    return host.lower() if host else None
+
+
+def _load_active_org_hostnames() -> set[str]:
+    db: Session = SessionLocal()
+    try:
+        rows = (
+            db.query(Organization.domain)
+            .filter(Organization.status == "active")
+            .all()
+        )
+        hostnames: set[str] = set()
+        for (domain,) in rows:
+            host = _hostname_from_origin_or_domain(domain)
+            if host:
+                hostnames.add(host)
+        return hostnames
+    finally:
+        db.close()
+
+
+def _active_org_hostnames() -> set[str]:
+    """Cached hostnames from master `organizations.domain` (active rows only)."""
+    global _org_hostnames, _org_hostnames_at
+    now = time.monotonic()
+    if _org_hostnames_at is not None and (now - _org_hostnames_at) < _ORG_HOSTNAME_TTL_SECONDS:
+        return _org_hostnames
+    with _org_hostname_lock:
+        now = time.monotonic()
+        if _org_hostnames_at is not None and (now - _org_hostnames_at) < _ORG_HOSTNAME_TTL_SECONDS:
+            return _org_hostnames
+        try:
+            _org_hostnames = _load_active_org_hostnames()
+            _org_hostnames_at = now
+        except Exception:
+            logger.exception("Failed to load organization domains for CORS")
+            if _org_hostnames_at is not None:
+                return _org_hostnames
+            return set()
+        return _org_hostnames
+
+
+def origin_allowed_by_org_domain(origin: str) -> bool:
+    host = _hostname_from_origin_or_domain(origin)
+    if not host:
+        return False
+    return host in _active_org_hostnames()
+
+
+class DynamicCORSMiddleware(FastAPICORSMiddleware):
     """
-    Custom CORS middleware if needed.
+    Allow origins from `BACKEND_CORS_ORIGINS` plus any active Organization.domain
+    in the master DB (custom tenant sites).
     """
-    
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        return response
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        if super().is_allowed_origin(origin):
+            return True
+        return origin_allowed_by_org_domain(origin)

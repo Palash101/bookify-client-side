@@ -58,7 +58,8 @@ class Settings(BaseSettings):
         description="Refresh token expiry in days",
     )
     
-    # CORS (include 127.0.0.1 variants — browser treats localhost vs 127.0.0.1 as different origins)
+    # CORS extras for local/dev. Production tenant sites are allowed from
+    # master DB `organizations.domain` (see DynamicCORSMiddleware).
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -66,7 +67,6 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "https://bookify-web-app-fawn.vercel.app"
     ]
     
     # Email
