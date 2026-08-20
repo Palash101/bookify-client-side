@@ -12,6 +12,7 @@ from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
 from app.models.sales import (
     Sale,
+    package_sale_clause,
     sale_currency_value,
     sale_expires_at,
     sale_pricing_id,
@@ -150,11 +151,7 @@ class PackagesService:
             Sale.tenant_id == tenant_id,
             Sale.user_id == user_id,
             Sale.package_id == package_id,
-            (
-                Sale.type.in_(["package_gateway", "package_wallet"])
-                | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
-                | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
-            ),
+            package_sale_clause(),
             Sale.package_id.isnot(None),
             sale_succeeded_clause(),
         )
@@ -532,11 +529,7 @@ class PackagesService:
                 # Expiry check comes from entitlement row
                 (UserPackage.expire_at.is_(None)) | (UserPackage.expire_at > sa_func.now()),
                 (Sale.tenant_id == tenant_id),
-                (
-                    (Sale.type.in_(["package_gateway", "package_wallet"]))
-                    | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
-                    | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
-                ),
+                package_sale_clause(),
             )
             .order_by(UserPackage.created_at.desc())
         )

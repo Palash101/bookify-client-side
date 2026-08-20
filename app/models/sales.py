@@ -58,7 +58,7 @@ class Sale(Base):
         index=True,
     )
 
-    # wallet_add | package_gateway | package_wallet | gateway | wallet
+    # cash | gateway | wallet | package_gateway | package_wallet | wallet_add
     type = Column(
         "payment_source",
         String(50),
@@ -72,8 +72,17 @@ class Sale(Base):
 
 
 def is_package_sale(sale: Sale) -> bool:
-    return (sale.type or "") in ("package_gateway", "package_wallet") or (
-        (sale.type or "") in ("gateway", "wallet") and (sale.product_item_type or "") == "package"
+    """True for a package purchase, including POS cash (not only gateway/wallet)."""
+    if (sale.product_item_type or "").strip().lower() == "package":
+        return True
+    return (sale.type or "") in ("package_gateway", "package_wallet")
+
+
+def package_sale_clause():
+    """SQLAlchemy filter matching is_package_sale()."""
+    return or_(
+        Sale.product_item_type == "package",
+        Sale.type.in_(["package_gateway", "package_wallet"]),
     )
 
 

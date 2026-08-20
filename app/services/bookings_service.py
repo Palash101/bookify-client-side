@@ -22,7 +22,7 @@ from app.models.class_booking import (
 from app.models.user import normalize_user_gender
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
-from app.models.sales import Sale, sale_expires_at, sale_succeeded_clause
+from app.models.sales import Sale, package_sale_clause, sale_expires_at, sale_succeeded_clause
 from app.models.user import User
 from app.models.wallet_transactions import WalletTransaction
 from fastapi import HTTPException, status
@@ -1238,11 +1238,7 @@ class BookingsService:
                         Sale.id == user_package_purchase_id,
                         Sale.tenant_id == tenant_id,
                         Sale.user_id == user.id,
-                        (
-                            Sale.type.in_(["package_gateway", "package_wallet"])
-                            | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
-                            | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
-                        ),
+                        package_sale_clause(),
                         Sale.package_id.isnot(None),
                         sale_succeeded_clause(),
                     )
