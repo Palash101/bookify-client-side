@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from app.core.db.master_db import SessionLocal
 from app.core.settings import settings
@@ -32,8 +32,36 @@ def attach_checkout_platform_debug(
     debug["checkout_platform"] = checkout_platform_from_metadata(meta)
 
 
+def origin_from_org_domain(raw: Optional[str]) -> Optional[str]:
+    """Turn organizations.domain into a public https origin.
+
+    Master DB stores a FQDN (``neha.fitnezstudios.com``, ``club.studio``) or a
+    tenant slug (``powergym``). A slug is not a resolvable hostname, so it
+    becomes ``https://{slug}.{PAYMENT_TENANT_BASE_DOMAIN}``.
+    """
+    value = str(raw or "").strip().rstrip("/")
+    if not value:
+        return None
+    if "://" not in value:
+        value = f"https://{value}"
+
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").strip(".").lower()
+    if not host:
+        return None
+
+    if "." not in host:
+        base = str(settings.PAYMENT_TENANT_BASE_DOMAIN or "").strip().lstrip(".").lower()
+        if not base:
+            return None
+        host = f"{host}.{base}"
+
+    scheme = parsed.scheme if parsed.scheme in ("http", "https") else "https"
+    return f"{scheme}://{host}"
+
+
 def tenant_web_origin(tenant_id: Optional[str]) -> Optional[str]:
-    """Resolve https://{organization.domain} for the tenant, if configured."""
+    """Resolve the gym website origin for the tenant, if configured."""
     if not tenant_id:
         return None
     db = SessionLocal()
@@ -44,10 +72,7 @@ def tenant_web_origin(tenant_id: Optional[str]) -> Optional[str]:
             .first()
         )
         if org and org.domain:
-            domain = str(org.domain).strip().rstrip("/")
-            if domain.startswith("http://") or domain.startswith("https://"):
-                return domain
-            return f"https://{domain}"
+            return origin_from_org_domain(str(org.domain))
     finally:
         db.close()
     return None
@@ -69,9 +94,9 @@ def build_client_return_url(
     """
     After API processes Stripe redirect, send the user back to web or app.
 
-    Web (tenant domain when known, else PAYMENT_WEB_ORIGIN):
-      https://{domain}/payment-success?session_id=...&status=success
-      https://{domain}/payment-failed?session_id=...&status=cancelled
+    Web (tenant FQDN or {slug}.fitnezstudios.com, else PAYMENT_WEB_ORIGIN):
+      https://{host}/payment-success?session_id=...&status=success
+      https://{host}/payment-failed?session_id=...&status=cancelled
     App:
       bookify://payment/success?session_id=...&status=success
     """
