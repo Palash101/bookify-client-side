@@ -5,12 +5,12 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time as time_type, timedelta, timezone as dt_timezone
 from decimal import Decimal
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import String as SAString, and_, cast, func, or_
-from sqlalchemy.exc import ProgrammingError, OperationalError
+from sqlalchemy.exc import IntegrityError, ProgrammingError, OperationalError
 from sqlalchemy.orm import Session, aliased, attributes
 
 from app.models.class_booking import (
@@ -24,6 +24,7 @@ from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
 from app.models.sales import Sale, package_sale_clause, sale_expires_at, sale_succeeded_clause
 from app.models.user import User
+from app.models.user_package import UserPackage
 from app.models.wallet_transactions import WalletTransaction
 from fastapi import HTTPException, status
 
@@ -104,6 +105,41 @@ def _location_id_for_class(
         .first()
     )
     return row.location_id if row else None
+
+
+def _resolve_package_sale(
+    db: Session,
+    tenant_id: str,
+    user_id: UUID,
+    package_ref: UUID,
+    *,
+    require_succeeded: bool = True,
+) -> Optional[Sale]:
+    """
+    Resolve a package Sale from either sales.id (API contract) or user_packages.id
+    (class_bookings.user_package_id FK).
+    """
+    filters = [
+        Sale.tenant_id == tenant_id,
+        Sale.user_id == user_id,
+        package_sale_clause(),
+        Sale.package_id.isnot(None),
+    ]
+    if require_succeeded:
+        filters.append(sale_succeeded_clause())
+
+    sale = db.query(Sale).filter(Sale.id == package_ref, *filters).first()
+    if sale is not None:
+        return sale
+
+    user_package = (
+        db.query(UserPackage)
+        .filter(UserPackage.id == package_ref, UserPackage.user_id == user_id)
+        .first()
+    )
+    if user_package is None or user_package.sale_id is None:
+        return None
+    return db.query(Sale).filter(Sale.id == user_package.sale_id, *filters).first()
 
 
 def _wallet_debit_consumed(
@@ -420,13 +456,7 @@ def _class_has_layout(gym_class: GymClass) -> bool:
     layouts = getattr(gym_class, "layouts", None)
     if layouts not in (None, "", [], {}):
         return True
-    lid = gym_class.layout_id
-    if lid is None:
-        return False
-    try:
-        return int(lid) != 0
-    except (TypeError, ValueError):
-        return True
+    return gym_class.layout_id is not None
 
 
 def _layout_total_seats(gym_class: GymClass) -> Optional[int]:
@@ -798,13 +828,12 @@ class BookingsService:
                 and waiting_booking.user_package_purchase_id is not None
                 and int(waiting_booking.sessions_deducted or 0) == 0
             ):
-                package_sale = (
-                    db.query(Sale)
-                    .filter(
-                        Sale.id == waiting_booking.user_package_purchase_id,
-                        Sale.tenant_id == tenant_id,
-                    )
-                    .first()
+                package_sale = _resolve_package_sale(
+                    db,
+                    tenant_id,
+                    waiting_booking.user_id,
+                    waiting_booking.user_package_purchase_id,
+                    require_succeeded=False,
                 )
                 if package_sale is not None:
                     remaining = sessions_remaining_for_sale(db, package_sale)
@@ -1232,17 +1261,8 @@ class BookingsService:
                     message="Package purchase (sale id) is required",
                 )
             else:
-                sale = (
-                    db.query(Sale)
-                    .filter(
-                        Sale.id == user_package_purchase_id,
-                        Sale.tenant_id == tenant_id,
-                        Sale.user_id == user.id,
-                        package_sale_clause(),
-                        Sale.package_id.isnot(None),
-                        sale_succeeded_clause(),
-                    )
-                    .first()
+                sale = _resolve_package_sale(
+                    db, tenant_id, user.id, user_package_purchase_id
                 )
                 if not sale:
                     outcome.set_check(
@@ -1443,27 +1463,28 @@ class BookingsService:
 
         sessions_deducted = 0
         wallet_txn_id: Optional[UUID] = None
-        sale_id: Optional[UUID] = None
+        stored_user_package_id: Optional[UUID] = None
         resolved_package_id: Optional[UUID] = None
-        package_sale: Optional[Sale] = None
+        package_sale: Optional[Sale] = outcome.sale
 
         if payment_mode == "package" and user_package_purchase_id:
-            sale_id = user_package_purchase_id
-            package_sale = (
-                db.query(Sale)
-                .filter(
-                    Sale.id == sale_id,
-                    Sale.tenant_id == tenant_id,
-                    Sale.user_id == user.id,
+            if package_sale is None:
+                package_sale = _resolve_package_sale(
+                    db, tenant_id, user.id, user_package_purchase_id
                 )
-                .first()
-            )
             if not package_sale:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Package purchase not found",
                 )
-            resolved_package_id = package_sale.package_id
+            user_package = get_user_package_for_sale(db, package_sale.id)
+            if user_package is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Package entitlement not found",
+                )
+            stored_user_package_id = user_package.id
+            resolved_package_id = user_package.package_id or package_sale.package_id
             if status_str in ("confirmed", WAITING_STATUS.value):
                 rem = sessions_remaining_for_sale(db, package_sale)
                 if rem is not None and rem < 1:
@@ -1519,58 +1540,65 @@ class BookingsService:
             booked_at=now,
             confirmed_at=now if booking_status == ClassBookingStatus.confirmed else None,
             payment_mode=payment_mode,
-            user_package_purchase_id=sale_id,
+            user_package_purchase_id=stored_user_package_id,
             package_id=resolved_package_id,
             sessions_deducted=sessions_deducted,
             notes=notes,
         )
-        db.add(booking)
-        db.flush()
-        # booking_ref is assigned by ClassBooking.before_insert (Snowflake BK-*).
-        # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
-        if wallet_txn_id is not None:
-            booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
+        try:
+            db.add(booking)
             db.flush()
+            # booking_ref is assigned by ClassBooking.before_insert (Snowflake BK-*).
+            # Keep audit marker in notes (DB no longer stores wallet_txn_id on booking).
+            if wallet_txn_id is not None:
+                booking.notes = _append_bfy_wtxn_note(booking.notes, wallet_txn_id, "debit")
+                db.flush()
 
-        if (
-            payment_mode == "package"
-            and package_sale is not None
-            and booking_status in (ClassBookingStatus.confirmed, WAITING_STATUS)
-        ):
-            debit_notes = (
-                "Class booking (waitlist)"
-                if booking_status == WAITING_STATUS
-                else "Class booking"
-            )
-            remaining = sessions_remaining_for_sale(db, package_sale)
-            if remaining is not None:
-                deducted = apply_package_session_debit_for_booking(
-                    db,
-                    sale=package_sale,
-                    booking=booking,
-                    notes=debit_notes,
+            if (
+                payment_mode == "package"
+                and package_sale is not None
+                and booking_status in (ClassBookingStatus.confirmed, WAITING_STATUS)
+            ):
+                debit_notes = (
+                    "Class booking (waitlist)"
+                    if booking_status == WAITING_STATUS
+                    else "Class booking"
                 )
-                if deducted == 0:
+                remaining = sessions_remaining_for_sale(db, package_sale)
+                if remaining is not None:
+                    deducted = apply_package_session_debit_for_booking(
+                        db,
+                        sale=package_sale,
+                        booking=booking,
+                        notes=debit_notes,
+                    )
+                    if deducted == 0:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Failed to deduct package session",
+                        )
+                    booking.sessions_deducted = deducted
+                else:
+                    booking.sessions_deducted = 1
+                db.flush()
+
+            if booking_status == ClassBookingStatus.confirmed:
+                cap = _effective_capacity(gym_class)
+                current_count = int(gym_class.booking_counts or 0)
+                if cap > 0 and current_count >= cap:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Failed to deduct package session",
+                        detail="Class is full",
                     )
-                booking.sessions_deducted = deducted
-            else:
-                booking.sessions_deducted = 1
-            db.flush()
-
-        if booking_status == ClassBookingStatus.confirmed:
-            cap = _effective_capacity(gym_class)
-            current_count = int(gym_class.booking_counts or 0)
-            if cap > 0 and current_count >= cap:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Class is full",
+                gym_class.booking_counts = (
+                    min(cap, current_count + 1) if cap > 0 else current_count + 1
                 )
-            gym_class.booking_counts = (
-                min(cap, current_count + 1) if cap > 0 else current_count + 1
-            )
+        except IntegrityError as exc:
+            logger.warning("booking_create_integrity_error: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Could not complete booking — seat may already be taken or data conflict.",
+            ) from exc
 
         return booking, wallet_txn_id
 
@@ -1653,14 +1681,12 @@ class BookingsService:
             and booking.user_package_purchase_id is not None
             and int(booking.sessions_deducted or 0) > 0
         ):
-            package_sale = (
-                db.query(Sale)
-                .filter(
-                    Sale.id == booking.user_package_purchase_id,
-                    Sale.tenant_id == tenant_id,
-                    Sale.user_id == user.id,
-                )
-                .first()
+            package_sale = _resolve_package_sale(
+                db,
+                tenant_id,
+                user.id,
+                booking.user_package_purchase_id,
+                require_succeeded=False,
             )
             if package_sale is not None:
                 user_package = get_user_package_for_sale(db, package_sale.id)

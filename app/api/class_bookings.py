@@ -63,6 +63,20 @@ def _commit_booking_or_raise(db: Session) -> None:
         ) from exc
 
 
+def _persist_booking_write(db: Session, write_fn):
+    """Run a booking write (flush inside service) then commit. Map DB conflicts to HTTP errors."""
+    try:
+        result = write_fn()
+        _commit_booking_or_raise(db)
+        return result
+    except HTTPException:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+
+
 async def _publish_booking_event(
     db: Session,
     *,
@@ -193,18 +207,20 @@ async def create_class_booking(
     Validate then create a booking. Re-runs validation on submit (do not trust client-only checks).
     """
     tenant_id = current_user.tenant_id
-    booking, wallet_txn_id = BookingsService.create(
+    booking, wallet_txn_id = _persist_booking_write(
         db,
-        tenant_id,
-        current_user,
-        class_id,
-        body.payment_mode,
-        body.user_package_purchase_id,
-        body.seat_id,
-        body.notes,
-        gym_config=gym_config,
+        lambda: BookingsService.create(
+            db,
+            tenant_id,
+            current_user,
+            class_id,
+            body.payment_mode,
+            body.user_package_purchase_id,
+            body.seat_id,
+            body.notes,
+            gym_config=gym_config,
+        ),
     )
-    _commit_booking_or_raise(db)
     pubsub: dict[str, dict[str, str]] = {}
     if wallet_txn_id is not None:
         pubsub["wallet_debited"] = await _publish_wallet_debited(
@@ -269,19 +285,21 @@ async def create_waiting_booking(
     max_waitings controls how many waiting bookings are allowed.
     """
     tenant_id = current_user.tenant_id
-    booking, wallet_txn_id = BookingsService.create(
+    booking, wallet_txn_id = _persist_booking_write(
         db,
-        tenant_id,
-        current_user,
-        class_id,
-        body.payment_mode,
-        body.user_package_purchase_id,
-        body.seat_id,
-        body.notes,
-        force_waiting=True,
-        gym_config=gym_config,
+        lambda: BookingsService.create(
+            db,
+            tenant_id,
+            current_user,
+            class_id,
+            body.payment_mode,
+            body.user_package_purchase_id,
+            body.seat_id,
+            body.notes,
+            force_waiting=True,
+            gym_config=gym_config,
+        ),
     )
-    _commit_booking_or_raise(db)
     pubsub: dict[str, dict[str, str]] = {}
     if wallet_txn_id is not None:
         pubsub["wallet_debited"] = await _publish_wallet_debited(
@@ -323,16 +341,18 @@ async def cancel_class_booking(
     db: Session = Depends(get_db),
 ):
     tenant_id = current_user.tenant_id
-    booking, promoted_booking = BookingsService.cancel(
-        db=db,
-        tenant_id=tenant_id,
-        user=current_user,
-        class_id=class_id,
-        booking_id=booking_id,
-        reason=body.reason,
-        gym_config=gym_config,
+    booking, promoted_booking = _persist_booking_write(
+        db,
+        lambda: BookingsService.cancel(
+            db=db,
+            tenant_id=tenant_id,
+            user=current_user,
+            class_id=class_id,
+            booking_id=booking_id,
+            reason=body.reason,
+            gym_config=gym_config,
+        ),
     )
-    _commit_booking_or_raise(db)
     pubsub: dict[str, dict[str, str]] = {
         "booking_cancelled": await _publish_booking_event(
             db,

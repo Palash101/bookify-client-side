@@ -30,8 +30,8 @@ class GymClass(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=True)
     schedule_id = Column(BigInteger, ForeignKey("class_schedules.id"), nullable=True, index=True)
-    # Legacy layout pointer
-    layout_id = Column(BigInteger, nullable=True)
+    # Layout pointer (UUID in tenant DB; older code treated this as bigint)
+    layout_id = Column(UUID(as_uuid=True), nullable=True)
     # Optional inline layout payload (newer schema)
     layouts = Column(JSONB, nullable=True)
 

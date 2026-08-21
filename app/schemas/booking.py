@@ -19,7 +19,7 @@ class BookingRequestBody(BaseModel):
     )
     user_package_purchase_id: Optional[UUID] = Field(
         default=None,
-        description="sales.id when payment_mode is package",
+        description="sales.id from GET /packages/active (preferred) when payment_mode is package",
     )
     seat_id: Optional[str] = Field(
         default=None,

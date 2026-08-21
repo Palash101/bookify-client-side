@@ -90,11 +90,12 @@ class ClassBooking(Base):
 
     # cash | wallet | package | gateway | free
     payment_mode = Column(String(20), nullable=True)
-    # DB column name is user_package_id (legacy). Keep Python API name stable.
+    # DB column is user_package_id → user_packages.id.
+    # API field user_package_purchase_id is the sale id; create() maps it to this FK.
     user_package_purchase_id = Column(
         "user_package_id",
         UUID(as_uuid=True),
-        ForeignKey("sales.id", ondelete="SET NULL"),
+        ForeignKey("user_packages.id", ondelete="SET NULL"),
         nullable=True,
     )
     # packages.id when payment_mode is package (denormalized from the sale)
