@@ -99,8 +99,8 @@ class ActivePackageData(BaseModel):
     session_type: Optional[str] = None  # e.g. sessions, class
     is_unlimited: bool = False
     session_count: Optional[int] = None  # total included; null if unlimited or unknown
-    sessions_remaining: Optional[int] = None  # null if unlimited; else left on this sale
-    sessions_used: int = 0  # sum of sessions deducted on active bookings for this sale
+    sessions_remaining: Optional[int] = None  # user_packages.session_count; null if unlimited
+    sessions_used: int = 0  # total_session minus remaining balance
 
 
 class ActivePackagesListResponse(BaseModel):

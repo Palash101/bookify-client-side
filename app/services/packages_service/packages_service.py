@@ -3,10 +3,9 @@ from datetime import date, datetime
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import func as sa_func_sql, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.class_booking import ClassBooking
 from app.models.package import Package
 from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
@@ -20,11 +19,9 @@ from app.models.sales import (
     sale_session_type,
     sale_status_value,
     sale_succeeded_clause,
-    sale_txn_snapshot,
 )
 from app.models.user_package import UserPackage
 from app.schemas.package import PackagePricingResponse, PackageResponse
-from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES
 from app.services.gym_config_service import GymConfigService
 from app.services.sale_expiry import compute_sale_expires_at
 from app.services.user_package_tracking_service import sessions_remaining_for_sale
@@ -405,6 +402,74 @@ class PackagesService:
         return package
 
     @staticmethod
+    def _session_quota_fields(
+        db: Session,
+        *,
+        user_package: Optional[UserPackage] = None,
+        sale: Optional[Sale] = None,
+        pricing_row: Optional[PackagePricing] = None,
+    ) -> Dict[str, Any]:
+        """
+        session_count = total included sessions
+        sessions_remaining = user_packages.session_count (live balance)
+        sessions_used = total - remaining
+        """
+        is_unlimited = bool(
+            pricing_row.is_unlimited
+            if pricing_row is not None and pricing_row.is_unlimited is not None
+            else False
+        )
+        session_type = None
+        if user_package is not None and user_package.session_type:
+            session_type = user_package.session_type
+        elif sale is not None:
+            session_type = sale_session_type(db, sale)
+        if not session_type and pricing_row is not None:
+            session_type = pricing_row.session_type
+
+        if is_unlimited:
+            return {
+                "session_type": session_type,
+                "is_unlimited": True,
+                "session_count": None,
+                "sessions_remaining": None,
+                "sessions_used": 0,
+            }
+
+        total_sessions: Optional[int] = None
+        remaining: Optional[int] = None
+        if user_package is not None:
+            if user_package.total_session is not None:
+                total_sessions = int(user_package.total_session)
+            if user_package.session_count is not None:
+                remaining = max(0, int(user_package.session_count))
+        if total_sessions is None and sale is not None:
+            count = sale_session_count(db, sale)
+            if count is not None:
+                total_sessions = int(count)
+        if total_sessions is None and pricing_row is not None and pricing_row.session_count is not None:
+            total_sessions = int(pricing_row.session_count)
+
+        if remaining is None and sale is not None:
+            rem = sessions_remaining_for_sale(db, sale)
+            if rem is not None:
+                remaining = max(0, int(rem))
+        if remaining is None and total_sessions is not None:
+            remaining = total_sessions
+
+        used = 0
+        if total_sessions is not None and remaining is not None:
+            used = max(0, total_sessions - remaining)
+
+        return {
+            "session_type": session_type,
+            "is_unlimited": False,
+            "session_count": total_sessions,
+            "sessions_remaining": remaining,
+            "sessions_used": used,
+        }
+
+    @staticmethod
     def _active_package_entry_for_order(
         db: Session,
         tenant_id: str,
@@ -421,21 +486,10 @@ class PackagesService:
         if package is None:
             return None
 
-        sessions_used_raw = (
-            db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
-            .filter(
-                ClassBooking.user_package_purchase_id == order.id,
-                ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
-            )
-            .scalar()
+        user_package = db.query(UserPackage).filter(UserPackage.sale_id == order.id).first()
+        pricing_id = (user_package.pricing_id if user_package is not None else None) or sale_pricing_id(
+            db, order
         )
-        try:
-            sessions_used = int(sessions_used_raw or 0)
-        except (TypeError, ValueError):
-            sessions_used = 0
-
-        snap = sale_txn_snapshot(db, order)
-        pricing_id = sale_pricing_id(db, order)
         pricing_row = None
         if pricing_id:
             pricing_row = (
@@ -444,38 +498,9 @@ class PackagesService:
                 .first()
             )
 
-        is_unlimited = bool(
-            pricing_row.is_unlimited
-            if pricing_row is not None and pricing_row.is_unlimited is not None
-            else False
+        quota = PackagesService._session_quota_fields(
+            db, user_package=user_package, sale=order, pricing_row=pricing_row
         )
-
-        session_type = snap.get("session_type") or sale_session_type(db, order)
-        if not session_type and pricing_row is not None:
-            session_type = pricing_row.session_type
-
-        total_raw = snap.get("session_count")
-        if total_raw is None:
-            total_raw = sale_session_count(db, order)
-        if total_raw is None and pricing_row is not None and pricing_row.session_count is not None:
-            total_raw = pricing_row.session_count
-        total_sessions: Optional[int] = None
-        if not is_unlimited and total_raw is not None:
-            try:
-                total_sessions = int(total_raw)
-            except (TypeError, ValueError):
-                total_sessions = None
-
-        sessions_remaining: Optional[int] = None
-        if is_unlimited:
-            sessions_remaining = None
-        else:
-            rem_meta = sessions_remaining_for_sale(db, order)
-            if rem_meta is not None:
-                sessions_remaining = max(0, int(rem_meta))
-            elif total_sessions is not None:
-                sessions_remaining = max(0, total_sessions - sessions_used)
-
         expires_at = sale_expires_at(db, order) or compute_sale_expires_at(order, package)
 
         return {
@@ -491,13 +516,12 @@ class PackagesService:
             "sale_type": order.type,
             "amount": order.amount,
             "currency": sale_currency_value(db, order),
-            "session_type": session_type,
-            "is_unlimited": is_unlimited,
-            "session_count": total_sessions,
-            "sessions_remaining": sessions_remaining,
-            "sessions_used": sessions_used,
+            "session_type": quota["session_type"],
+            "is_unlimited": quota["is_unlimited"],
+            "session_count": quota["session_count"],
+            "sessions_remaining": quota["sessions_remaining"],
+            "sessions_used": quota["sessions_used"],
         }
-        
 
     @staticmethod
     def get_active_packages_for_user(
@@ -546,49 +570,13 @@ class PackagesService:
             if package is None:
                 continue
 
-            sessions_used_raw = (
-                db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
-                .filter(
-                    ClassBooking.user_package_purchase_id == (up.sale_id or (sale.id if sale else None)),
-                    ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
-                )
-                .scalar()
-            )
-            try:
-                sessions_used = int(sessions_used_raw or 0)
-            except (TypeError, ValueError):
-                sessions_used = 0
-
             pricing_row = None
             if up.pricing_id:
                 pricing_row = db.query(PackagePricing).filter(PackagePricing.id == up.pricing_id).first()
 
-            is_unlimited = bool(
-                pricing_row.is_unlimited
-                if pricing_row is not None and pricing_row.is_unlimited is not None
-                else False
+            quota = PackagesService._session_quota_fields(
+                db, user_package=up, sale=sale, pricing_row=pricing_row
             )
-
-            session_type = up.session_type or (pricing_row.session_type if pricing_row is not None else None)
-
-            total_sessions: Optional[int] = None
-            if not is_unlimited:
-                if up.total_session is not None:
-                    total_sessions = int(up.total_session)
-                elif sale is not None:
-                    count = sale_session_count(db, sale)
-                    if count is not None:
-                        total_sessions = int(count)
-                if total_sessions is None and pricing_row is not None and pricing_row.session_count is not None:
-                    total_sessions = int(pricing_row.session_count)
-
-            sessions_remaining: Optional[int] = None
-            if is_unlimited:
-                sessions_remaining = None
-            elif sale is not None:
-                sessions_remaining = sessions_remaining_for_sale(db, sale)
-            elif total_sessions is not None:
-                sessions_remaining = max(0, total_sessions - sessions_used)
 
             expires_at = up.expire_at
             if expires_at is None and sale is not None:
@@ -610,11 +598,11 @@ class PackagesService:
                     "sale_type": (sale.type if sale is not None else "package_gateway"),
                     "amount": (sale.amount if sale is not None else None),
                     "currency": (sale_currency_value(db, sale) if sale is not None else None),
-                    "session_type": session_type,
-                    "is_unlimited": is_unlimited,
-                    "session_count": total_sessions,
-                    "sessions_remaining": sessions_remaining,
-                    "sessions_used": sessions_used,
+                    "session_type": quota["session_type"],
+                    "is_unlimited": quota["is_unlimited"],
+                    "session_count": quota["session_count"],
+                    "sessions_remaining": quota["sessions_remaining"],
+                    "sessions_used": quota["sessions_used"],
                 }
             )
 

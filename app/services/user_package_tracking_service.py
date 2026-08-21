@@ -24,6 +24,7 @@ _ACTIVE_PACKAGE_BOOKING_STATUSES = (
     ClassBookingStatus.waiting,
     ClassBookingStatus.pending,
     ClassBookingStatus.pending_payment,
+    ClassBookingStatus.completed,
 )
 
 
@@ -35,11 +36,23 @@ def _remaining_from_sale_metadata(sale: Sale) -> Optional[int]:
     return None
 
 
-def _active_sessions_used(db: Session, sale_id: UUID) -> int:
+def _booking_package_ref_ids(user_package: UserPackage) -> list[UUID]:
+    """
+    class_bookings.user_package_id is a FK to user_packages.id.
+    Some code paths historically wrote sales.id there — match both.
+    """
+    ids: list[UUID] = [user_package.id]
+    if user_package.sale_id is not None:
+        ids.append(user_package.sale_id)
+    return ids
+
+
+def _active_sessions_used(db: Session, sale_id: UUID, user_package: Optional[UserPackage] = None) -> int:
+    refs = _booking_package_ref_ids(user_package) if user_package is not None else [sale_id]
     raw = (
         db.query(func.coalesce(func.sum(ClassBooking.sessions_deducted), 0))
         .filter(
-            ClassBooking.user_package_purchase_id == sale_id,
+            ClassBooking.user_package_purchase_id.in_(refs),
             ClassBooking.status.in_(_ACTIVE_PACKAGE_BOOKING_STATUSES),
         )
         .scalar()
@@ -87,33 +100,23 @@ def sessions_remaining_for_sale(db: Session, sale: Sale) -> Optional[int]:
     Remaining bookable sessions for a package sale.
     None means unlimited / unknown session pool.
 
-    Uses total_session minus active booking usage so legacy rows (sessions_deducted
-    without ledger entries) stay accurate.
+    ``user_packages.session_count`` is the live remaining balance (admin and
+    booking flows decrement it). Do not recompute from class_bookings here:
+    those rows store user_packages.id, not sales.id, so a sale-id lookup
+    under-counts used sessions and can restore a spent balance.
     """
     user_package = get_user_package_for_sale(db, sale.id)
     if user_package is None:
         return _remaining_from_sale_metadata(sale)
 
+    if user_package.session_count is not None:
+        return max(0, int(user_package.session_count))
+
     total = _package_session_total(user_package, sale)
-    if total is not None:
-        remaining = max(0, total - _active_sessions_used(db, sale.id))
-        if user_package.session_count != remaining:
-            user_package.session_count = remaining
-            sync_sale_sessions_remaining(sale, remaining)
-        return remaining
-
-    if user_package.session_count is None:
+    if total is None:
         return None
-
-    # Legacy rows without total_session: subtract bookings not yet in the ledger.
-    used = _active_sessions_used(db, sale.id)
-    ledger_debits = _ledger_debit_total(db, user_package.id)
-    legacy_gap = max(0, used - ledger_debits)
-    remaining = max(0, int(user_package.session_count) - legacy_gap)
-    if user_package.session_count != remaining:
-        user_package.session_count = remaining
-        sync_sale_sessions_remaining(sale, remaining)
-    return remaining
+    used = _active_sessions_used(db, sale.id, user_package)
+    return max(0, total - used)
 
 
 def _tracking_exists(
