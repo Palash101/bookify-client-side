@@ -810,6 +810,19 @@ class AuthService:
             current_skills["nationality"] = update_data["nationality"]
             update_data["skills"] = current_skills
             del update_data["nationality"]
+
+        if "gender" in update_data:
+            raw_gender = update_data.get("gender")
+            if raw_gender is None or (isinstance(raw_gender, str) and not str(raw_gender).strip()):
+                update_data["gender"] = None
+            else:
+                normalized_gender = normalize_user_gender(raw_gender)
+                if normalized_gender is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid gender. Allowed values: male, female",
+                    )
+                update_data["gender"] = normalized_gender
         
         for field, value in update_data.items():
             if hasattr(user, field):
