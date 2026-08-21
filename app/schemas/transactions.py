@@ -25,6 +25,7 @@ class WalletTransactionItemResponse(BaseModel):
     direction: str
     transaction_type: str
     transaction_id: Optional[str] = None
+    txn_ref: Optional[str] = None
 
     status: str
     metadata: Optional[Dict[str, Any]] = None
@@ -93,6 +94,7 @@ class SalesTransactionItemResponse(BaseModel):
 
     gateway: str
     gateway_txn_id: Optional[str] = None
+    txn_ref: Optional[str] = None
 
     status: str
     amount: Optional[Decimal] = None

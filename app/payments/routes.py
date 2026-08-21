@@ -978,6 +978,7 @@ async def get_sales_transactions(
             "is_package_purchase": is_package_purchase,
             "gateway": st.gateway if st else sale_gateway_value(db, sale),
             "gateway_txn_id": st.gateway_txn_id if st else sale_gateway_txn_id(db, sale),
+            "txn_ref": st.txn_ref if st else None,
             "status": normalize_display_status(
                 st.status.value if st else sale_status_value(db, sale)
             ),

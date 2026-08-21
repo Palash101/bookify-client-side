@@ -381,7 +381,7 @@ def _gender_eligibility_message(class_gender: str, user_gender: Optional[str]) -
     if class_gender == user_gender:
         return True, ""
     if class_gender == "female":
-        return False, "This class is for women only."
+        return False, "This class is for females only."
     if class_gender == "male":
         return False, "This class is for men only."
     return False, "You cannot book this class."

@@ -202,6 +202,23 @@ async def get_wallet_transactions(
         .all()
     )
 
+    txn_ref_by_wallet_id: dict = {}
+    wallet_ids = [t.id for t in txns]
+    if wallet_ids:
+        st_rows = (
+            db.query(
+                Sale.wallet_transaction_id,
+                SalesTransactions.txn_ref,
+            )
+            .join(SalesTransactions, SalesTransactions.sales_id == Sale.id)
+            .filter(Sale.wallet_transaction_id.in_(wallet_ids))
+            .order_by(SalesTransactions.created_at.desc())
+            .all()
+        )
+        for wallet_txn_id, txn_ref in st_rows:
+            if wallet_txn_id not in txn_ref_by_wallet_id and txn_ref:
+                txn_ref_by_wallet_id[wallet_txn_id] = txn_ref
+
     return {
         "success": True,
         "message": "Wallet transactions fetched successfully",
@@ -213,6 +230,7 @@ async def get_wallet_transactions(
                 "direction": t.direction,
                 "transaction_type": t.transaction_type,
                 "transaction_id": t.transaction_id,
+                "txn_ref": txn_ref_by_wallet_id.get(t.id),
                 "status": normalize_display_status(t.status),
                 "metadata": t.metadata_,
                 "amount": t.amount,

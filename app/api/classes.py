@@ -63,17 +63,22 @@ async def get_classes_by_date_for_location(
     )
 
     trainer_ids = {c.trainer_id for c in classes if getattr(c, "trainer_id", None) is not None}
-    trainer_name_by_id = {}
+    trainer_by_id: dict[str, dict] = {}
     if trainer_ids:
         rows = (
             db.execute(
-                select(User.id, User.first_name, User.last_name).where(User.id.in_(list(trainer_ids)))
+                select(User.id, User.first_name, User.last_name, User.avatar).where(
+                    User.id.in_(list(trainer_ids))
+                )
             )
             .all()
         )
-        for tid, first, last in rows:
+        for tid, first, last, avatar in rows:
             full = f"{first or ''} {last or ''}".strip()
-            trainer_name_by_id[str(tid)] = full or None
+            trainer_by_id[str(tid)] = {
+                "name": full or None,
+                "image": avatar,
+            }
 
     programme_ids = set()
     for c in classes:
@@ -100,7 +105,9 @@ async def get_classes_by_date_for_location(
     data = []
     for c in classes:
         item = GymClassResponse.model_validate(c).model_dump()
-        item["trainer_name"] = trainer_name_by_id.get(str(getattr(c, "trainer_id", "")))
+        trainer = trainer_by_id.get(str(getattr(c, "trainer_id", "")), {})
+        item["trainer_name"] = trainer.get("name")
+        item["trainer_image"] = trainer.get("image")
         pid = getattr(c, "training_programme_id", None)
         try:
             pid_int = int(pid) if pid is not None else 0
