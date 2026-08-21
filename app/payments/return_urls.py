@@ -11,6 +11,7 @@ from app.models.master_org import Organization
 
 _WEB_SUCCESS_PATH = "/payment-success"
 _WEB_FAILED_PATH = "/payment-failed"
+_LOCAL_HTTP_HOSTS = frozenset({"localhost", "127.0.0.1"})
 
 
 def normalize_checkout_platform(value: Any) -> str:
@@ -25,11 +26,78 @@ def checkout_platform_from_metadata(meta: Optional[dict[str, Any]]) -> str:
     )
 
 
+def parse_web_origin(raw: Optional[str]) -> Optional[str]:
+    """Normalize Origin/Referer/domain to ``scheme://host`` (no path)."""
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlparse(value)
+    host = (parsed.hostname or "").strip(".").lower()
+    if not host:
+        return None
+    scheme = parsed.scheme if parsed.scheme in ("http", "https") else "https"
+    if parsed.port:
+        return f"{scheme}://{host}:{parsed.port}"
+    return f"{scheme}://{host}"
+
+
+def checkout_origin_from_request(request: Any) -> Optional[str]:
+    """Browser site that started checkout (Origin, else Referer)."""
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return None
+    for header in ("origin", "referer"):
+        origin = parse_web_origin(headers.get(header))
+        if origin:
+            return origin
+    return None
+
+
+def checkout_origin_metadata(request: Any) -> dict[str, str]:
+    origin = checkout_origin_from_request(request)
+    return {"checkout_origin": origin} if origin else {}
+
+
+def _platform_base_domain() -> str:
+    return str(settings.PAYMENT_TENANT_BASE_DOMAIN or "").strip().lstrip(".").lower()
+
+
+def is_allowed_checkout_origin(origin: str, tenant_id: Optional[str] = None) -> bool:
+    """Block open redirects; allow the page the user actually paid from."""
+    parsed = urlparse(origin)
+    host = (parsed.hostname or "").strip(".").lower()
+    scheme = parsed.scheme
+    if not host or scheme not in ("http", "https"):
+        return False
+    if scheme == "http" and host not in _LOCAL_HTTP_HOSTS:
+        return False
+
+    base = _platform_base_domain()
+    if base and scheme == "https" and (host == base or host.endswith(f".{base}")):
+        return True
+
+    tenant_origin = tenant_web_origin(tenant_id) if tenant_id else None
+    if tenant_origin and origin.rstrip("/") == tenant_origin.rstrip("/"):
+        return True
+
+    for allowed in settings.BACKEND_CORS_ORIGINS or []:
+        if parse_web_origin(allowed) == origin:
+            return True
+
+    return False
+
+
 def attach_checkout_platform_debug(
     debug: dict[str, str],
     meta: Optional[dict[str, Any]],
 ) -> None:
+    meta = meta or {}
     debug["checkout_platform"] = checkout_platform_from_metadata(meta)
+    origin = parse_web_origin(meta.get("checkout_origin"))
+    if origin:
+        debug["checkout_origin"] = origin
 
 
 def origin_from_org_domain(raw: Optional[str]) -> Optional[str]:
@@ -39,24 +107,23 @@ def origin_from_org_domain(raw: Optional[str]) -> Optional[str]:
     tenant slug (``powergym``). A slug is not a resolvable hostname, so it
     becomes ``https://{slug}.{PAYMENT_TENANT_BASE_DOMAIN}``.
     """
-    value = str(raw or "").strip().rstrip("/")
-    if not value:
+    parsed_origin = parse_web_origin(raw)
+    if not parsed_origin:
         return None
-    if "://" not in value:
-        value = f"https://{value}"
-
-    parsed = urlparse(value)
+    parsed = urlparse(parsed_origin)
     host = (parsed.hostname or "").strip(".").lower()
     if not host:
         return None
 
     if "." not in host:
-        base = str(settings.PAYMENT_TENANT_BASE_DOMAIN or "").strip().lstrip(".").lower()
+        base = _platform_base_domain()
         if not base:
             return None
         host = f"{host}.{base}"
 
     scheme = parsed.scheme if parsed.scheme in ("http", "https") else "https"
+    if parsed.port:
+        return f"{scheme}://{host}:{parsed.port}"
     return f"{scheme}://{host}"
 
 
@@ -94,7 +161,9 @@ def build_client_return_url(
     """
     After API processes Stripe redirect, send the user back to web or app.
 
-    Web (tenant FQDN or {slug}.fitnezstudios.com, else PAYMENT_WEB_ORIGIN):
+    Web prefers the Origin that started checkout (so cc.fitnezstudios.com
+    does not bounce to powergym.fitnezstudios.com). Fallback is the tenant
+    Organization.domain (FQDN or {slug}.fitnezstudios.com), else PAYMENT_WEB_ORIGIN:
       https://{host}/payment-success?session_id=...&status=success
       https://{host}/payment-failed?session_id=...&status=cancelled
     App:
@@ -121,5 +190,8 @@ def build_client_return_url(
         return f"{base.rstrip('/')}?{urlencode(params)}"
 
     origin = web_origin_for_tenant(tenant_id)
+    started_on = parse_web_origin((extra or {}).get("checkout_origin"))
+    if started_on and is_allowed_checkout_origin(started_on, tenant_id):
+        origin = started_on
     path = _WEB_SUCCESS_PATH if (success and not has_error) else _WEB_FAILED_PATH
     return f"{origin}{path}?{urlencode(params)}"

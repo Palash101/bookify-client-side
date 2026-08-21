@@ -1,7 +1,7 @@
 from typing import Literal, Optional
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import String
@@ -31,7 +31,7 @@ from app.models.sales import (
 from app.models.sales_transactions import SalesTransactionStatus, SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
-from app.payments.return_urls import normalize_checkout_platform
+from app.payments.return_urls import checkout_origin_metadata, normalize_checkout_platform
 from app.models.package import Package
 from app.services.locations_service.locations_service import LocationsService
 
@@ -58,6 +58,7 @@ class AddWalletBalanceRequest(BaseModel):
 @router.post("/add/wallet/balance")
 async def add_wallet_balance(
     body: AddWalletBalanceRequest,
+    request: Request,
     tenant_id=Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -100,6 +101,7 @@ async def add_wallet_balance(
             "direction": "credit",
             "balance_before": str(balance_before),
             "checkout_platform": checkout_platform,
+            **checkout_origin_metadata(request),
         },
     )
     db.add(init_txn)

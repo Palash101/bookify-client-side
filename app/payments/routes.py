@@ -21,7 +21,7 @@ from .redirect_handlers import (
     build_payment_cancel_response,
     build_payment_success_response,
 )
-from .return_urls import normalize_checkout_platform
+from .return_urls import checkout_origin_metadata, normalize_checkout_platform
 from .tenant_resolve import resolve_tenant_for_stripe_webhook
 from app.core.db.session import get_session_factory
 from app.dependencies import get_current_tenant_id, get_current_active_user, get_db
@@ -153,6 +153,7 @@ def get_tenant_id(tenant_id: str = Depends(get_current_tenant_id)) -> str:
 @router.post("/package-purchase")
 async def initiate_package_purchase(
     body: PackagePurchaseRequest,
+    request: Request,
     tenant_id: str = Depends(get_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -353,9 +354,9 @@ async def initiate_package_purchase(
             "package_pricing_id": str(pricing.id),
             "persons": persons_requested,
             "session_type": pricing.session_type,
-            "session_count": pricing.session_count,
             "checkout_platform": checkout_platform,
             **discount_meta,
+            **checkout_origin_metadata(request),
         },
     )
     db.add(txn)

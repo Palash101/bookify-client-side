@@ -79,8 +79,8 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = Field(default=True, env="SMTP_USE_TLS")
     
     # After Stripe (etc.) hits /payment/success on this server, user is redirected here.
-    # Web: prefer tenant Organization.domain (FQDN, or slug + this base domain),
-    # else this origin + /payment-success|/payment-failed.
+    # Web: prefer the Origin that started checkout, then tenant Organization.domain
+    # (FQDN, or slug + this base domain), else this origin + /payment-success|/payment-failed.
     # App: deep links below.
     PAYMENT_WEB_ORIGIN: str = Field(
         default="https://bookify-web-app-fawn.vercel.app",
