@@ -15,7 +15,7 @@ from app.core.events.event_types import (
     CLIENT_BOOKING_WAITLIST_PROMOTED,
 )
 from app.core.logging import get_logger
-from app.models.class_booking import ClassBooking
+from app.models.class_booking import ClassBooking, class_booking_status_value
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.event_publish_service import EventPublishService, PublishedEvent
 
@@ -25,7 +25,7 @@ log = get_logger(__name__)
 class BookingNotificationService:
     @staticmethod
     def resolve_event_type(booking: ClassBooking) -> Optional[str]:
-        status = (booking.status or "").strip().lower()
+        status = class_booking_status_value(booking.status)
         if status == "waiting":
             return CLIENT_BOOKING_WAITLIST_JOINED
         if status == "pending_payment":
@@ -63,19 +63,19 @@ class BookingNotificationService:
     ) -> Optional[PublishedEvent]:
         cfg = gym_config or GymConfigValue()
         if not BookingNotificationService._notification_enabled(cfg, event_type):
-            log.info(
-                "booking_notification_skipped_disabled tenant_id=%s event_type=%s booking_id=%s",
+            log.warning(
+                "booking_notification_gym_setting_off tenant_id=%s event_type=%s booking_id=%s "
+                "(publishing to Pub/Sub anyway; consumer may skip email)",
                 tenant_id,
                 event_type,
                 booking.id,
             )
-            return None
 
-        return await EventPublishService.publish_with_email_template(
-            db,
+        return await EventPublishService.publish(
             tenant_id=tenant_id,
             event_type=event_type,
-            data=build_booking_notification_data(booking, event_type),
+            data=build_booking_notification_data(booking),
+            ordering_key=str(tenant_id),
         )
 
     @staticmethod

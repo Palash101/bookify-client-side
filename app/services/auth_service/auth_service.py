@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from fastapi import HTTPException, status
-from app.models.user import User
+from app.models.user import User, normalize_user_gender, user_gender_value
 from app.models.role import Role
 from app.core.security import (
     verify_password,
@@ -13,12 +14,12 @@ from app.core.security import (
     verify_refresh_token,
     verify_token,
 )
-from app.core.otp_utils import create_otp, verify_otp_any_purpose
+from app.core.otp_utils import create_otp, get_otp, verify_otp_any_purpose
 from app.core.events.event_types import CLIENT_LOGIN_OTP
 from app.services.event_publish_service import EventPublishService
 from app.core.logging import get_logger
 from app.schemas.user import UserCreate, ProfileUpdate
-from datetime import timedelta, date as date_type
+from datetime import datetime, timedelta, timezone, date as date_type
 from app.core.settings import settings
 from typing import Optional, Dict, Any, Tuple
 import uuid
@@ -131,7 +132,11 @@ class AuthService:
             "first_name": user_data.first_name,
             "last_name": user_data.last_name,
             "phone": phone_number,
-            "gender": user_data.gender,
+            "gender": (
+                normalize_user_gender(user_data.gender).value
+                if normalize_user_gender(user_data.gender) is not None
+                else None
+            ),
             "dob": str(user_data.dob) if user_data.dob else None,
             "skills": None,
             "tenant_id": str(tenant_id),
@@ -323,10 +328,7 @@ class AuthService:
         return email
 
     @staticmethod
-    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[str]]:
-        """
-        Email + tenant_id from Bearer verification JWT (OTP flow).
-        """
+    def _parse_bearer_token(authorization: Optional[str]) -> str:
         if not authorization:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -343,8 +345,34 @@ class AuthService:
                 detail="Invalid authorization header format. Use 'Bearer <token>'",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        return token
+
+    @staticmethod
+    def extract_verification_context(authorization: Optional[str]) -> Tuple[str, Optional[str]]:
+        """
+        Email + tenant_id from Bearer verification JWT (OTP flow).
+        """
+        email, otp_tenant_id, _purpose = AuthService.extract_verification_session(
+            authorization
+        )
+        return email, otp_tenant_id
+
+    @staticmethod
+    def extract_verification_session(
+        authorization: Optional[str],
+    ) -> Tuple[str, Optional[str], str]:
+        """
+        Email, tenant_id, and purpose from Bearer verification JWT (OTP flow).
+        """
+        token = AuthService._parse_bearer_token(authorization)
         claims = extract_verification_claims(token)
         if not claims or not claims.get("email"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification token",
+            )
+        purpose = claims.get("purpose")
+        if purpose not in CLIENT_OTP_EVENT_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid or expired verification token",
@@ -354,7 +382,66 @@ class AuthService:
         otp_tenant_id: Optional[str] = None
         if tid_raw:
             otp_tenant_id = str(tid_raw)
-        return email, otp_tenant_id
+        return email, otp_tenant_id, purpose
+
+    @staticmethod
+    async def resend_otp(
+        db: Session,
+        authorization: Optional[str],
+        tenant_id: Optional[str] = None,
+    ) -> Tuple[str, str, str, str]:
+        """
+        Resend OTP using the verification Bearer token from login/register/forgot-password.
+        Returns (verification_token, otp_code, email, purpose).
+        """
+        email, otp_tenant_id, purpose = AuthService.extract_verification_session(
+            authorization
+        )
+        effective_tenant = otp_tenant_id or tenant_id
+        if not effective_tenant:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Verification token missing tenant. Request OTP again with "
+                    "X-Tenant-Key on login, register, or forgot-password."
+                ),
+            )
+        if (
+            tenant_id is not None
+            and otp_tenant_id is not None
+            and otp_tenant_id != tenant_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X-Tenant-Key does not match the tenant on your verification session.",
+            )
+
+        user_data: Optional[Dict[str, Any]] = None
+        if purpose == "register":
+            cached = get_otp(email, purpose, tenant_id=effective_tenant)
+            if not cached or not cached.get("user_data"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Registration session expired. Please register again.",
+                )
+            user_data = cached["user_data"]
+            full_name = AuthService._full_name(
+                user_data.get("first_name"),
+                user_data.get("last_name"),
+                email,
+            )
+        else:
+            user = AuthService.get_user_for_login(db, email, effective_tenant)
+            full_name = AuthService._user_full_name(user)
+
+        token, otp_code = await AuthService.send_client_otp(
+            email=email,
+            purpose=purpose,
+            tenant_id=effective_tenant,
+            full_name=full_name,
+            user_data=user_data,
+        )
+        return token, otp_code, email, purpose
 
     @staticmethod
     def assert_forgot_password_verification_token(authorization: Optional[str]) -> None:
@@ -450,7 +537,7 @@ class AuthService:
             first_name=cached_user_data["first_name"],
             last_name=cached_user_data["last_name"],
             phone=cached_user_data.get("phone"),
-            gender=cached_user_data.get("gender"),
+            gender=normalize_user_gender(cached_user_data.get("gender")),
             dob=dob,
             skills=cached_user_data.get("skills"),
             is_active=True,
@@ -723,6 +810,19 @@ class AuthService:
             current_skills["nationality"] = update_data["nationality"]
             update_data["skills"] = current_skills
             del update_data["nationality"]
+
+        if "gender" in update_data:
+            raw_gender = update_data.get("gender")
+            if raw_gender is None or (isinstance(raw_gender, str) and not str(raw_gender).strip()):
+                update_data["gender"] = None
+            else:
+                normalized_gender = normalize_user_gender(raw_gender)
+                if normalized_gender is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid gender. Allowed values: male, female",
+                    )
+                update_data["gender"] = normalized_gender
         
         for field, value in update_data.items():
             if hasattr(user, field):
@@ -730,4 +830,45 @@ class AuthService:
         
         db.commit()
         db.refresh(user)
+        return user
+
+    @staticmethod
+    def deactivate_account(db: Session, user: User, reason: str) -> User:
+        """
+        Soft-delete / deactivate the current user account.
+        Stores deletion_reason + deactivated_at on dedicated user columns.
+        """
+        reason_text = (reason or "").strip()
+        if not reason_text:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reason is required to delete your account.",
+            )
+
+        user = db.merge(user)
+        if user.is_active is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Your account is already deactivated.",
+            )
+
+        # Clean up earlier mistaken write into skills JSONB (if present).
+        if isinstance(user.skills, dict):
+            skills = dict(user.skills)
+            skills.pop("deletion_reason", None)
+            skills.pop("deactivated_at", None)
+            user.skills = skills or None
+            flag_modified(user, "skills")
+
+        user.is_active = False
+        user.deletion_reason = reason_text
+        user.deactivated_at = datetime.now(timezone.utc)
+
+        db.commit()
+        db.refresh(user)
+        log.info(
+            "account_deactivated user_id=%s tenant_id=%s",
+            user.id,
+            user.tenant_id,
+        )
         return user

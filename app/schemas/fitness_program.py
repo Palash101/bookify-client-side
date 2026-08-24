@@ -1,5 +1,7 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from typing import Optional, List
+
+from app.schemas.transactions import PaginationMeta
 
 
 class FitnessProgramResponse(BaseModel):
@@ -27,6 +29,10 @@ class FitnessProgramResponse(BaseModel):
     gender_restriction: Optional[str] = None
     display_position: Optional[int] = None
 
+    @field_serializer("show_spots_left")
+    def serialize_show_spots_left(self, value: Optional[bool]) -> Optional[bool]:
+        return True if value is True else None
+
     class Config:
         from_attributes = True
 
@@ -36,6 +42,7 @@ class FitnessProgramsListResponse(BaseModel):
     message: str = "Training programs fetched successfully"
     data: List[FitnessProgramResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 class FitnessProgramDetailResponse(BaseModel):

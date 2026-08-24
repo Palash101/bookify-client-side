@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Any
 from uuid import UUID
 
+from app.schemas.transactions import PaginationMeta
+
 
 class TrainerResponse(BaseModel):
     """User fields for trainer role - no password or sensitive data."""
@@ -22,3 +24,4 @@ class TrainersListResponse(BaseModel):
     message: str = "Trainers fetched successfully"
     data: List[TrainerResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None

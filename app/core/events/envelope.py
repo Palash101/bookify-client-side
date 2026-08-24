@@ -21,10 +21,12 @@ class EventEnvelope:
     )
 
     def to_bytes(self) -> bytes:
+        """JSON body for Pub/Sub. Consumer reads ``tenant_id`` from here (not only attributes)."""
         payload = {
             "event_type": self.event_type,
+            "tenant_id": str(self.tenant_id),
             "data": self.data,
-            "ordering_key": self.ordering_key or "",
+            "ordering_key": self.ordering_key or str(self.tenant_id),
             "event_id": self.event_id,
         }
         return json.dumps(payload, default=str).encode("utf-8")

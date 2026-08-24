@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Dict, Literal, Optional
 from uuid import UUID
 
 from pydantic import AliasChoices, BaseModel, Field
+
+from app.schemas.gym_class import ProgramShortResponse
+from app.schemas.transactions import PaginationMeta
 
 PaymentMode = Literal["cash", "wallet", "package", "gateway", "free"]
 
@@ -15,7 +19,7 @@ class BookingRequestBody(BaseModel):
     )
     user_package_purchase_id: Optional[UUID] = Field(
         default=None,
-        description="sales.id when payment_mode is package",
+        description="sales.id from GET /packages/active (preferred) when payment_mode is package",
     )
     seat_id: Optional[str] = Field(
         default=None,
@@ -50,10 +54,15 @@ class BookingValidateResponse(BaseModel):
 
 class BookingCreatedData(BaseModel):
     booking_id: UUID
+    booking_ref: Optional[str] = None
     status: str
     waiting_position: Optional[int] = None
     payment_mode: Optional[str] = None
     sessions_deducted: int = 0
+    pubsub: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Pub/Sub publish debug (event_id, message_id, or error)",
+    )
 
 
 class BookingCreateResponse(BaseModel):
@@ -77,16 +86,19 @@ class BookingCancelResponse(BaseModel):
 
 class MemberUpcomingBookingItem(BaseModel):
     booking_id: str
-    order_id: Optional[str] = None
+    booking_ref: Optional[str] = None
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = None
     status: str
     seat_id: Optional[str] = None
     date: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     trainer: Optional[str] = None
+    program: Optional[ProgramShortResponse] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
@@ -94,16 +106,19 @@ class MemberUpcomingBookingItem(BaseModel):
 
 class MemberPastBookingItem(BaseModel):
     booking_id: str
-    order_id: Optional[str] = None
+    booking_ref: Optional[str] = None
     class_id: str
     class_name: Optional[str] = None
     booking_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = None
     status: str
     seat_id: Optional[str] = None
     date: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     trainer: Optional[str] = None
+    program: Optional[ProgramShortResponse] = None
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
@@ -111,9 +126,22 @@ class MemberPastBookingItem(BaseModel):
 
 class MemberWaitingBookingItem(BaseModel):
     booking_id: str
-    order_id: Optional[str] = None
+    booking_ref: Optional[str] = None
+    class_id: str
     class_name: Optional[str] = None
+    booking_type: Optional[str] = None
+    amount: Optional[Decimal] = None
+    currency: Optional[str] = None
     status: str
+    seat_id: Optional[str] = None
+    date: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    trainer: Optional[str] = None
+    program: Optional[ProgramShortResponse] = None
+    can_cancel: bool = False
+    cancel_deadline: Optional[str] = None
+    cancelled_at: Optional[str] = None
     waiting_position: Optional[int] = None
 
 
@@ -121,3 +149,5 @@ class MemberBookingsResponse(BaseModel):
     upcoming: list[MemberUpcomingBookingItem] = Field(default_factory=list)
     past: list[MemberPastBookingItem] = Field(default_factory=list)
     waiting: list[MemberWaitingBookingItem] = Field(default_factory=list)
+    count: int = 0
+    pagination: Optional[PaginationMeta] = None

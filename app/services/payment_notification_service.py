@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from typing import Optional, Union
-from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -17,11 +16,13 @@ class PaymentNotificationService:
         db: Session,
         *,
         tenant_id: str,
-        order_id: Union[UUID, str],
+        sales_transaction_id: Union[int, str],
     ) -> Optional[PublishedEvent]:
-        return await EventPublishService.publish_with_email_template(
-            db,
+        return await EventPublishService.publish(
             tenant_id=tenant_id,
             event_type=CLIENT_PAYMENT_FAILED,
-            data=build_payment_notification_data(order_id=str(order_id)),
+            data=build_payment_notification_data(
+                sales_transaction_id=str(sales_transaction_id),
+            ),
+            ordering_key=str(tenant_id),
         )

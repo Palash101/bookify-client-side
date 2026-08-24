@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 import uuid
 
 from sqlalchemy.orm import Session
@@ -8,6 +8,33 @@ from app.models.fitness_program import FitnessProgram
 
 class FitnessProgramsService:
     @staticmethod
+    def normalize_show_spots_left(value: Optional[bool]) -> Optional[bool]:
+        """Only expose true when explicitly enabled; otherwise null (not false)."""
+        return True if value is True else None
+
+    @staticmethod
+    def program_short_payload(program: Optional[FitnessProgram]) -> dict[str, Any]:
+        if not program:
+            return {
+                "id": 0,
+                "name": None,
+                "show_spots_left": None,
+                "spot_name": None,
+                "spots_left_label": None,
+                "training_mode": None,
+            }
+        return {
+            "id": int(program.id),
+            "name": program.name,
+            "show_spots_left": FitnessProgramsService.normalize_show_spots_left(
+                program.show_spots_left
+            ),
+            "spot_name": program.spot_name,
+            "spots_left_label": program.spots_left_label,
+            "training_mode": program.training_mode,
+        }
+
+    @staticmethod
     def list_programs(
         db: Session,
         tenant_id: str,
@@ -16,7 +43,9 @@ class FitnessProgramsService:
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
         only_active: bool = True,
-    ) -> List[FitnessProgram]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[FitnessProgram], int]:
         """
         List training programs for a tenant with optional filters.
         """
@@ -48,6 +77,8 @@ class FitnessProgramsService:
             # Default order by display_position then created_at
             query = query.order_by(FitnessProgram.display_position, FitnessProgram.created_at)
 
-        return query.all()
+        total = query.count()
+        offset = (page - 1) * limit
+        return query.offset(offset).limit(limit).all(), total
 
 

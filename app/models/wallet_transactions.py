@@ -6,15 +6,14 @@ from sqlalchemy.orm import object_session, relationship
 from sqlalchemy.sql import func
 
 from app.core.db.session import Base
-from app.models.sales import SALE_WALLET_TXN_KEY, merge_sale_wallet_txn_meta
 import uuid
 
 
 class WalletTransaction(Base):
     """
-    Wallet ledger row (amounts + Stripe session id). Context (type, status, order link)
-    lives on the related ``Sale.extra_metadata["wallet_txn"]`` when ``Sale.wallet_transaction_id``
-    points here. Class-booking wallet rows use ``ClassBooking.notes`` markers (no sale).
+    Wallet ledger row (amounts + Stripe session id).
+    Context (type) lives on ``reference_type`` / ``reference_id``.
+    Class-booking wallet rows use ``ClassBooking.notes`` markers (no sale).
     """
 
     __tablename__ = "wallet_transactions"
@@ -64,6 +63,9 @@ class WalletTransaction(Base):
         nullable=False,
     )
 
+    reference_type = Column(String(32), nullable=True)
+    reference_id = Column(UUID(as_uuid=True), nullable=True)
+
     linked_sale = relationship(
         "Sale",
         primaryjoin="WalletTransaction.id==Sale.wallet_transaction_id",
@@ -72,18 +74,10 @@ class WalletTransaction(Base):
         viewonly=True,
     )
 
-    def _wallet_txn_blob(self) -> dict[str, Any]:
-        sale = self.linked_sale
-        if not sale or not sale.extra_metadata:
-            return {}
-        w = sale.extra_metadata.get(SALE_WALLET_TXN_KEY)
-        return dict(w) if isinstance(w, dict) else {}
-
     @property
     def transaction_type(self) -> str:
-        w = self._wallet_txn_blob()
-        if w.get("transaction_type"):
-            return str(w["transaction_type"])
+        if self.reference_type:
+            return str(self.reference_type)
         sess = object_session(self)
         if sess is None:
             return ""
@@ -98,38 +92,46 @@ class WalletTransaction(Base):
 
     @transaction_type.setter
     def transaction_type(self, value: Optional[str]) -> None:
-        sale = self.linked_sale
-        if sale:
-            merge_sale_wallet_txn_meta(sale, transaction_type=value)
+        self.reference_type = value
 
     @property
     def order_id(self) -> Optional[str]:
+        if self.reference_id is not None:
+            return str(self.reference_id)
         if self.linked_sale:
             return str(self.linked_sale.id)
         return None
 
     @order_id.setter
     def order_id(self, value: Optional[str]) -> None:
-        return
+        if value is None or str(value) == "":
+            self.reference_id = None
+            return
+        try:
+            self.reference_id = uuid.UUID(str(value))
+        except (ValueError, TypeError):
+            return
 
     @property
     def status(self) -> str:
-        w = self._wallet_txn_blob()
-        if w.get("status"):
-            return str(w["status"])
         tt = self.transaction_type
         if tt in ("class_booking", "class_booking_refund"):
             return "succeeded"
+        sale = self.linked_sale
+        sess = object_session(self)
+        if sale is not None and sess is not None:
+            from app.models.sales import sale_status_value
+
+            return sale_status_value(sess, sale)
         return "pending"
 
     @status.setter
     def status(self, value: Optional[str]) -> None:
-        sale = self.linked_sale
-        if sale:
-            merge_sale_wallet_txn_meta(sale, status=value)
+        return
 
     @property
     def metadata_(self) -> Optional[dict[str, Any]]:
-        """Response helper: wallet_txn blob from linked sale (class booking: None)."""
-        w = self._wallet_txn_blob()
-        return w if w else None
+        tt = self.transaction_type
+        if not tt:
+            return None
+        return {"transaction_type": tt, "status": self.status}

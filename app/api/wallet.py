@@ -1,7 +1,7 @@
-from typing import Optional
+from typing import Literal, Optional
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import String
@@ -17,13 +17,23 @@ from app.schemas.transactions import (
     PurchasesHistoryResponse,
     PurchaseHistoryItemResponse,
     PurchasesHistoryDataResponse,
+    PaginationMeta,
+    normalize_display_status,
 )
-from app.models.sales import SALE_WALLET_TXN_KEY, Sale, merge_sale_wallet_txn_meta
-from app.models.sales_transactions import SalesTransactions
+from app.models.sales import (
+    Sale,
+    sale_currency_value,
+    sale_gateway_txn_id,
+    sale_gateway_value,
+    sale_pricing_id,
+    sale_status_value,
+)
+from app.models.sales_transactions import SalesTransactionStatus, SalesTransactions
 from app.payments.base import PaymentRequest
 from app.payments.factory import get_gateway
+from app.payments.return_urls import checkout_origin_metadata, normalize_checkout_platform
 from app.models.package import Package
-from app.services.wallet_notification_service import WalletNotificationService
+from app.services.locations_service.locations_service import LocationsService
 
 
 router = APIRouter(tags=["wallet"])
@@ -35,11 +45,20 @@ class AddWalletBalanceRequest(BaseModel):
         default=None,
         description="Which gateway to use (e.g. 'stripe', 'paypal'). If omitted, tenant default is used.",
     )
+    platform: Literal["web", "app"] = Field(
+        ...,
+        description="Required. Client that started checkout: 'web' redirects to frontend, 'app' uses deep link.",
+    )
+    location_id: Optional[uuid.UUID] = Field(
+        default=None,
+        description="Location this top-up belongs to. If omitted and the tenant has exactly one active location, that location is used.",
+    )
 
 
 @router.post("/add/wallet/balance")
 async def add_wallet_balance(
     body: AddWalletBalanceRequest,
+    request: Request,
     tenant_id=Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -58,14 +77,18 @@ async def add_wallet_balance(
     # Wallet top-up via gateway: at initiation time we only log sales_transactions.
     # Sale + wallet_transactions will be created on callback/success redirect.
     client_order_id = uuid.uuid4()
+    checkout_platform = normalize_checkout_platform(body.platform)
     init_txn = SalesTransactions(
-        order_id=None,
+        sales_id=None,
         tenant_id=tenant_id,
+        location_id=LocationsService.resolve_location_id(
+            db, str(tenant_id), body.location_id
+        ),
         payment_method="gateway",
         gateway=gateway.GATEWAY_TYPE.value,
         gateway_txn_id=None,
         source="wallet",
-        status="pending",
+        status=SalesTransactionStatus.pending,
         amount=body.amount,
         currency=str(currency_code).upper(),
         user_id=current_user.id,
@@ -77,6 +100,8 @@ async def add_wallet_balance(
             "purpose": "wallet_add",
             "direction": "credit",
             "balance_before": str(balance_before),
+            "checkout_platform": checkout_platform,
+            **checkout_origin_metadata(request),
         },
     )
     db.add(init_txn)
@@ -93,18 +118,14 @@ async def add_wallet_balance(
         metadata={
             "user_id": str(current_user.id),
             "purpose": "wallet_add",
+            "checkout_platform": checkout_platform,
         },
     )
 
     response = gateway.create_payment(payment_request)
     if not response.success:
-        init_txn.status = "failed"
+        init_txn.status = SalesTransactionStatus.failed
         db.commit()
-        await WalletNotificationService.publish_topup_failed(
-            db,
-            tenant_id=str(tenant_id),
-            user_id=current_user.id,
-        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=response.error_message or "Payment initiation failed.",
@@ -161,18 +182,42 @@ async def get_wallet_transactions(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
 ):
     # Transactions are scoped to current_user via user_id; tenant header mismatch shouldn't block.
     _ = tenant_id
 
+    base_query = db.query(WalletTransaction).filter(
+        WalletTransaction.user_id == current_user.id
+    )
+    total = base_query.count()
+    offset = (page - 1) * limit
+    total_pages = (total + limit - 1) // limit if total else 0
+
     txns = (
-        db.query(WalletTransaction)
-        .filter(WalletTransaction.user_id == current_user.id)
-        .order_by(WalletTransaction.created_at.desc())
+        base_query.order_by(WalletTransaction.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
+
+    txn_ref_by_wallet_id: dict = {}
+    wallet_ids = [t.id for t in txns]
+    if wallet_ids:
+        st_rows = (
+            db.query(
+                Sale.wallet_transaction_id,
+                SalesTransactions.txn_ref,
+            )
+            .join(SalesTransactions, SalesTransactions.sales_id == Sale.id)
+            .filter(Sale.wallet_transaction_id.in_(wallet_ids))
+            .order_by(SalesTransactions.created_at.desc())
+            .all()
+        )
+        for wallet_txn_id, txn_ref in st_rows:
+            if wallet_txn_id not in txn_ref_by_wallet_id and txn_ref:
+                txn_ref_by_wallet_id[wallet_txn_id] = txn_ref
 
     return {
         "success": True,
@@ -185,7 +230,8 @@ async def get_wallet_transactions(
                 "direction": t.direction,
                 "transaction_type": t.transaction_type,
                 "transaction_id": t.transaction_id,
-                "status": t.status,
+                "txn_ref": txn_ref_by_wallet_id.get(t.id),
+                "status": normalize_display_status(t.status),
                 "metadata": t.metadata_,
                 "amount": t.amount,
                 "currency": t.currency,
@@ -198,6 +244,13 @@ async def get_wallet_transactions(
             for t in txns
         ],
         "count": len(txns),
+        "pagination": PaginationMeta(
+            page=page,
+            limit=limit,
+            total=total,
+            total_pages=total_pages,
+            has_more=page < total_pages,
+        ),
     }
 
 
@@ -209,6 +262,7 @@ async def get_purchases_history(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
+    page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=200),
 ):
     """
@@ -220,15 +274,22 @@ async def get_purchases_history(
     """
     # Scope by token user tenant (security). Header mismatch shouldn't block.
     scoped_tenant_id = current_user.tenant_id
+    _ = tenant_id
+
+    filters = (
+        Sale.user_id == current_user.id,
+        Sale.tenant_id == scoped_tenant_id,
+    )
+    total = db.query(Sale).filter(*filters).count()
+    offset = (page - 1) * limit
+    total_pages = (total + limit - 1) // limit if total else 0
 
     sales = (
         db.query(Sale, Package.name.label("package_name"))
         .outerjoin(Package, Package.id == Sale.package_id)
-        .filter(
-            Sale.user_id == current_user.id,
-            Sale.tenant_id == scoped_tenant_id,
-        )
+        .filter(*filters)
         .order_by(Sale.created_at.desc())
+        .offset(offset)
         .limit(limit)
         .all()
     )
@@ -247,15 +308,15 @@ async def get_purchases_history(
             sale_id=sale.id,
             type=sale.type,
             purchased_at=purchased_at,
-            status=sale.status,
+            status=normalize_display_status(sale_status_value(db, sale)),
             amount=sale.amount,
-            currency=sale.currency,
+            currency=sale_currency_value(db, sale),
             payment_method=payment_method,
-            gateway=sale.gateway,
-            gateway_transaction_id=sale.gateway_transaction_id,
+            gateway=sale_gateway_value(db, sale),
+            gateway_transaction_id=sale_gateway_txn_id(db, sale),
             package_id=sale.package_id,
             package_name=package_name,
-            pricing_id=sale.pricing_id,
+            pricing_id=sale_pricing_id(db, sale),
             wallet_transaction_id=sale.wallet_transaction_id,
         )
 
@@ -266,5 +327,15 @@ async def get_purchases_history(
         elif sale.type in ("package_wallet", "wallet") and (sale.product_item_type or "") == "package":
             data.package_wallet_purchases.append(item)
 
-    return PurchasesHistoryResponse(data=data)
+    return PurchasesHistoryResponse(
+        data=data,
+        count=len(sales),
+        pagination=PaginationMeta(
+            page=page,
+            limit=limit,
+            total=total,
+            total_pages=total_pages,
+            has_more=page < total_pages,
+        ),
+    )
 

@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.core.db.master_db import SessionLocal as MasterSessionLocal
 from app.core.db.session import get_session_factory
 from app.models.master_org import Organization
-from app.models.sales import Sale
 from app.models.sales_transactions import SalesTransactions
 from app.models.tenant_setting import TenantSetting
 from app.payments.base import GatewayType
@@ -43,8 +42,11 @@ def resolve_tenant_for_stripe_webhook(raw_body: bytes, stripe_signature: str) ->
         return None
 
     for tenant_id in _active_organization_ids():
-        factory = get_session_factory(tenant_id)
-        db = factory()
+        try:
+            factory = get_session_factory(tenant_id)
+            db = factory()
+        except (ProgrammingError, OperationalError, RuntimeError):
+            continue
         try:
             try:
                 rows = (
@@ -78,20 +80,18 @@ def resolve_tenant_for_stripe_webhook(raw_body: bytes, stripe_signature: str) ->
 def resolve_tenant_for_stripe_session(session_id: str) -> Optional[str]:
     """Find which tenant DB holds this Stripe Checkout session id (cs_...)."""
     for tenant_id in _active_organization_ids():
-        factory = get_session_factory(tenant_id)
-        db = factory()
         try:
-            if (
-                db.query(Sale.id)
-                .filter(Sale.gateway_transaction_id == session_id)
-                .first()
-            ):
-                return tenant_id
-            if (
-                db.query(SalesTransactions.id)
+            factory = get_session_factory(tenant_id)
+            db = factory()
+        except (ProgrammingError, OperationalError, RuntimeError):
+            continue
+        try:
+            st = (
+                db.query(SalesTransactions)
                 .filter(SalesTransactions.gateway_txn_id == session_id)
                 .first()
-            ):
+            )
+            if st is not None:
                 return tenant_id
         except (ProgrammingError, OperationalError):
             continue

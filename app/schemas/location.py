@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
 
+from app.schemas.transactions import PaginationMeta
+
 
 class LocationBase(BaseModel):
     name: Optional[str] = None
@@ -25,4 +27,5 @@ class LocationsListResponse(BaseModel):
     message: str = "Locations fetched successfully"
     data: List[LocationResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 

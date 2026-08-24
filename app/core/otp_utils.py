@@ -41,6 +41,15 @@ def create_otp(
     return otp_code
 
 
+def get_otp(
+    email: str, purpose: str, tenant_id: Optional[str] = None
+) -> Optional[Dict]:
+    """
+    Get a non-expired OTP entry from cache (does not consume it).
+    """
+    return otp_cache.get_otp(email, purpose, tenant_id=tenant_id)
+
+
 def verify_otp(
     email: str, otp_code: str, purpose: str, tenant_id: Optional[str] = None
 ) -> bool:

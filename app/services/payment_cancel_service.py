@@ -3,10 +3,15 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from app.models.sales import Sale
-from app.models.sales_transactions import SalesTransactions
+from app.models.sales import Sale, find_sale_by_gateway_session, latest_sales_transaction, sale_status_value
+from app.models.sales_transactions import (
+    SalesTransactionStatus,
+    SalesTransactions,
+    TERMINAL_SALES_TRANSACTION_STATUSES,
+)
+from app.payments.return_urls import attach_checkout_platform_debug
 
-_TERMINAL_TXN_STATUSES = frozenset({"cancelled", "failed", "success", "succeeded"})
+_TERMINAL_SALE_STATUSES = frozenset({"cancelled", "failed", "success", "succeeded"})
 
 
 class PaymentCancelService:
@@ -14,7 +19,7 @@ class PaymentCancelService:
     def handle(db: Session, session_id: str) -> dict[str, str]:
         """
         Mark initiation row as cancelled when the user abandons checkout.
-        Returns ``payment_failed_order_id`` only on the first failed/cancel transition.
+        Returns ``payment_failed_sales_transaction_id`` only on the first cancel transition.
         """
         debug: dict[str, str] = {"session_id": session_id}
 
@@ -25,35 +30,39 @@ class PaymentCancelService:
             .first()
         )
         if init_txn is None:
-            sale = (
-                db.query(Sale)
-                .filter(Sale.gateway_transaction_id == session_id)
-                .first()
-            )
+            sale = find_sale_by_gateway_session(db, session_id)
             if sale is None:
                 debug["error"] = "missing_initiation_sales_transaction"
                 return debug
 
-            previous = (sale.status or "").lower()
+            txn = latest_sales_transaction(db, sale.id)
+            attach_checkout_platform_debug(debug, txn.extra_metadata if txn is not None else None)
+            previous = (sale_status_value(db, sale) or "").lower()
             debug["order_id"] = str(sale.id)
-            if previous not in _TERMINAL_TXN_STATUSES:
-                sale.status = "cancelled"
-                debug["payment_failed_order_id"] = str(sale.id)
+            if previous not in _TERMINAL_SALE_STATUSES:
+                if txn is not None and txn.status not in TERMINAL_SALES_TRANSACTION_STATUSES:
+                    txn.status = SalesTransactionStatus.cancelled
+                if sale.provider_numeric_transaction_id is not None:
+                    debug["payment_failed_sales_transaction_id"] = str(
+                        sale.provider_numeric_transaction_id
+                    )
+                elif txn is not None:
+                    debug["payment_failed_sales_transaction_id"] = str(txn.id)
             return debug
 
-        previous = (init_txn.status or "").lower()
+        previous = init_txn.status
         meta = dict(init_txn.extra_metadata or {})
-        order_id = init_txn.order_id or meta.get("client_order_id")
-        if order_id:
-            debug["order_id"] = str(order_id)
+        attach_checkout_platform_debug(debug, meta)
+        sales_id = init_txn.sales_id or meta.get("client_order_id")
+        if sales_id:
+            debug["order_id"] = str(sales_id)
 
-        if previous not in _TERMINAL_TXN_STATUSES:
-            init_txn.status = "cancelled"
+        if previous not in TERMINAL_SALES_TRANSACTION_STATUSES:
+            init_txn.status = SalesTransactionStatus.cancelled
             meta.setdefault("event", "created")
             meta["resolved_by"] = "cancel_redirect"
             meta["last_event"] = "cancel_redirect"
             init_txn.extra_metadata = meta
-            if order_id:
-                debug["payment_failed_order_id"] = str(order_id)
+            debug["payment_failed_sales_transaction_id"] = str(init_txn.id)
 
         return debug

@@ -20,13 +20,13 @@ class PackageNotificationService:
         db: Session,
         *,
         tenant_id: str,
-        package_id: Union[UUID, str],
+        user_package_id: Union[UUID, str],
     ) -> Optional[PublishedEvent]:
-        return await EventPublishService.publish_with_email_template(
-            db,
+        return await EventPublishService.publish(
             tenant_id=tenant_id,
             event_type=CLIENT_PACKAGE_PURCHASED,
-            data=build_package_notification_data(package_id=str(package_id)),
+            data=build_package_notification_data(user_package_id=str(user_package_id)),
+            ordering_key=str(tenant_id),
         )
 
     @staticmethod
@@ -34,11 +34,11 @@ class PackageNotificationService:
         db: Session,
         *,
         tenant_id: str,
-        package_id: Union[UUID, str],
+        user_package_id: Union[UUID, str],
     ) -> Optional[PublishedEvent]:
-        return await EventPublishService.publish_with_email_template(
-            db,
+        return await EventPublishService.publish(
             tenant_id=tenant_id,
             event_type=CLIENT_PACKAGE_PURCHASE_FAILED,
-            data=build_package_notification_data(package_id=str(package_id)),
+            data=build_package_notification_data(user_package_id=str(user_package_id)),
+            ordering_key=str(tenant_id),
         )

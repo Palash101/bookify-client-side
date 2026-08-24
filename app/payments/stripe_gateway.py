@@ -76,7 +76,8 @@ class StripePaymentGateway(BasePaymentGateway):
                 metadata={"order_id": request.order_id, **request.metadata},
                 success_url=self.get_success_url(self.settings["callback_base_url"])
                             + "?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url=self.get_cancel_url(self.settings["callback_base_url"]),
+                cancel_url=self.get_cancel_url(self.settings["callback_base_url"])
+                           + "?session_id={CHECKOUT_SESSION_ID}",
             )
             return PaymentResponse(
                 success=True,

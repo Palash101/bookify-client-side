@@ -1,26 +1,62 @@
 from typing import Any, Dict, List, Optional
+from datetime import date, datetime
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import func as sa_func_sql
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.class_booking import ClassBooking
 from app.models.package import Package
 from app.models.package_discount import PackageDiscount
 from app.models.package_pricing import PackagePricing
-from app.models.sales import Sale
+from app.models.sales import (
+    Sale,
+    package_sale_clause,
+    sale_currency_value,
+    sale_expires_at,
+    sale_pricing_id,
+    sale_session_count,
+    sale_session_type,
+    sale_status_value,
+    sale_succeeded_clause,
+)
 from app.models.user_package import UserPackage
-from app.services.bookings_service import ACTIVE_USER_BOOKING_STATUSES, _sessions_remaining_from_sale
+from app.schemas.package import PackagePricingResponse, PackageResponse
+from app.services.gym_config_service import GymConfigService
 from app.services.sale_expiry import compute_sale_expires_at
+from app.services.user_package_tracking_service import sessions_remaining_for_sale
+
+# Admin "published" packages use status=active (draft/block are hidden from clients).
+_CATALOG_STATUS = "active"
 
 
 class PackagesService:
     @staticmethod
-    def compute_discounted_purchase_amount(pricing: PackagePricing) -> float:
+    def is_discount_valid(discount: Optional[PackageDiscount], today: date) -> bool:
+        """
+        Discount is active when tenant today is within validity_start..validity_end (inclusive).
+        Missing start/end dates mean no bound on that side.
+        """
+        if discount is None:
+            return False
+        start = discount.validity_start
+        if start is not None and start > today:
+            return False
+        end = discount.validity_end
+        if end is not None and end < today:
+            return False
+        return True
+
+    @staticmethod
+    def compute_discounted_purchase_amount(
+        pricing: PackagePricing,
+        *,
+        today: Optional[date] = None,
+    ) -> float:
         """
         Final charge for a package pricing row after its linked discount (if any).
         Discount types: flat/fixed (subtract amount) or percentage/percent (reduce by %).
+        Expired or not-yet-active discounts are ignored when `today` is provided.
         """
         if pricing.price is None:
             raise ValueError("Package pricing has no price configured")
@@ -28,6 +64,8 @@ class PackagesService:
         base = float(pricing.price)
         discount: Optional[PackageDiscount] = pricing.discount
         if discount is None or discount.value is None:
+            return round(base, 2)
+        if today is not None and not PackagesService.is_discount_valid(discount, today):
             return round(base, 2)
 
         discount_value = float(discount.value)
@@ -56,8 +94,230 @@ class PackagesService:
         return {k: meta[k] for k in PackagesService._DISCOUNT_METADATA_KEYS if k in meta}
 
     @staticmethod
-    def build_purchase_discount_metadata(pricing: PackagePricing, amount_value: float) -> dict[str, Any]:
+    def is_one_time_package(package: Package) -> bool:
+        return (package.package_type or "").strip().lower() == "one_time"
+
+    @staticmethod
+    def is_private_package(package: Package) -> bool:
+        return bool(getattr(package, "is_private", False))
+
+    @staticmethod
+    def tenant_today(db: Session, tenant_id: str) -> date:
+        gym_config = GymConfigService.get_gym_config(db, tenant_id)
+        tz = GymConfigService.resolve_zoneinfo(gym_config)
+        return datetime.now(tz).date()
+
+    @staticmethod
+    def is_published_package(package: Package) -> bool:
+        """Published packages are stored as status=active."""
+        return (package.status or "").strip().lower() == _CATALOG_STATUS
+
+    @staticmethod
+    def is_visible_by_date(package: Package, today: date) -> bool:
+        """
+        Catalog visibility window uses packages.validity_start and packages.validity_end.
+        Show only when validity_start has arrived and validity_end has not passed.
+        """
+        start = package.validity_start
+        if start is not None and start > today:
+            return False
+        end = package.validity_end
+        if end is not None and end < today:
+            return False
+        return True
+
+    @staticmethod
+    def is_package_available_in_catalog(package: Package, today: date) -> bool:
+        return (
+            PackagesService.is_published_package(package)
+            and PackagesService.is_visible_by_date(package, today)
+            and not PackagesService.is_private_package(package)
+        )
+
+    @staticmethod
+    def user_has_succeeded_package_purchase(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: uuid.UUID,
+        package_id: uuid.UUID,
+        exclude_sale_id: Optional[uuid.UUID] = None,
+    ) -> bool:
+        """True if the user already has a successful package sale for this package."""
+        q = db.query(Sale.id).filter(
+            Sale.tenant_id == tenant_id,
+            Sale.user_id == user_id,
+            Sale.package_id == package_id,
+            package_sale_clause(),
+            Sale.package_id.isnot(None),
+            sale_succeeded_clause(),
+        )
+        if exclude_sale_id is not None:
+            q = q.filter(Sale.id != exclude_sale_id)
+        return q.first() is not None
+
+    @staticmethod
+    def assert_user_can_purchase_package(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: uuid.UUID,
+        package: Package,
+    ) -> None:
+        """Raise 400 when package is not catalog-visible or one-time already purchased."""
+        today = PackagesService.tenant_today(db, tenant_id)
+        if not PackagesService.is_published_package(package):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This package is not available for purchase.",
+            )
+        if PackagesService.is_private_package(package):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This package is not available for purchase.",
+            )
+        if not PackagesService.is_visible_by_date(package, today):
+            if (
+                package.validity_end is not None
+                and package.validity_end < today
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This package is no longer available for purchase.",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This package is not available for purchase yet.",
+            )
+        if not PackagesService.is_one_time_package(package):
+            return
+        if PackagesService.user_has_succeeded_package_purchase(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            package_id=package.id,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You have already purchased this package. It can only be bought once.",
+            )
+
+    @staticmethod
+    def is_one_time_duplicate_purchase(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: uuid.UUID,
+        package_id: uuid.UUID,
+        exclude_sale_id: Optional[uuid.UUID] = None,
+    ) -> bool:
+        """Non-HTTP check used on gateway success/callback to block duplicate one-time entitlements."""
+        package = (
+            db.query(Package)
+            .filter(Package.id == package_id, Package.tenant_id == tenant_id)
+            .first()
+        )
+        if package is None or not PackagesService.is_one_time_package(package):
+            return False
+        return PackagesService.user_has_succeeded_package_purchase(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            package_id=package_id,
+            exclude_sale_id=exclude_sale_id,
+        )
+
+    @staticmethod
+    def package_catalog_flags(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: Optional[uuid.UUID],
+        package: Package,
+    ) -> dict[str, Optional[bool]]:
+        """Purchase flags for catalog APIs when the caller is authenticated."""
+        if user_id is None:
+            return {"already_purchased": None, "can_purchase": None}
+        already = PackagesService.user_has_succeeded_package_purchase(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            package_id=package.id,
+        )
+        can_purchase = not (PackagesService.is_one_time_package(package) and already)
+        if PackagesService.is_private_package(package):
+            can_purchase = False
+        return {"already_purchased": already, "can_purchase": can_purchase}
+
+    @staticmethod
+    def should_show_package_in_catalog(
+        db: Session,
+        *,
+        tenant_id: str,
+        user_id: Optional[uuid.UUID],
+        package: Package,
+    ) -> bool:
+        """
+        Catalog rules:
+        - only published (status=active) packages
+        - hide private / staff-only packages
+        - validity_start must be on or before tenant today
+        - validity_end must be on or after tenant today (when set)
+        - hide one-time packages the user has already purchased
+        """
+        today = PackagesService.tenant_today(db, tenant_id)
+        if not PackagesService.is_package_available_in_catalog(package, today):
+            return False
+        if user_id is None:
+            return True
+        flags = PackagesService.package_catalog_flags(
+            db, tenant_id=tenant_id, user_id=user_id, package=package
+        )
+        if PackagesService.is_one_time_package(package) and flags["already_purchased"]:
+            return False
+        return True
+
+    @staticmethod
+    def pricing_to_response(
+        pricing: PackagePricing,
+        today: date,
+    ) -> PackagePricingResponse:
+        item = PackagePricingResponse.model_validate(pricing)
+        if pricing.discount is not None and not PackagesService.is_discount_valid(
+            pricing.discount, today
+        ):
+            return item.model_copy(update={"discount_id": None, "discount": None})
+        return item
+
+    @staticmethod
+    def package_to_response(
+        db: Session,
+        *,
+        tenant_id: str,
+        package: Package,
+        user_id: Optional[uuid.UUID] = None,
+    ) -> PackageResponse:
+        today = PackagesService.tenant_today(db, tenant_id)
+        base = PackageResponse.model_validate(package)
+        flags = PackagesService.package_catalog_flags(
+            db, tenant_id=tenant_id, user_id=user_id, package=package
+        )
+        pricing_list = [
+            PackagesService.pricing_to_response(pricing, today)
+            for pricing in package.pricing_list
+        ]
+        return base.model_copy(update={**flags, "pricing_list": pricing_list})
+
+    @staticmethod
+    def build_purchase_discount_metadata(
+        pricing: PackagePricing,
+        amount_value: float,
+        *,
+        today: Optional[date] = None,
+    ) -> dict[str, Any]:
         if pricing.discount is None or pricing.discount.value is None:
+            return {}
+        if today is not None and not PackagesService.is_discount_valid(pricing.discount, today):
             return {}
         original_price = float(pricing.price)
         return {
@@ -77,14 +337,28 @@ class PackagesService:
         sort_order: str = "asc",
     ) -> List[Package]:
         """
-        List packages for a tenant with optional search and sorting.
+        List catalog packages for a tenant with optional search and sorting.
+        Only published (active), non-private packages within the validity window.
         """
+        today = PackagesService.tenant_today(db, tenant_id)
         query = (
             db.query(Package)
             .options(
                 joinedload(Package.pricing_list).joinedload(PackagePricing.discount)
             )
-            .filter(Package.tenant_id == tenant_id)
+            .filter(
+                Package.tenant_id == tenant_id,
+                Package.status == _CATALOG_STATUS,
+                Package.is_private.is_(False),
+                or_(
+                    Package.validity_start.is_(None),
+                    Package.validity_start <= today,
+                ),
+                or_(
+                    Package.validity_end.is_(None),
+                    Package.validity_end >= today,
+                ),
+            )
         )
 
         # Simple text search on name
@@ -128,6 +402,74 @@ class PackagesService:
         return package
 
     @staticmethod
+    def _session_quota_fields(
+        db: Session,
+        *,
+        user_package: Optional[UserPackage] = None,
+        sale: Optional[Sale] = None,
+        pricing_row: Optional[PackagePricing] = None,
+    ) -> Dict[str, Any]:
+        """
+        session_count = total included sessions
+        sessions_remaining = user_packages.session_count (live balance)
+        sessions_used = total - remaining
+        """
+        is_unlimited = bool(
+            pricing_row.is_unlimited
+            if pricing_row is not None and pricing_row.is_unlimited is not None
+            else False
+        )
+        session_type = None
+        if user_package is not None and user_package.session_type:
+            session_type = user_package.session_type
+        elif sale is not None:
+            session_type = sale_session_type(db, sale)
+        if not session_type and pricing_row is not None:
+            session_type = pricing_row.session_type
+
+        if is_unlimited:
+            return {
+                "session_type": session_type,
+                "is_unlimited": True,
+                "session_count": None,
+                "sessions_remaining": None,
+                "sessions_used": 0,
+            }
+
+        total_sessions: Optional[int] = None
+        remaining: Optional[int] = None
+        if user_package is not None:
+            if user_package.total_session is not None:
+                total_sessions = int(user_package.total_session)
+            if user_package.session_count is not None:
+                remaining = max(0, int(user_package.session_count))
+        if total_sessions is None and sale is not None:
+            count = sale_session_count(db, sale)
+            if count is not None:
+                total_sessions = int(count)
+        if total_sessions is None and pricing_row is not None and pricing_row.session_count is not None:
+            total_sessions = int(pricing_row.session_count)
+
+        if remaining is None and sale is not None:
+            rem = sessions_remaining_for_sale(db, sale)
+            if rem is not None:
+                remaining = max(0, int(rem))
+        if remaining is None and total_sessions is not None:
+            remaining = total_sessions
+
+        used = 0
+        if total_sessions is not None and remaining is not None:
+            used = max(0, total_sessions - remaining)
+
+        return {
+            "session_type": session_type,
+            "is_unlimited": False,
+            "session_count": total_sessions,
+            "sessions_remaining": remaining,
+            "sessions_used": used,
+        }
+
+    @staticmethod
     def _active_package_entry_for_order(
         db: Session,
         tenant_id: str,
@@ -144,59 +486,22 @@ class PackagesService:
         if package is None:
             return None
 
-        sessions_used_raw = (
-            db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
-            .filter(
-                ClassBooking.user_package_purchase_id == order.id,
-                ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
-            )
-            .scalar()
+        user_package = db.query(UserPackage).filter(UserPackage.sale_id == order.id).first()
+        pricing_id = (user_package.pricing_id if user_package is not None else None) or sale_pricing_id(
+            db, order
         )
-        try:
-            sessions_used = int(sessions_used_raw or 0)
-        except (TypeError, ValueError):
-            sessions_used = 0
-
-        meta = order.extra_metadata if isinstance(order.extra_metadata, dict) else {}
         pricing_row = None
-        if order.pricing_id:
+        if pricing_id:
             pricing_row = (
                 db.query(PackagePricing)
-                .filter(PackagePricing.id == order.pricing_id)
+                .filter(PackagePricing.id == pricing_id)
                 .first()
             )
 
-        is_unlimited = bool(
-            pricing_row.is_unlimited
-            if pricing_row is not None and pricing_row.is_unlimited is not None
-            else False
+        quota = PackagesService._session_quota_fields(
+            db, user_package=user_package, sale=order, pricing_row=pricing_row
         )
-
-        session_type = meta.get("session_type")
-        if not session_type and pricing_row is not None:
-            session_type = pricing_row.session_type
-
-        total_raw = meta.get("session_count")
-        if total_raw is None and pricing_row is not None and pricing_row.session_count is not None:
-            total_raw = pricing_row.session_count
-        total_sessions: Optional[int] = None
-        if not is_unlimited and total_raw is not None:
-            try:
-                total_sessions = int(total_raw)
-            except (TypeError, ValueError):
-                total_sessions = None
-
-        sessions_remaining: Optional[int] = None
-        if is_unlimited:
-            sessions_remaining = None
-        else:
-            rem_meta = _sessions_remaining_from_sale(order)
-            if rem_meta is not None:
-                sessions_remaining = max(0, int(rem_meta))
-            elif total_sessions is not None:
-                sessions_remaining = max(0, total_sessions - sessions_used)
-
-        expires_at = order.expires_at or compute_sale_expires_at(order, package)
+        expires_at = sale_expires_at(db, order) or compute_sale_expires_at(order, package)
 
         return {
             "id": order.id,
@@ -205,35 +510,39 @@ class PackagesService:
             "package_description": package.description,
             "validity_days": package.validity_days,
             "validity_end": package.validity_end,
-            "status": order.status,
+            "status": sale_status_value(db, order),
             "purchased_at": order.created_at,
             "expires_at": expires_at,
             "sale_type": order.type,
             "amount": order.amount,
-            "currency": order.currency,
-            "session_type": session_type,
-            "is_unlimited": is_unlimited,
-            "session_count": total_sessions,
-            "sessions_remaining": sessions_remaining,
-            "sessions_used": sessions_used,
+            "currency": sale_currency_value(db, order),
+            "session_type": quota["session_type"],
+            "is_unlimited": quota["is_unlimited"],
+            "session_count": quota["session_count"],
+            "sessions_remaining": quota["sessions_remaining"],
+            "sessions_used": quota["sessions_used"],
         }
-        
 
     @staticmethod
     def get_active_packages_for_user(
         db: Session,
         tenant_id: str,
         user_id: uuid.UUID,
-    ) -> List[Dict[str, Any]]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[Dict[str, Any]], int]:
         """
         Active packages for this user+tenant.
         Source of truth is `user_packages` (entitlements). We optionally join `sales`
         to enrich with amount/currency and to ensure only succeeded purchases are returned.
+
+        Does not filter on Package.is_private — assigned/purchased private packages
+        still appear so the user can book against them.
         """
         from sqlalchemy.sql import func as sa_func
 
         out: List[Dict[str, Any]] = []
-        rows = (
+        base_query = (
             db.query(UserPackage, Sale)
             # We only want "active packages" that can actually be used for booking,
             # so require a real Sale row for the entitlement.
@@ -243,18 +552,14 @@ class PackagesService:
                 UserPackage.package_id.isnot(None),
                 # Expiry check comes from entitlement row
                 (UserPackage.expire_at.is_(None)) | (UserPackage.expire_at > sa_func.now()),
-                # Tenant scoping and payment constraints live on Sale.
                 (Sale.tenant_id == tenant_id),
-                Sale.status.in_(["succeeded", "success"]),
-                (
-                    (Sale.type.in_(["package_gateway", "package_wallet"]))
-                    | ((Sale.type == "gateway") & (Sale.product_item_type == "package"))
-                    | ((Sale.type == "wallet") & (Sale.product_item_type == "package"))
-                ),
+                package_sale_clause(),
             )
             .order_by(UserPackage.created_at.desc())
-            .all()
         )
+        total = base_query.count()
+        offset = (page - 1) * limit
+        rows = base_query.offset(offset).limit(limit).all()
 
         for up, sale in rows:
             package = (
@@ -265,53 +570,17 @@ class PackagesService:
             if package is None:
                 continue
 
-            sessions_used_raw = (
-                db.query(sa_func_sql.coalesce(sa_func_sql.sum(ClassBooking.sessions_deducted), 0))
-                .filter(
-                    ClassBooking.user_package_purchase_id == (up.sale_id or (sale.id if sale else None)),
-                    ClassBooking.status.in_(list(ACTIVE_USER_BOOKING_STATUSES)),
-                )
-                .scalar()
-            )
-            try:
-                sessions_used = int(sessions_used_raw or 0)
-            except (TypeError, ValueError):
-                sessions_used = 0
-
             pricing_row = None
             if up.pricing_id:
                 pricing_row = db.query(PackagePricing).filter(PackagePricing.id == up.pricing_id).first()
 
-            is_unlimited = bool(
-                pricing_row.is_unlimited
-                if pricing_row is not None and pricing_row.is_unlimited is not None
-                else False
+            quota = PackagesService._session_quota_fields(
+                db, user_package=up, sale=sale, pricing_row=pricing_row
             )
 
-            session_type = up.session_type or (pricing_row.session_type if pricing_row is not None else None)
-
-            total_sessions: Optional[int] = None
-            if not is_unlimited:
-                if up.session_count is not None:
-                    total_sessions = int(up.session_count)
-                elif pricing_row is not None and pricing_row.session_count is not None:
-                    total_sessions = int(pricing_row.session_count)
-
-            sessions_remaining: Optional[int] = None
-            if is_unlimited:
-                sessions_remaining = None
-            else:
-                # Prefer sale JSON override (if present), else compute from entitlement total - used
-                if sale is not None:
-                    rem_meta = _sessions_remaining_from_sale(sale)
-                    if rem_meta is not None:
-                        sessions_remaining = max(0, int(rem_meta))
-                if sessions_remaining is None and total_sessions is not None:
-                    sessions_remaining = max(0, total_sessions - sessions_used)
-
-            expires_at = up.expire_at or (sale.expires_at if sale is not None else None) or compute_sale_expires_at(
-                sale, package
-            ) if sale is not None else up.expire_at
+            expires_at = up.expire_at
+            if expires_at is None and sale is not None:
+                expires_at = sale_expires_at(db, sale) or compute_sale_expires_at(sale, package)
 
             out.append(
                 {
@@ -323,19 +592,19 @@ class PackagesService:
                     "booking_restriction": package.booking_restriction,
                     "validity_days": package.validity_days,
                     "validity_end": package.validity_end,
-                    "status": (sale.status if sale is not None else "succeeded"),
+                    "status": (sale_status_value(db, sale) if sale is not None else "succeeded"),
                     "purchased_at": (sale.created_at if sale is not None else up.created_at),
                     "expires_at": expires_at,
                     "sale_type": (sale.type if sale is not None else "package_gateway"),
                     "amount": (sale.amount if sale is not None else None),
-                    "currency": (sale.currency if sale is not None else None),
-                    "session_type": session_type,
-                    "is_unlimited": is_unlimited,
-                    "session_count": total_sessions,
-                    "sessions_remaining": sessions_remaining,
-                    "sessions_used": sessions_used,
+                    "currency": (sale_currency_value(db, sale) if sale is not None else None),
+                    "session_type": quota["session_type"],
+                    "is_unlimited": quota["is_unlimited"],
+                    "session_count": quota["session_count"],
+                    "sessions_remaining": quota["sessions_remaining"],
+                    "sessions_used": quota["sessions_used"],
                 }
             )
 
-        return out
+        return out, total
 

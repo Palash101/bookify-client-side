@@ -58,7 +58,8 @@ class Settings(BaseSettings):
         description="Refresh token expiry in days",
     )
     
-    # CORS (include 127.0.0.1 variants — browser treats localhost vs 127.0.0.1 as different origins)
+    # CORS extras for local/dev. Production tenant sites are allowed from
+    # master DB `organizations.domain` (see DynamicCORSMiddleware).
     BACKEND_CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -66,7 +67,6 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "https://bookify-web-app-fawn.vercel.app"
     ]
     
     # Email
@@ -78,10 +78,27 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = Field(default="Bookify", env="SMTP_FROM_NAME")
     SMTP_USE_TLS: bool = Field(default=True, env="SMTP_USE_TLS")
     
-    # After Stripe (etc.) hits /payment/success on this server, user is redirected here (mobile deep link).
+    # After Stripe (etc.) hits /payment/success on this server, user is redirected here.
+    # Web: prefer the Origin that started checkout, then tenant Organization.domain
+    # (FQDN, or slug + this base domain), else this origin + /payment-success|/payment-failed.
+    # App: deep links below.
+    PAYMENT_WEB_ORIGIN: str = Field(
+        default="https://bookify-web-app-fawn.vercel.app",
+        env="PAYMENT_WEB_ORIGIN",
+    )
+    # When organizations.domain is a slug (e.g. "powergym"), redirect to
+    # https://{slug}.{PAYMENT_TENANT_BASE_DOMAIN} instead of https://powergym.
+    PAYMENT_TENANT_BASE_DOMAIN: str = Field(
+        default="fitnezstudios.com",
+        env="PAYMENT_TENANT_BASE_DOMAIN",
+    )
     PAYMENT_SUCCESS_DEEP_LINK: str = Field(
         default="bookify://payment/success",
         env="PAYMENT_SUCCESS_DEEP_LINK",
+    )
+    PAYMENT_CANCEL_DEEP_LINK: str = Field(
+        default="bookify://payment/cancel",
+        env="PAYMENT_CANCEL_DEEP_LINK",
     )
 
     # Environment
@@ -106,6 +123,45 @@ class Settings(BaseSettings):
     )
     # Force console publisher even when GCP_PROJECT_ID is set (local dev / tests).
     PUBLISHER_CONSOLE: bool = Field(default=False, env="PUBLISHER_CONSOLE")
+
+    # Redis configuration
+    REDIS_ENABLED: bool = os.getenv("REDIS_ENABLED", "true").lower() in ("true", "1", "yes")
+    # Full connection URL (preferred). Use the rediss:// scheme for TLS providers
+    # such as Upstash, e.g. rediss://default:<password>@<host>:6379
+    REDIS_URL: str | None = os.getenv("REDIS_URL") or None
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PASSWORD: str | None = os.getenv("REDIS_PASSWORD") or None
+    REDIS_DB: int = int(os.getenv("REDIS_DB", "0"))
+    REDIS_SSL: bool = os.getenv("REDIS_SSL", "false").lower() in ("true", "1", "yes")
+    # GCP: secret id template for Redis credentials (JSON: host, port, password, db, ssl)
+    REDIS_SECRET_TEMPLATE: str | None = os.getenv("REDIS_SECRET_TEMPLATE") or None
+    # TTL for cached org/domain/config keys (seconds). Default: 7 days.
+    REDIS_ORG_CACHE_TTL_SECONDS: int = int(os.getenv("REDIS_ORG_CACHE_TTL_SECONDS", "604800"))
+    # Spread expiries by +/- this fraction so keys written together do not all
+    # expire in the same second and stampede the database.
+    REDIS_TTL_JITTER: float = float(os.getenv("REDIS_TTL_JITTER", "0.1"))
+
+    # Connection behaviour. Keep timeouts short: a request should fail over to
+    # the database quickly rather than hang on an unreachable cache.
+    REDIS_CONNECT_TIMEOUT: float = float(os.getenv("REDIS_CONNECT_TIMEOUT", "1.5"))
+    REDIS_SOCKET_TIMEOUT: float = float(os.getenv("REDIS_SOCKET_TIMEOUT", "1.5"))
+    # Managed providers drop idle connections; ping this often to catch it
+    # before a request does.
+    REDIS_HEALTH_CHECK_INTERVAL: int = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))
+    # Cap connections per process so many service instances cannot exhaust the
+    # server's connection limit.
+    REDIS_MAX_CONNECTIONS: int = int(os.getenv("REDIS_MAX_CONNECTIONS", "32"))
+    REDIS_RETRIES: int = int(os.getenv("REDIS_RETRIES", "1"))
+
+    # Circuit breaker: after this many consecutive failures, skip Redis
+    # entirely for the cooldown period instead of timing out on every request.
+    REDIS_BREAKER_THRESHOLD: int = int(os.getenv("REDIS_BREAKER_THRESHOLD", "5"))
+    REDIS_BREAKER_COOLDOWN: float = float(os.getenv("REDIS_BREAKER_COOLDOWN", "30"))
+
+    # Optional prefix for every key. Bump it (e.g. "v2") to invalidate the whole
+    # cache atomically when a cached payload shape changes.
+    REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "")
 
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
 

@@ -1,17 +1,63 @@
+import enum
+from typing import Any, Optional
+
 from sqlalchemy import (
     Column,
-    String,
-    Integer,
-    Text,
-    ForeignKey,
     DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    event,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from app.core.db.session import Base
+from app.core.snowflake import generate_booking_ref
 import uuid
-from typing import Optional
+
+
+class ClassBookingStatus(str, enum.Enum):
+    confirmed = "confirmed"
+    cancelled = "cancelled"
+    waiting = "waiting"
+    pending = "pending"
+    pending_payment = "pending_payment"
+    completed = "completed"
+
+
+TERMINAL_CLASS_BOOKING_STATUSES = frozenset(
+    {
+        ClassBookingStatus.cancelled,
+        ClassBookingStatus.completed,
+    }
+)
+
+
+def class_booking_status_value(status: Any) -> str:
+    if status is None:
+        return ""
+    if isinstance(status, ClassBookingStatus):
+        return status.value
+    return str(status).strip().lower()
+
+
+def normalize_class_booking_status(value: Any) -> ClassBookingStatus:
+    if isinstance(value, ClassBookingStatus):
+        return value
+    raw = value.value if hasattr(value, "value") else str(value)
+    mapping = {
+        "confirmed": ClassBookingStatus.confirmed,
+        "cancelled": ClassBookingStatus.cancelled,
+        "canceled": ClassBookingStatus.cancelled,
+        "waiting": ClassBookingStatus.waiting,
+        "pending": ClassBookingStatus.pending,
+        "pending_payment": ClassBookingStatus.pending_payment,
+        "completed": ClassBookingStatus.completed,
+    }
+    return mapping.get(raw.strip().lower(), ClassBookingStatus.pending)
 
 
 class ClassBooking(Base):
@@ -22,10 +68,20 @@ class ClassBooking(Base):
     tenant_id = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     class_id = Column(UUID(as_uuid=True), ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
+    location_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("locations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
-    seat_id = Column(String(64), nullable=True)
+    seat_id = Column(String(10), nullable=True)
 
-    status = Column(String(20), nullable=False, index=True)
+    status = Column(
+        Enum(ClassBookingStatus, name="class_booking_status_enum", create_type=False),
+        nullable=False,
+        index=True,
+    )
     waiting_position = Column(Integer, nullable=True)
 
     booked_at = Column(DateTime(timezone=True), nullable=True)
@@ -34,16 +90,30 @@ class ClassBooking(Base):
 
     # cash | wallet | package | gateway | free
     payment_mode = Column(String(20), nullable=True)
-    # DB column name is user_package_id (legacy). Keep Python API name stable.
+    # DB column is user_package_id → user_packages.id.
+    # API field user_package_purchase_id is the sale id; create() maps it to this FK.
     user_package_purchase_id = Column(
         "user_package_id",
         UUID(as_uuid=True),
-        ForeignKey("sales.id", ondelete="SET NULL"),
+        ForeignKey("user_packages.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # packages.id when payment_mode is package (denormalized from the sale)
+    package_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("packages.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
-    # Human-readable booking order reference e.g. ORD1A2B3C4D
-    order_id = Column(String(50), nullable=True, index=True)
+    # Auto-generated ref, e.g. BK-185942817304592384 (formerly order_id)
+    booking_ref = Column(
+        String(40),
+        unique=True,
+        nullable=False,
+        index=True,
+        default=generate_booking_ref,
+    )
 
     sessions_deducted = Column(Integer, nullable=False, server_default="0")
     promoted_from_waiting_at = Column(DateTime(timezone=True), nullable=True)
@@ -65,3 +135,10 @@ class ClassBooking(Base):
     @payment_method.setter
     def payment_method(self, value: Optional[str]) -> None:
         self.payment_mode = value
+
+
+@event.listens_for(ClassBooking, "before_insert")
+def _assign_booking_ref(mapper, connection, target: ClassBooking) -> None:
+    """Allocate ``BK-{snowflake}`` when not already set."""
+    if not getattr(target, "booking_ref", None):
+        target.booking_ref = generate_booking_ref()

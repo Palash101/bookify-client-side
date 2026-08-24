@@ -112,7 +112,7 @@ async def publish_event(
         event_type=event_type,
         tenant_id=tenant_id,
         data=data,
-        ordering_key=ordering_key,
+        ordering_key=ordering_key or str(tenant_id),
         event_id=event_id or str(uuid.uuid4()),
     )
     return await get_publisher().publish(envelope)

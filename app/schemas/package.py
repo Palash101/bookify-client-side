@@ -4,12 +4,16 @@ from datetime import date, datetime
 from uuid import UUID
 from decimal import Decimal
 
+from app.schemas.transactions import PaginationMeta
+
 
 class PackageDiscountResponse(BaseModel):
     id: UUID
     name: Optional[str] = None
     description: Optional[str] = None
     value: Optional[Decimal] = None
+    validity_start: Optional[date] = None
+    validity_end: Optional[date] = None
     type: Optional[str] = None
     created_at: Optional[datetime] = None
 
@@ -46,7 +50,10 @@ class PackageResponse(BaseModel):
     updated_at: Optional[datetime] = None
     package_type: Optional[str] = None
     booking_restriction: Optional[Any] = None
+    is_private: bool = False
     pricing_list: List[PackagePricingResponse] = []
+    already_purchased: Optional[bool] = None
+    can_purchase: Optional[bool] = None
 
     class Config:
         from_attributes = True
@@ -57,6 +64,7 @@ class AllPackagesListResponse(BaseModel):
     message: str = "Packages fetched successfully"
     data: List[PackageResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 class PackageDetailResponse(BaseModel):
@@ -91,8 +99,8 @@ class ActivePackageData(BaseModel):
     session_type: Optional[str] = None  # e.g. sessions, class
     is_unlimited: bool = False
     session_count: Optional[int] = None  # total included; null if unlimited or unknown
-    sessions_remaining: Optional[int] = None  # null if unlimited; else left on this sale
-    sessions_used: int = 0  # sum of sessions deducted on active bookings for this sale
+    sessions_remaining: Optional[int] = None  # user_packages.session_count; null if unlimited
+    sessions_used: int = 0  # total_session minus remaining balance
 
 
 class ActivePackagesListResponse(BaseModel):
@@ -100,3 +108,4 @@ class ActivePackagesListResponse(BaseModel):
     message: str = "Active packages fetched successfully"
     data: List[ActivePackageData]
     count: int
+    pagination: Optional[PaginationMeta] = None

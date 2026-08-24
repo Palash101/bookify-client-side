@@ -38,7 +38,7 @@ class FitnessProgram(Base):
 
     is_layout_required = Column(Boolean, nullable=True, default=False)
     spot_name = Column(String(50), nullable=True)
-    show_spots_left = Column(Boolean, nullable=True, default=False)
+    show_spots_left = Column(Boolean, nullable=True, default=None)
     spots_left_label = Column(String(50), nullable=True)
     classes_title_key = Column(String(100), nullable=True)
 

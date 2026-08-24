@@ -5,15 +5,21 @@ from typing import Optional, List, Any
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import and_, func, or_
 
-from app.models.class_booking import ClassBooking
+from app.models.class_booking import ClassBooking, ClassBookingStatus, class_booking_status_value
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
-from app.services.bookings_service import _effective_capacity
+from app.services.bookings_service import _effective_capacity, _tenant_tz, booking_cancel_info
+from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 
-ACTIVE_LAYOUT_SEAT_STATUSES = ("confirmed", "pending", "pending_payment", "waiting")
+ACTIVE_LAYOUT_SEAT_STATUSES = (
+    ClassBookingStatus.confirmed,
+    ClassBookingStatus.pending,
+    ClassBookingStatus.pending_payment,
+    ClassBookingStatus.waiting,
+)
 
 
 class ClassesService:
@@ -64,7 +70,11 @@ class ClassesService:
         cap = _effective_capacity(gym_class)
         if cap <= 0:
             return False
-        occupying_statuses = ("confirmed", "pending", "pending_payment")
+        occupying_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
         occupying_n = (
             db.query(func.count(ClassBooking.id))
             .filter(
@@ -100,7 +110,7 @@ class ClassesService:
             db.query(func.count(ClassBooking.id))
             .filter(
                 ClassBooking.class_id == gym_class.id,
-                ClassBooking.status == "waiting",
+                ClassBooking.status == ClassBookingStatus.waiting,
             )
             .scalar()
             or 0
@@ -117,7 +127,9 @@ class ClassesService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[GymClass]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[GymClass], int]:
         """
         List classes for a tenant in a date range, with optional search and sorting.
         Rules:
@@ -195,7 +207,9 @@ class ClassesService:
 
             result.append(gym_class)
 
-        return result
+        total = len(result)
+        offset = (page - 1) * limit
+        return result[offset : offset + limit], total
 
     @staticmethod
     def get_class_details(
@@ -205,11 +219,8 @@ class ClassesService:
         user_id,
     ):
         """
-        Returns a single class details payload.
-
-        Note: Seat layout/bookings tables are not present in current models, so
-        layout seats are synthesized from max_bookings/booking_counts and
-        user_booking is returned as empty.
+        Returns a single class details payload including the current user's active booking
+        (if any) with cancellation eligibility.
         """
         gym_class = (
             db.query(GymClass)
@@ -264,7 +275,11 @@ class ClassesService:
         # - total = layouts.totalSeats (if present) else max_bookings (<=0 means unlimited)
         # - booked = active occupying bookings (confirmed/pending/pending_payment)
         total = int(_effective_capacity(gym_class) or 0)
-        occupying_statuses = ("confirmed", "pending", "pending_payment")
+        occupying_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
         occupying_raw = (
             db.query(func.count(ClassBooking.id))
             .filter(
@@ -288,7 +303,7 @@ class ClassesService:
             .filter(
                 ClassBooking.tenant_id == tenant_id,
                 ClassBooking.class_id == class_id,
-                ClassBooking.status == "waiting",
+                ClassBooking.status == ClassBookingStatus.waiting,
             )
             .scalar()
             or 0
@@ -329,7 +344,12 @@ class ClassesService:
         # If there are no layout seats configured, return empty.
 
         # Current user's booking (if any) for this class.
-        active_statuses = ("confirmed", "waiting", "pending", "pending_payment")
+        active_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.waiting,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
         booking = (
             db.query(ClassBooking)
             .filter(
@@ -344,6 +364,15 @@ class ClassesService:
 
         live_layout = ClassesService._with_live_layout_status(db, gym_class)
 
+        tz = _tenant_tz(db, tenant_id, gym_config=gym_config)
+        now = datetime.now(tz)
+        can_cancel = False
+        cancel_deadline: Optional[str] = None
+        if booking is not None:
+            can_cancel, cancel_deadline = booking_cancel_info(
+                booking, gym_class, gym_config, tz, now
+            )
+
         # Prepare response payload expected by schema
         payload = {
             "class_id": str(gym_class.id),
@@ -353,10 +382,7 @@ class ClassesService:
             "layout_id": gym_class.layout_id,
             "layouts": live_layout,
             "fully_booked": ClassesService.fully_booked_for_class(db, gym_class, live_layout),
-            "program": {
-                "id": int(program.id) if program else 0,
-                "name": program.name if program else None,
-            },
+            "program": FitnessProgramsService.program_short_payload(program),
             "trainer": {
                 "id": str(trainer.id) if trainer else "",
                 "name": f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() if trainer else None,
@@ -388,7 +414,7 @@ class ClassesService:
                 "has_booked": booking is not None,
                 "booking_id": str(booking.id) if booking is not None else None,
                 "seat_id": booking.seat_id if booking is not None else None,
-                "status": booking.status if booking is not None else None,
+                "status": class_booking_status_value(booking.status) if booking is not None else None,
                 "waiting_position": booking.waiting_position if booking is not None else None,
                 "payment_mode": booking.payment_mode if booking is not None else None,
                 "package_id": (
@@ -396,6 +422,8 @@ class ClassesService:
                     if booking is not None and booking.user_package_purchase_id is not None
                     else None
                 ),
+                "can_cancel": can_cancel,
+                "cancel_deadline": cancel_deadline,
             },
         }
         return payload

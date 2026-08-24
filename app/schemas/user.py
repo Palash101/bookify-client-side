@@ -1,7 +1,9 @@
-from pydantic import BaseModel, EmailStr, model_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 from typing import Optional, Any
 from datetime import datetime, date
 from uuid import UUID
+
+from app.models.user import normalize_user_gender, user_gender_value
 
 
 class UserBase(BaseModel):
@@ -27,7 +29,7 @@ class UserCreate(UserBase):
     phone: Optional[str] = None
     phone_country_code: Optional[str] = None  # e.g., "+974"
     dob: Optional[date] = None
-    gender: Optional[str] = None  # "MALE" or "FEMALE"
+    gender: Optional[str] = None  # "male" or "female"
     password: str
     confirm_password: str
     terms_accepted: bool = False
@@ -45,7 +47,7 @@ class UserCreate(UserBase):
                 "phone": "12345678",
                 "phone_country_code": "+974",
                 "dob": "1990-01-01",
-                "gender": "MALE",
+                "gender": "male",
                 "password": "SecurePassword123",
                 "confirm_password": "SecurePassword123",
                 "terms_accepted": True
@@ -104,6 +106,18 @@ class UserMeResponse(BaseModel):
     class Config:
         from_attributes = True
 
+    @field_validator("gender", mode="before")
+    @classmethod
+    def coerce_gender(cls, value: Any) -> Optional[str]:
+        return user_gender_value(value)
+
+    @field_validator("wallet", mode="before")
+    @classmethod
+    def coerce_wallet(cls, value: Any) -> float:
+        if value is None:
+            return 0
+        return float(value)
+
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -116,7 +130,7 @@ class Token(BaseModel):
     access_token: str
     refresh_token: Optional[str] = None
     token_type: str
-    user: Optional[User] = None  # Logged-in user details (after verify-otp)
+    user: Optional[UserMeResponse] = None  # Logged-in user details (after verify-otp)
 
 
 class TokenData(BaseModel):
@@ -205,6 +219,16 @@ class ProfileUpdate(BaseModel):
     avatar: Optional[str] = None
     designation: Optional[str] = None
     nationality: Optional[str] = None
+
+    @field_validator("gender")
+    @classmethod
+    def coerce_gender(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        normalized = normalize_user_gender(value)
+        if normalized is None:
+            raise ValueError("Invalid gender. Allowed values: male, female")
+        return normalized.value
     
     class Config:
         json_schema_extra = {
@@ -213,9 +237,20 @@ class ProfileUpdate(BaseModel):
                 "last_name": "Doe",
                 "phone": "12345678",
                 "phone_country_code": "+974",
-                "gender": "MALE",
+                "gender": "male",
                 "dob": "1990-01-01",
                 "nationality": "Qatar"
+            }
+        }
+
+
+class DeleteAccountRequest(BaseModel):
+    reason: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "reason": "No longer using the app",
             }
         }
 

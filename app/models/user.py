@@ -1,14 +1,44 @@
-from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Text, Index, Numeric
+from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Text, Index, Numeric, Enum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from typing import TYPE_CHECKING, Optional, Dict, Any
 from app.core.db.session import Base
+import enum
 import uuid
 
 # Import Role and Tenant to ensure they're registered before User relationship is set up
 from app.models.role import Role  # noqa: F401
 from app.models.tenant import Tenant  # noqa: F401
+
+
+class UserGender(str, enum.Enum):
+    male = "male"
+    female = "female"
+
+
+def user_gender_value(gender: Any) -> Optional[str]:
+    if gender is None:
+        return None
+    if isinstance(gender, UserGender):
+        return gender.value
+    return str(gender).strip().lower() or None
+
+
+def normalize_user_gender(value: Any) -> Optional[UserGender]:
+    if value is None:
+        return None
+    if isinstance(value, UserGender):
+        return value
+    raw = value.value if hasattr(value, "value") else str(value)
+    s = raw.strip().lower()
+    if not s:
+        return None
+    if s in ("male", "m", "man", "men"):
+        return UserGender.male
+    if s in ("female", "f", "woman", "women"):
+        return UserGender.female
+    return None
 
 
 class User(Base):
@@ -29,7 +59,10 @@ class User(Base):
     first_name = Column(String(100), nullable=True)
     last_name = Column(String(100), nullable=True)
     avatar = Column(Text, nullable=True)
-    gender = Column(String(20), nullable=True)
+    gender = Column(
+        Enum(UserGender, name="user_gender_enum", create_type=False),
+        nullable=True,
+    )
     dob = Column(Date, nullable=True)
     designation = Column(String(100), nullable=True)
     skills = Column(JSONB, nullable=True)
@@ -37,6 +70,10 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=True)
     # user_type: "member", "client", "admin" etc.
     user_type = Column(String(20), nullable=False, server_default="member")
+
+    # Soft-delete / account deactivation audit
+    deletion_reason = Column(Text, nullable=True)
+    deactivated_at = Column(DateTime(timezone=True), nullable=True)
 
     # Wallet balance (amount available for purchases)
     wallet = Column(Numeric(12, 2), nullable=True, server_default="0")

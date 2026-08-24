@@ -8,6 +8,15 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+def normalize_display_status(status: Optional[str]) -> Optional[str]:
+    """Map stored 'succeeded' to API-facing 'success'."""
+    if status is None:
+        return None
+    if str(status).lower() == "succeeded":
+        return "success"
+    return status
+
+
 class WalletTransactionItemResponse(BaseModel):
     id: UUID
     user_id: UUID
@@ -16,6 +25,7 @@ class WalletTransactionItemResponse(BaseModel):
     direction: str
     transaction_type: str
     transaction_id: Optional[str] = None
+    txn_ref: Optional[str] = None
 
     status: str
     metadata: Optional[Dict[str, Any]] = None
@@ -31,11 +41,31 @@ class WalletTransactionItemResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+class PaginationMeta(BaseModel):
+    page: int
+    limit: int
+    total: int
+    total_pages: int
+    has_more: bool
+
+
+def build_pagination(page: int, limit: int, total: int) -> PaginationMeta:
+    total_pages = (total + limit - 1) // limit if total else 0
+    return PaginationMeta(
+        page=page,
+        limit=limit,
+        total=total,
+        total_pages=total_pages,
+        has_more=page < total_pages,
+    )
+
+
 class WalletTransactionsListResponse(BaseModel):
     success: bool = True
     message: str = "Wallet transactions fetched successfully"
     data: List[WalletTransactionItemResponse] = []
     count: int = 0
+    pagination: Optional[PaginationMeta] = None
 
 
 class WalletBalanceResponse(BaseModel):
@@ -52,7 +82,7 @@ class SalesTransactionItemResponse(BaseModel):
 
     # sales_transactions.id is bigint; wallet-only sales rows use sale id (UUID).
     id: Union[int, UUID]
-    order_id: UUID
+    sales_id: UUID
 
     # wallet_add | package_gateway | package_wallet
     type: str
@@ -64,6 +94,7 @@ class SalesTransactionItemResponse(BaseModel):
 
     gateway: str
     gateway_txn_id: Optional[str] = None
+    txn_ref: Optional[str] = None
 
     status: str
     amount: Optional[Decimal] = None
@@ -81,6 +112,7 @@ class SalesTransactionsListResponse(BaseModel):
     message: str = "Sales transactions fetched successfully"
     data: List[SalesTransactionItemResponse] = []
     count: int = 0
+    pagination: Optional[PaginationMeta] = None
 
 
 class PurchaseHistoryItemResponse(BaseModel):
@@ -116,4 +148,6 @@ class PurchasesHistoryResponse(BaseModel):
     success: bool = True
     message: str = "Purchases history fetched successfully"
     data: PurchasesHistoryDataResponse
+    count: int = 0
+    pagination: Optional[PaginationMeta] = None
 

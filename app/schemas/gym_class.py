@@ -1,8 +1,10 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from typing import Optional, Any, List, Union
 from datetime import date as DateType, time, datetime
 from uuid import UUID
 from decimal import Decimal
+
+from app.schemas.transactions import PaginationMeta
 
 
 class GymClassBase(BaseModel):
@@ -10,6 +12,7 @@ class GymClassBase(BaseModel):
     theme_name: Optional[str] = None
     trainer_id: Optional[UUID] = None
     trainer_name: Optional[str] = None
+    trainer_image: Optional[str] = None
     class_date: Optional[DateType] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None
@@ -23,9 +26,26 @@ class GymClassBase(BaseModel):
     status: Optional[str] = None
 
 
+class ProgramShortResponse(BaseModel):
+    id: int
+    name: Optional[str] = None
+    show_spots_left: Optional[bool] = None
+    spot_name: Optional[str] = None
+    spots_left_label: Optional[str] = None
+    training_mode: Optional[str] = None
+
+    @field_serializer("show_spots_left")
+    def serialize_show_spots_left(self, value: Optional[bool]) -> Optional[bool]:
+        return True if value is True else None
+
+    class Config:
+        from_attributes = True
+
+
 class GymClassResponse(GymClassBase):
     id: UUID
     training_programme_id: Optional[int] = None
+    program: Optional[ProgramShortResponse] = None
     terms_text: Optional[str] = None
     publish_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -50,19 +70,12 @@ class ClassesListResponse(BaseModel):
     message: str = "Classes fetched successfully"
     data: List[GymClassResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 # ---------------------------------------------------------------------------
 # Class details (single class)
 # ---------------------------------------------------------------------------
-
-class ProgramShortResponse(BaseModel):
-    id: int
-    name: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
 
 class TrainerShortResponse(BaseModel):
     id: str
@@ -140,6 +153,8 @@ class UserBookingResponse(BaseModel):
     waiting_position: Optional[int] = None
     payment_mode: Optional[str] = None
     package_id: Optional[str] = None
+    can_cancel: bool = False
+    cancel_deadline: Optional[str] = None
 
     class Config:
         from_attributes = True

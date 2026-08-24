@@ -1,12 +1,11 @@
 from fastapi import FastAPI, Request, status
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.openapi.utils import get_openapi
 from typing import Optional
 from app.core.settings import settings
-from app.core.middleware import TenantMiddleware
+from app.core.middleware import DynamicCORSMiddleware, TenantMiddleware
 from app.api import api_router
 from app.payments.redirect_handlers import (
     build_payment_cancel_response,
@@ -24,6 +23,18 @@ app = FastAPI(
     redoc_url=f"{settings.API_V1_STR}/redoc",
     swagger_ui_parameters={"persistAuthorization": True},
 )
+
+
+@app.on_event("startup")
+async def log_pubsub_startup_config() -> None:
+    mode = "console" if settings.publisher_is_console else "gcp"
+    logger.info(
+        "pubsub_startup mode=%s project=%s topic=%s ordering=%s",
+        mode,
+        settings.GCP_PROJECT_ID or "(none)",
+        settings.PUBSUB_TOPIC_ID,
+        settings.PUBSUB_ENABLE_MESSAGE_ORDERING,
+    )
 
 
 def custom_openapi():
@@ -55,9 +66,11 @@ def custom_openapi():
     api_prefix = settings.API_V1_STR.rstrip("/")
     endpoints_needing_bearer = [
         f"{api_prefix}/auth/verify-otp",
+        f"{api_prefix}/auth/resend-otp",
         f"{api_prefix}/auth/reset-password",
         f"{api_prefix}/auth/profile",
         f"{api_prefix}/auth/edit-profile",
+        f"{api_prefix}/payment/gateways",
     ]
     
     for path, path_item in openapi_schema.get("paths", {}).items():
@@ -126,17 +139,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         }
     )
 
-# CORS middleware (must be first)
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Log unexpected errors and return JSON (so CORS + clients see a real message, not a blank 500)."""
+    logger.exception("Unhandled server error on %s %s", request.method, request.url.path)
+    detail = str(exc) if settings.DEBUG else "Internal server error"
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"success": False, "message": detail, "detail": detail},
+    )
+
+# Tenant validation middleware (inner)
+app.add_middleware(TenantMiddleware)
+
+# CORS middleware (outer — wraps all responses, including TenantMiddleware 401s).
+# Static list covers local/dev; tenant sites come from master organizations.domain.
 app.add_middleware(
-    CORSMiddleware,
+    DynamicCORSMiddleware,
     allow_origins=settings.BACKEND_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Tenant validation middleware
-app.add_middleware(TenantMiddleware)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -154,12 +179,12 @@ async def health_check():
 
 @app.get("/payment/success")
 async def payment_success_legacy(session_id: Optional[str] = None):
-    return build_payment_success_response(session_id)
+    return await build_payment_success_response(session_id)
 
 
 @app.get("/payment/cancel")
 async def payment_cancel_legacy(session_id: Optional[str] = None):
-    return build_payment_cancel_response(session_id)
+    return await build_payment_cancel_response(session_id)
 
 
 if __name__ == "__main__":

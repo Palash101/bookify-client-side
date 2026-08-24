@@ -7,6 +7,8 @@ from app.schemas.tenant_website_config import (
     TenantWebsiteConfigResponse,
 )
 from app.services.tenant_website_config_service import TenantWebsiteConfigService
+from app.services.tenant_website_sections_service import TenantWebsiteSectionsService
+from app.services.gym_config_service import GymConfigService
 
 router = APIRouter()
 
@@ -27,8 +29,22 @@ async def get_website_config(
             detail="Website configuration not found for this organization",
         )
 
+    sections = TenantWebsiteSectionsService.get_active_default_sections(
+        db,
+        tenant_id=tenant_id,
+        theme_id=row.theme_id,
+    )
+
+    gym_config = GymConfigService.get_gym_config(db, tenant_id)
+
     return {
         "success": True,
         "message": "Website configuration fetched successfully",
-        "data": TenantWebsiteConfigData.model_validate(row),
+        "data": TenantWebsiteConfigData.model_validate(row).model_copy(
+            update={
+                "currency": gym_config.resolved_currency(),
+                "sections": sections,
+                "timezone": GymConfigService.get_timezone_name(db, tenant_id),
+            }
+        ),
     }
