@@ -2,10 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_current_tenant_id, get_db
-from app.schemas.tenant_website_config import (
-    TenantWebsiteConfigData,
-    TenantWebsiteConfigResponse,
-)
+from app.schemas.tenant_website_config import TenantWebsiteConfigResponse
 from app.services.tenant_website_config_service import TenantWebsiteConfigService
 from app.services.tenant_website_sections_service import TenantWebsiteSectionsService
 from app.services.gym_config_service import GymConfigService
@@ -40,7 +37,7 @@ async def get_website_config(
     return {
         "success": True,
         "message": "Website configuration fetched successfully",
-        "data": TenantWebsiteConfigData.model_validate(row).model_copy(
+        "data": row.model_copy(
             update={
                 "currency": gym_config.resolved_currency(),
                 "sections": sections,

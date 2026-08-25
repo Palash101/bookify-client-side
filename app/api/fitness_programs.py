@@ -5,10 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db.session import get_db
 from app.dependencies import get_current_tenant_id
-from app.schemas.fitness_program import (
-    FitnessProgramResponse,
-    FitnessProgramsListResponse,
-)
+from app.schemas.fitness_program import FitnessProgramsListResponse
 from app.schemas.transactions import build_pagination
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 import uuid
@@ -54,7 +51,7 @@ async def get_training_programs_for_location(
     return {
         "success": True,
         "message": "Training programs fetched successfully",
-        "data": [FitnessProgramResponse.model_validate(p) for p in programs],
+        "data": programs,
         "count": len(programs),
         "pagination": build_pagination(page, limit, total),
     }

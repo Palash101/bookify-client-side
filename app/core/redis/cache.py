@@ -22,10 +22,9 @@ logger = logging.getLogger(__name__)
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
 # Single-flight defaults: hold the rebuild lock a little longer than a slow
-# loader takes, and make a waiter give up well inside a request timeout.
+# loader takes. The lock is never waited on -- see get_or_set.
 FILL_LOCK = "fill"
 FILL_LOCK_TTL = 10.0
-FILL_LOCK_WAIT = 3.0
 
 
 class _Stats:
@@ -144,6 +143,28 @@ class RedisCache:
             self._delete_raw(key)
             return None
 
+    def get_text(self, key: str) -> str | None:
+        """Read a raw string value, without JSON decoding.
+
+        For scalar keys written by another service (``domain:<host>`` holding a
+        bare ``ORG-110``): :meth:`get` cannot JSON-decode those and deletes them
+        as unusable, which would destroy the writer's data. Surrounding quotes
+        are stripped so a value written either way reads back the same.
+        """
+        client = get_redis_client()
+        if client is None:
+            return None
+        try:
+            raw = client.get(apply_prefix(key))
+            record_success()
+        except RedisError as exc:
+            record_failure()
+            stats.record("errors")
+            logger.warning("Redis GET failed for %s: %s", key, exc)
+            return None
+        stats.record("hits" if raw is not None else "misses")
+        return str(raw).strip().strip('"') if raw is not None else None
+
     def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Store a value with a TTL. ``ttl <= 0`` stores it without expiry."""
         client = get_redis_client()
@@ -181,13 +202,15 @@ class RedisCache:
         trade for a cheap indexed query: it costs no extra Redis commands.
 
         Pass ``single_flight=True`` for an expensive rebuild. One caller then
-        takes a lock and loads while the others wait for it and re-read the
-        filled key — so a cold key does not stampede the database. It costs two
+        takes a lock and loads, and the rest re-read the key before loading —
+        so a cold key usually does not stampede the database. It costs two
         extra commands, but only on a miss; a cache hit never touches the lock.
 
-        Availability wins over efficiency: if the lock cannot be taken (Redis
-        is down, or the holder is slow), the caller loads anyway rather than
-        failing or blocking indefinitely.
+        The lock is taken without waiting. Blocking on it would sleep the
+        calling thread, which on an event loop stalls every other request in
+        the process for far longer than the loader itself takes. A caller that
+        loses the race simply loads too: a duplicate query beats a stalled
+        worker, and the same applies when Redis is down.
         """
         cached = self.get(key, model)
         if cached is not None:
@@ -196,11 +219,9 @@ class RedisCache:
         if not single_flight:
             return self._load_and_store(key, loader, ttl)
 
-        with self.lock(
-            FILL_LOCK, key, ttl=FILL_LOCK_TTL, wait=FILL_LOCK_WAIT, required=False
-        ):
+        with self.lock(FILL_LOCK, key, ttl=FILL_LOCK_TTL, required=False):
             # Re-read either way: the winner may have raced another filler, and
-            # a waiter has usually had the key filled underneath it.
+            # a loser is often looking at a key that was just filled.
             cached = self.get(key, model)
             if cached is not None:
                 return cached

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db
 from app.dependencies import get_current_tenant_id
-from app.schemas.location import LocationResponse, LocationsListResponse
+from app.schemas.location import LocationsListResponse
 from app.schemas.transactions import build_pagination
 from app.services.locations_service.locations_service import LocationsService
 
@@ -33,7 +33,6 @@ async def get_locations(
     locations, total = LocationsService.list_locations(
         db,
         tenant_id=tenant_id,
-        only_active=True,
         search=search,
         sort_by=sort_by,
         sort_order=sort_order,
@@ -43,7 +42,7 @@ async def get_locations(
     return {
         "success": True,
         "message": "Locations fetched successfully",
-        "data": [LocationResponse.model_validate(l) for l in locations],
+        "data": locations,
         "count": len(locations),
         "pagination": build_pagination(page, limit, total),
     }

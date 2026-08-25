@@ -2,8 +2,7 @@ from fastapi import APIRouter, Depends
 
 from app.dependencies import get_current_tenant
 from app.models.master_org import Organization
-from app.schemas.tenant import GymTenantResponse
-from app.services.redis.gym_service import get_or_cache_gym
+from app.schemas.tenant import GymTenantResponse, TenantResponse
 
 
 router = APIRouter()
@@ -16,12 +15,12 @@ async def get_gym_details(
     """
     Get current gym details for the request domain / X-Tenant-Key.
 
-    Reads Redis first (by organization domain). On a miss, caches the payload
-    and returns it.
+    TenantMiddleware has already resolved this organization -- from Redis on
+    the domain path -- so there is nothing left to look up here.
     """
     return {
         "success": True,
         "message": "Gym details fetched successfully",
-        "data": get_or_cache_gym(tenant),
+        "data": TenantResponse.model_validate(tenant),
     }
 
