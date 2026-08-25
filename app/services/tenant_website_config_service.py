@@ -2,7 +2,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.core.redis.cache import cache
+from app.core.redis.cache import cache, tenant_key
 from app.models.tenant_website_config import TenantWebsiteConfig
 from app.schemas.tenant_website_config import TenantWebsiteConfigData
 
@@ -13,8 +13,8 @@ CACHE_TTL = 300
 class TenantWebsiteConfigService:
     @staticmethod
     def cache_key(tenant_id: str) -> str:
-        """One key per tenant, holding its active website config."""
-        return f"web_config:{tenant_id}:active"
+        """``t:ORG-110:web_config`` — the tenant's active website config."""
+        return tenant_key(tenant_id, "web_config")
 
     @staticmethod
     def invalidate(tenant_id: str) -> int:

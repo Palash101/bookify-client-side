@@ -3,7 +3,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.core.redis.cache import cache
+from app.core.redis.cache import cache, tenant_key
 from app.models.fitness_program import FitnessProgram
 from app.schemas.fitness_program import FitnessProgramResponse
 
@@ -41,8 +41,8 @@ class FitnessProgramsService:
 
     @staticmethod
     def cache_key(tenant_id: str, location_id: Optional[uuid.UUID] = None) -> str:
-        """One key per tenant and location, holding its active program list."""
-        return f"program:{tenant_id}:{location_id or 'all'}:active"
+        """``t:ORG-110:program:<location>`` — that location's active programs."""
+        return tenant_key(tenant_id, "program", location_id or "all")
 
     @staticmethod
     def invalidate(tenant_id: str, location_id: Optional[uuid.UUID] = None) -> int:
