@@ -41,7 +41,6 @@ def get_session_factory(tenant: str) -> sessionmaker:
 
 def _get_tenant_from_request(request: Request) -> Optional[str]:
     tenant_id = getattr(request.state, "tenant_id", None)
-    print(tenant_id,'tenant_id m---')
     if tenant_id:
         return str(tenant_id).strip()
     return None

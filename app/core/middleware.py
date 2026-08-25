@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.db.master_db import SessionLocal
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
+from app.core.redis.cache import cache
 from app.core.settings import settings
 import logging
 import threading
@@ -72,6 +73,59 @@ def _unauthorized(message: str) -> JSONResponse:
     )
 
 
+def domain_key(domain: str) -> str:
+    """Hostname -> organization id, as written by the auth service."""
+    return f"domain:{domain.strip().lower()}"
+
+
+def org_cache_key(organization_id: str) -> str:
+    """Organization payload, e.g. ``t:ORG-110``. The id keeps its case."""
+    return f"t:{organization_id.strip()}"
+
+
+def _org_from_cache(request_domain: str) -> Optional[Organization]:
+    """
+    Resolve an organization from the entries the auth service writes:
+    ``domain:<host> -> ORG-110`` then ``t:ORG-110 -> {...}``.
+
+    Returns a transient (session-less) Organization carrying just the fields
+    downstream code reads, or None to fall through to the master DB.
+    """
+    org_id = cache.get_text(domain_key(request_domain))
+    if not org_id:
+        return None
+
+    payload = cache.get(org_cache_key(org_id))
+    if not isinstance(payload, dict):
+        return None
+
+    # Absent status means the auth service only caches active orgs; an explicit
+    # non-active value is honoured so a blocked org cannot slip through.
+    if str(payload.get("status") or "active").lower() != "active":
+        return None
+
+    return Organization(
+        organization_id=payload.get("organization_id") or org_id,
+        name=payload.get("name"),
+        domain=payload.get("domain") or request_domain,
+        status="active",
+    )
+
+
+def _cache_org(request_domain: str, organization: Organization) -> None:
+    """Write the same two entries the auth service does, after a DB lookup."""
+    cache.set(domain_key(request_domain), organization.organization_id)
+    cache.set(
+        org_cache_key(organization.organization_id),
+        {
+            "organization_id": organization.organization_id,
+            "name": organization.name,
+            "domain": organization.domain,
+            "status": organization.status,
+        },
+    )
+
+
 class TenantMiddleware(BaseHTTPMiddleware):
     """
     Middleware that resolves the active organization for every API request.
@@ -114,14 +168,28 @@ class TenantMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         x_tenant_key = request.headers.get("X-Tenant-Key")
-        print(x_tenant_key,'x_tenant_key')
         request_domain = _extract_request_domain(request)
-        print(request_domain,'request_domain')
+        # Never log the key itself -- it is a credential. Whether one was sent
+        # is all that is needed to debug tenant resolution.
+        logger.debug(
+            "Resolving tenant: domain=%s api_key=%s",
+            request_domain,
+            "present" if x_tenant_key else "absent",
+        )
 
         if not x_tenant_key and not request_domain:
             return _unauthorized(
                 "Either X-Tenant-Key header or a request domain is required"
             )
+
+        # Domain-only requests can be served entirely from Redis, without
+        # opening a master DB session at all.
+        if not x_tenant_key:
+            cached_org = _org_from_cache(request_domain)
+            if cached_org is not None:
+                request.state.tenant_id = cached_org.organization_id
+                request.state.tenant = cached_org
+                return await call_next(request)
 
         db: Session = SessionLocal()
         try:
@@ -160,6 +228,9 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
             if not organization:
                 return _unauthorized("Organization not found or inactive")
+
+            if not x_tenant_key:
+                _cache_org(request_domain, organization)
 
             request.state.tenant_id = organization.organization_id
             request.state.tenant = organization

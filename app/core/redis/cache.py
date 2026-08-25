@@ -143,6 +143,28 @@ class RedisCache:
             self._delete_raw(key)
             return None
 
+    def get_text(self, key: str) -> str | None:
+        """Read a raw string value, without JSON decoding.
+
+        For scalar keys written by another service (``domain:<host>`` holding a
+        bare ``ORG-110``): :meth:`get` cannot JSON-decode those and deletes them
+        as unusable, which would destroy the writer's data. Surrounding quotes
+        are stripped so a value written either way reads back the same.
+        """
+        client = get_redis_client()
+        if client is None:
+            return None
+        try:
+            raw = client.get(apply_prefix(key))
+            record_success()
+        except RedisError as exc:
+            record_failure()
+            stats.record("errors")
+            logger.warning("Redis GET failed for %s: %s", key, exc)
+            return None
+        stats.record("hits" if raw is not None else "misses")
+        return str(raw).strip().strip('"') if raw is not None else None
+
     def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Store a value with a TTL. ``ttl <= 0`` stores it without expiry."""
         client = get_redis_client()
