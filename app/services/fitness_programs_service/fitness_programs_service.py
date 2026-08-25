@@ -3,7 +3,12 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.core.redis.cache import cache
 from app.models.fitness_program import FitnessProgram
+from app.schemas.fitness_program import FitnessProgramResponse
+
+# Programs change rarely, but must not go stale for long.
+CACHE_TTL = 300
 
 
 class FitnessProgramsService:
@@ -35,6 +40,51 @@ class FitnessProgramsService:
         }
 
     @staticmethod
+    def cache_key(tenant_id: str, location_id: Optional[uuid.UUID] = None) -> str:
+        """One key per tenant and location, holding its active program list."""
+        return f"program:{tenant_id}:{location_id or 'all'}:active"
+
+    @staticmethod
+    def invalidate(tenant_id: str, location_id: Optional[uuid.UUID] = None) -> int:
+        """Drop the cached list after a program write."""
+        return cache.delete(FitnessProgramsService.cache_key(tenant_id, location_id))
+
+    @staticmethod
+    def get_active_programs(
+        db: Session,
+        tenant_id: str,
+        location_id: Optional[uuid.UUID] = None,
+    ) -> List[FitnessProgramResponse]:
+        """
+        Every active program for a tenant (optionally one location), in display
+        order, served from Redis.
+
+        The list is small and rarely changes, so it is cached whole and reused
+        wherever programs are needed. Concurrent misses each run the query --
+        it is a cheap indexed lookup, and a fill lock would block the event
+        loop for longer than the query itself takes.
+        """
+
+        def loader() -> list[dict]:
+            query = db.query(FitnessProgram).filter(
+                FitnessProgram.tenant_id == tenant_id,
+                FitnessProgram.is_active.is_(True),
+            )
+            if location_id:
+                query = query.filter(FitnessProgram.location_id == location_id)
+            rows = query.order_by(
+                FitnessProgram.display_position, FitnessProgram.created_at
+            ).all()
+            return [FitnessProgramResponse.model_validate(r).model_dump() for r in rows]
+
+        payload = cache.get_or_set(
+            FitnessProgramsService.cache_key(tenant_id, location_id),
+            loader,
+            ttl=CACHE_TTL,
+        )
+        return [FitnessProgramResponse.model_validate(row) for row in payload]
+
+    @staticmethod
     def list_programs(
         db: Session,
         tenant_id: str,
@@ -45,10 +95,21 @@ class FitnessProgramsService:
         only_active: bool = True,
         page: int = 1,
         limit: int = 20,
-    ) -> tuple[List[FitnessProgram], int]:
+    ) -> tuple[List[FitnessProgramResponse], int]:
         """
         List training programs for a tenant with optional filters.
+
+        A plain request is paginated out of the cached active list. Anything
+        searched or sorted goes to the database, so those one-off queries never
+        pollute the cache.
         """
+        if not search and sort_by is None and only_active:
+            rows = FitnessProgramsService.get_active_programs(
+                db, tenant_id, location_id
+            )
+            offset = (page - 1) * limit
+            return rows[offset : offset + limit], len(rows)
+
         query = db.query(FitnessProgram).filter(FitnessProgram.tenant_id == tenant_id)
 
         if only_active:
@@ -79,6 +140,7 @@ class FitnessProgramsService:
 
         total = query.count()
         offset = (page - 1) * limit
-        return query.offset(offset).limit(limit).all(), total
+        rows = query.offset(offset).limit(limit).all()
+        return [FitnessProgramResponse.model_validate(r) for r in rows], total
 
 
