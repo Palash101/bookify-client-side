@@ -67,6 +67,23 @@ def apply_prefix(key: str) -> str:
     return f"{prefix}:{key}" if prefix else key
 
 
+def tenant_key(tenant_id: str, *parts: object) -> str:
+    """``t:{tenant_id}[:{part}...]`` — the root every per-tenant key shares.
+
+    ``t:ORG-110`` itself holds the organization payload written by the auth
+    service, and the caches below are its siblings (``t:ORG-110:loc`` and so
+    on). The id keeps its case so it matches Postgres and the auth service.
+
+    Never ``delete_prefix("t:<id>")``: that would take the organization payload
+    with it. Delete the specific keys instead.
+    """
+    return ":".join(
+        str(part)
+        for part in ("t", tenant_id.strip(), *parts)
+        if part not in (None, "")
+    )
+
+
 def jittered_ttl(ttl: int) -> int:
     """
     Spread expiries so keys written together do not expire together.

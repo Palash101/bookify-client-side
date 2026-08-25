@@ -4,7 +4,7 @@ import uuid
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.redis.cache import cache
+from app.core.redis.cache import cache, tenant_key
 from app.models.location import Location
 from app.schemas.location import LocationResponse
 
@@ -56,8 +56,8 @@ class LocationsService:
 
     @staticmethod
     def cache_key(tenant_id: str) -> str:
-        """One key per tenant, holding its whole active location list."""
-        return f"loc:{tenant_id}:active"
+        """``t:ORG-110:loc`` — the tenant's whole active location list."""
+        return tenant_key(tenant_id, "loc")
 
     @staticmethod
     def invalidate(tenant_id: str) -> int:

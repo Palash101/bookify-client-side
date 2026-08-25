@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.db.master_db import SessionLocal
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
-from app.core.redis.cache import cache
+from app.core.redis.cache import cache, tenant_key
 from app.core.settings import settings
 import logging
 import threading
@@ -80,7 +80,7 @@ def domain_key(domain: str) -> str:
 
 def org_cache_key(organization_id: str) -> str:
     """Organization payload, e.g. ``t:ORG-110``. The id keeps its case."""
-    return f"t:{organization_id.strip()}"
+    return tenant_key(organization_id)
 
 
 def _org_from_cache(request_domain: str) -> Optional[Organization]:

@@ -3,7 +3,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.core.redis.cache import cache
+from app.core.redis.cache import cache, tenant_key
 from app.models.tenant_website_sections import TenantWebsiteSection
 
 # Section templates change rarely, but must not go stale for long.
@@ -13,8 +13,8 @@ CACHE_TTL = 300
 class TenantWebsiteSectionsService:
     @staticmethod
     def cache_key(tenant_id: str, theme_id: Optional[UUID] = None) -> str:
-        """One key per tenant and theme, holding that theme's sections."""
-        return f"web_sections:{tenant_id}:{theme_id or 'any'}"
+        """``t:ORG-110:web_sections:<theme>`` — that theme's sections."""
+        return tenant_key(tenant_id, "web_sections", theme_id or "any")
 
     @staticmethod
     def invalidate(tenant_id: str, theme_id: Optional[UUID] = None) -> int:
