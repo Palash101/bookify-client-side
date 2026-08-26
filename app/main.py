@@ -157,7 +157,7 @@ app.add_middleware(TenantMiddleware)
 # Static list covers local/dev; tenant sites come from master organizations.domain.
 app.add_middleware(
     DynamicCORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
