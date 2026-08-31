@@ -1,18 +1,26 @@
 from copy import deepcopy
 from datetime import date, datetime
+from types import SimpleNamespace
 from typing import Optional, List, Any
+from uuid import UUID
 
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, select
 
+from app.core.redis.cache import cache, tenant_key
 from app.models.class_booking import ClassBooking, ClassBookingStatus, class_booking_status_value
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
+from app.schemas.gym_class import GymClassResponse
 from app.services.bookings_service import _effective_capacity, _tenant_tz, booking_cancel_info
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
+
+# Same window as locations: catalog can go stale this long, live booking
+# fields are never stored — they are overlaid on every request.
+CACHE_TTL = 300
 
 ACTIVE_LAYOUT_SEAT_STATUSES = (
     ClassBookingStatus.confirmed,
@@ -118,7 +126,21 @@ class ClassesService:
         return int(waiting_n) >= max_w
 
     @staticmethod
-    def list_classes(
+    def cache_key(
+        tenant_id: str, location_id: Any, start_date: date, end_date: date
+    ) -> str:
+        """``t:ORG-110:class:{location}:{start}:{end}`` — that window's catalog."""
+        return tenant_key(
+            tenant_id, "class", location_id, start_date.isoformat(), end_date.isoformat()
+        )
+
+    @staticmethod
+    def invalidate(tenant_id: str, location_id: Any) -> int:
+        """Drop every cached date window for this location after a class write."""
+        return cache.delete_prefix(tenant_key(tenant_id, "class", location_id) + ":")
+
+    @staticmethod
+    def _fetch_classes(
         db: Session,
         tenant_id,
         start_date: date,
@@ -127,18 +149,15 @@ class ClassesService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-        page: int = 1,
-        limit: int = 20,
-    ) -> tuple[List[GymClass], int]:
+    ) -> List[GymClass]:
         """
-        List classes for a tenant in a date range, with optional search and sorting.
+        Classes for a tenant in a date range, with optional search and sorting.
         Rules:
           - Classes for this tenant: trainer belongs to tenant, OR training programme belongs to tenant.
           - Status/publish gating is based on gym_classes.status + gym_classes.publish_at.
           - Always include status != 'draft'.
           - For status = 'draft', include only when publish_at <= tenant's current time.
         """
-        # Resolve tenant timezone from settings.gym_config.organization_config
         gym_config = GymConfigService.get_gym_config(db, tenant_id)
         tz = GymConfigService.resolve_zoneinfo(gym_config)
         tenant_now: datetime = datetime.now(tz)
@@ -165,16 +184,13 @@ class ClassesService:
             )
         )
 
-        # Optional filter by training programme location_id
         if location_id is not None:
             query = query.filter(fp.location_id == location_id)
 
-        # Search by title
         if search:
             like = f"%{search}%"
             query = query.filter(GymClass.title.ilike(like))
 
-        # Sorting
         sort_column = None
         if sort_by == "date":
             sort_column = GymClass.class_date
@@ -188,14 +204,10 @@ class ClassesService:
                 sort_column.asc() if sort_order.lower() == "asc" else sort_column.desc()
             )
         else:
-            # Default ordering
             query = query.order_by(GymClass.class_date, GymClass.start_time)
 
-        all_classes: List[GymClass] = query.all()
-
-        # Post-filter draft classes by publish_at vs tenant current time
         result: List[GymClass] = []
-        for gym_class in all_classes:
+        for gym_class in query.all():
             status = (gym_class.status or "").lower()
             if status == "draft":
                 publish_at = gym_class.publish_at
@@ -204,12 +216,222 @@ class ClassesService:
                 if publish_at <= tenant_now:
                     result.append(gym_class)
                 continue
-
             result.append(gym_class)
+        return result
 
-        total = len(result)
+    @staticmethod
+    def list_classes(
+        db: Session,
+        tenant_id,
+        start_date: date,
+        end_date: date,
+        location_id: Optional[Any] = None,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[GymClass], int]:
+        result = ClassesService._fetch_classes(
+            db,
+            tenant_id,
+            start_date,
+            end_date,
+            location_id=location_id,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
         offset = (page - 1) * limit
-        return result[offset : offset + limit], total
+        return result[offset : offset + limit], len(result)
+
+    @staticmethod
+    def _programme_id(raw: Any) -> int:
+        try:
+            pid = int(raw) if raw is not None else 0
+        except (TypeError, ValueError):
+            return 0
+        return pid if pid > 0 else 0
+
+    @staticmethod
+    def _catalog_dicts(
+        db: Session, tenant_id: str, classes: List[GymClass]
+    ) -> list[dict]:
+        """Class + trainer + program. Layouts and live occupancy are not cached."""
+        trainer_ids = {
+            c.trainer_id for c in classes if getattr(c, "trainer_id", None) is not None
+        }
+        trainer_by_id: dict[str, dict] = {}
+        if trainer_ids:
+            rows = db.execute(
+                select(User.id, User.first_name, User.last_name, User.avatar).where(
+                    User.id.in_(list(trainer_ids))
+                )
+            ).all()
+            for tid, first, last, avatar in rows:
+                full = f"{first or ''} {last or ''}".strip()
+                trainer_by_id[str(tid)] = {"name": full or None, "image": avatar}
+
+        programme_ids = set()
+        for c in classes:
+            pid = ClassesService._programme_id(getattr(c, "training_programme_id", None))
+            if pid:
+                programme_ids.add(pid)
+        program_by_id: dict[int, FitnessProgram] = {}
+        if programme_ids:
+            programs = (
+                db.query(FitnessProgram)
+                .filter(
+                    FitnessProgram.tenant_id == tenant_id,
+                    FitnessProgram.id.in_(list(programme_ids)),
+                )
+                .all()
+            )
+            program_by_id = {int(p.id): p for p in programs}
+
+        payload: list[dict] = []
+        for gym_class in classes:
+            item = GymClassResponse.model_validate(gym_class).model_dump(mode="json")
+            trainer = trainer_by_id.get(str(getattr(gym_class, "trainer_id", "")), {})
+            item["trainer_name"] = trainer.get("name")
+            item["trainer_image"] = trainer.get("image")
+            pid = ClassesService._programme_id(
+                getattr(gym_class, "training_programme_id", None)
+            )
+            item["program"] = FitnessProgramsService.program_short_payload(
+                program_by_id.get(pid) if pid else None
+            )
+            item["fully_booked"] = False
+            payload.append(item)
+        return payload
+
+    @staticmethod
+    def _class_id(row: dict) -> Optional[UUID]:
+        class_id = row.get("id")
+        if class_id is None:
+            return None
+        return UUID(class_id) if isinstance(class_id, str) else class_id
+
+    @staticmethod
+    def _load_layouts(db: Session, rows: list[dict]) -> dict:
+        ids = []
+        for row in rows:
+            cid = ClassesService._class_id(row)
+            if cid is not None:
+                ids.append(cid)
+        if not ids:
+            return {}
+        found = (
+            db.query(GymClass.id, GymClass.layouts)
+            .filter(GymClass.id.in_(ids))
+            .all()
+        )
+        return {class_id: layouts for class_id, layouts in found}
+
+    @staticmethod
+    def _live_proxy(row: dict, layouts: Any = None) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=ClassesService._class_id(row),
+            layouts=layouts,
+            layout_id=row.get("layout_id"),
+            max_bookings=row.get("max_bookings"),
+            max_waitings=row.get("max_waitings"),
+        )
+
+    @staticmethod
+    def _with_live_fields(db: Session, row: dict, layouts: Any = None) -> GymClassResponse:
+        item = dict(row)
+        item.pop("layouts", None)
+        proxy = ClassesService._live_proxy(item, layouts=layouts)
+        item["fully_booked"] = ClassesService.fully_booked_for_class(db, proxy, None)
+        return GymClassResponse.model_validate(item)
+
+    @staticmethod
+    def _with_live_fields_for_page(
+        db: Session, rows: list[dict]
+    ) -> List[GymClassResponse]:
+        layout_by_id = ClassesService._load_layouts(db, rows)
+        return [
+            ClassesService._with_live_fields(
+                db, row, layouts=layout_by_id.get(ClassesService._class_id(row))
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def get_location_classes(
+        db: Session,
+        tenant_id: str,
+        location_id: Any,
+        start_date: date,
+        end_date: date,
+    ) -> list[dict]:
+        """
+        Location catalog for a date window, served from Redis.
+
+        Same pattern as locations: the list is cached whole; search/sort never
+        writes here. Concurrent misses each run the query.
+        """
+
+        def loader() -> list[dict]:
+            rows = ClassesService._fetch_classes(
+                db,
+                tenant_id,
+                start_date,
+                end_date,
+                location_id=location_id,
+            )
+            return ClassesService._catalog_dicts(db, tenant_id, rows)
+
+        payload = cache.get_or_set(
+            ClassesService.cache_key(tenant_id, location_id, start_date, end_date),
+            loader,
+            ttl=CACHE_TTL,
+        )
+        return payload if isinstance(payload, list) else []
+
+    @staticmethod
+    def list_location_classes(
+        db: Session,
+        tenant_id: str,
+        location_id: Any,
+        start_date: date,
+        end_date: date,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: str = "asc",
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[GymClassResponse], int]:
+        """
+        Location-scoped class list for the client API.
+
+        A plain request is paginated out of the cached catalog, then live
+        occupancy is applied to the page only. Search or sort goes to the
+        database so those queries never pollute the cache.
+        """
+        if not search and sort_by is None:
+            rows = ClassesService.get_location_classes(
+                db, tenant_id, location_id, start_date, end_date
+            )
+            offset = (page - 1) * limit
+            page_rows = rows[offset : offset + limit]
+            return ClassesService._with_live_fields_for_page(db, page_rows), len(rows)
+
+        classes, total = ClassesService.list_classes(
+            db,
+            tenant_id=tenant_id,
+            start_date=start_date,
+            end_date=end_date,
+            location_id=location_id,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            limit=limit,
+        )
+        catalog = ClassesService._catalog_dicts(db, tenant_id, classes)
+        return ClassesService._with_live_fields_for_page(db, catalog), total
 
     @staticmethod
     def get_class_details(

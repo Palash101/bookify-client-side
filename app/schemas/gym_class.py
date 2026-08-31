@@ -52,7 +52,6 @@ class GymClassResponse(GymClassBase):
     updated_at: Optional[datetime] = None
     schedule_id: Optional[int] = None
     layout_id: Optional[Union[int, UUID, str]] = None
-    layouts: Optional[Any] = None
     fully_booked: bool = Field(
         default=False,
         description=(

@@ -2,17 +2,14 @@ from datetime import date, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 from app.core.db.session import get_db
 from app.dependencies import get_current_tenant_id, get_current_active_user
 from app.schemas.gym_class import (
-    GymClassResponse,
     ClassesListResponse,
     ClassDetailsOuterResponse,
 )
 from app.schemas.transactions import build_pagination
 from app.services.classes_service.classes_service import ClassesService
-from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 import uuid
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
@@ -49,81 +46,22 @@ async def get_classes_by_date_for_location(
     start_date = date.today()
     end_date = start_date + timedelta(days=days - 1)
 
-    classes, total = ClassesService.list_classes(
+    classes, total = ClassesService.list_location_classes(
         db,
         tenant_id=tenant_id,
+        location_id=location_id,
         start_date=start_date,
         end_date=end_date,
-        location_id=location_id,
         search=search,
         sort_by=sort_by,
         sort_order=sort_order,
         page=page,
         limit=limit,
     )
-
-    trainer_ids = {c.trainer_id for c in classes if getattr(c, "trainer_id", None) is not None}
-    trainer_by_id: dict[str, dict] = {}
-    if trainer_ids:
-        rows = (
-            db.execute(
-                select(User.id, User.first_name, User.last_name, User.avatar).where(
-                    User.id.in_(list(trainer_ids))
-                )
-            )
-            .all()
-        )
-        for tid, first, last, avatar in rows:
-            full = f"{first or ''} {last or ''}".strip()
-            trainer_by_id[str(tid)] = {
-                "name": full or None,
-                "image": avatar,
-            }
-
-    programme_ids = set()
-    for c in classes:
-        pid = getattr(c, "training_programme_id", None)
-        try:
-            pid_int = int(pid) if pid is not None else 0
-        except (TypeError, ValueError):
-            pid_int = 0
-        if pid_int > 0:
-            programme_ids.add(pid_int)
-
-    program_by_id: dict[int, FitnessProgram] = {}
-    if programme_ids:
-        programs = (
-            db.query(FitnessProgram)
-            .filter(
-                FitnessProgram.tenant_id == tenant_id,
-                FitnessProgram.id.in_(list(programme_ids)),
-            )
-            .all()
-        )
-        program_by_id = {int(p.id): p for p in programs}
-
-    data = []
-    for c in classes:
-        item = GymClassResponse.model_validate(c).model_dump()
-        trainer = trainer_by_id.get(str(getattr(c, "trainer_id", "")), {})
-        item["trainer_name"] = trainer.get("name")
-        item["trainer_image"] = trainer.get("image")
-        pid = getattr(c, "training_programme_id", None)
-        try:
-            pid_int = int(pid) if pid is not None else 0
-        except (TypeError, ValueError):
-            pid_int = 0
-        item["program"] = FitnessProgramsService.program_short_payload(
-            program_by_id.get(pid_int) if pid_int > 0 else None
-        )
-        live_layout = ClassesService._with_live_layout_status(db, c)
-        item["layouts"] = live_layout
-        item["fully_booked"] = ClassesService.fully_booked_for_class(db, c, live_layout)
-        data.append(GymClassResponse.model_validate(item))
     return {
         "success": True,
         "message": "Classes fetched successfully",
-        "data": data,
+        "data": classes,
         "count": len(classes),
         "pagination": build_pagination(page, limit, total),
     }
