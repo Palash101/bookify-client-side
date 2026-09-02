@@ -67,6 +67,13 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
+        "https://www.fitnezstudios.com",
+        "https://fitnezstudios.com",
+    ]
+    # Marketing / hub sites: resolve tenant via tenant_id param, not org domain.
+    TENANT_HUB_HOSTNAMES: List[str] = [
+        "www.fitnezstudios.com",
+        "fitnezstudios.com",
     ]
     
     # Email

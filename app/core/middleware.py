@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware as FastAPICORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.core.db.master_db import SessionLocal
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
@@ -24,6 +25,57 @@ EXCLUDED_PATHS = [
     f"{_api_prefix}/redoc",
     f"{_api_prefix}/openapi.json",
 ]
+
+
+def _hostname_from_origin_header(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    parsed = urlparse(raw)
+    if not parsed.hostname:
+        return None
+    return parsed.hostname.lower()
+
+
+def _extract_origin_hostname(request: Request) -> Optional[str]:
+    """Browser origin only (Origin / Referer). Used for hub-site tenant routing."""
+    for header in ("origin", "referer"):
+        host = _hostname_from_origin_header(request.headers.get(header))
+        if host:
+            return host
+    return None
+
+
+def _is_hub_hostname(hostname: Optional[str]) -> bool:
+    if not hostname:
+        return False
+    allowed = {h.strip().lower() for h in settings.TENANT_HUB_HOSTNAMES if h.strip()}
+    return hostname.lower() in allowed
+
+
+def _hub_tenant_id(request: Request) -> Optional[str]:
+    raw = request.headers.get("X-Tenant-Id") or request.query_params.get("tenant_id")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
+def _lookup_active_organization(
+    db: Session,
+    *,
+    organization_id: Optional[str] = None,
+    domain: Optional[str] = None,
+) -> Optional[Organization]:
+    query = db.query(Organization).filter(Organization.status == "active")
+    if organization_id:
+        return (
+            query.filter(
+                func.lower(Organization.organization_id) == organization_id.strip().lower()
+            ).first()
+        )
+    if domain:
+        return query.filter(Organization.domain == domain).first()
+    return None
 
 
 def _extract_request_domain(request: Request) -> Optional[str]:
@@ -130,13 +182,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
     """
     Middleware that resolves the active organization for every API request.
 
-    A request is accepted if either:
-      - `X-Tenant-Key` header is present and matches an active `OrganizationAPIKey`
-        whose linked `Organization` is active, or
-      - the request domain matches an active `Organization.domain`.
+    Resolution order:
+      1. `X-Tenant-Key` — active API key → organization (any caller).
+      2. Hub origin (`www.fitnezstudios.com`, etc.) — `tenant_id` query param or
+         `X-Tenant-Id` header → organization by id.
+      3. Tenant site domain — `Origin` / `Referer` matches `Organization.domain`.
 
-    On success, `request.state.organization_id` and `request.state.organization`
-    are populated. If neither identifier is present, the request is rejected with 401.
+    On success, `request.state.tenant_id` and `request.state.tenant` are set.
     """
 
     async def dispatch(self, request: Request, call_next):
@@ -168,23 +220,33 @@ class TenantMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         x_tenant_key = request.headers.get("X-Tenant-Key")
+        origin_hostname = _extract_origin_hostname(request)
         request_domain = _extract_request_domain(request)
+        hub_request = _is_hub_hostname(origin_hostname)
+        hub_tenant_id = _hub_tenant_id(request) if hub_request else None
         # Never log the key itself -- it is a credential. Whether one was sent
         # is all that is needed to debug tenant resolution.
         logger.debug(
-            "Resolving tenant: domain=%s api_key=%s",
+            "Resolving tenant: domain=%s origin=%s hub=%s api_key=%s hub_tenant_id=%s",
             request_domain,
+            origin_hostname,
+            hub_request,
             "present" if x_tenant_key else "absent",
+            hub_tenant_id or "(none)",
         )
 
-        if not x_tenant_key and not request_domain:
+        if not x_tenant_key and not hub_request and not request_domain:
             return _unauthorized(
                 "Either X-Tenant-Key header or a request domain is required"
             )
 
-        # Domain-only requests can be served entirely from Redis, without
-        # opening a master DB session at all.
-        if not x_tenant_key:
+        if hub_request and not x_tenant_key and not hub_tenant_id:
+            return _unauthorized(
+                "tenant_id query parameter or X-Tenant-Id header is required for hub requests"
+            )
+
+        # Domain-only tenant sites can be served entirely from Redis.
+        if not x_tenant_key and not hub_request:
             cached_org = _org_from_cache(request_domain)
             if cached_org is not None:
                 request.state.tenant_id = cached_org.organization_id
@@ -208,28 +270,20 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 if not api_key:
                     return _unauthorized("Invalid or inactive organization API key")
 
-                organization = (
-                    db.query(Organization)
-                    .filter(
-                        Organization.organization_id == api_key.tenant_id,
-                        Organization.status == "active",
-                    )
-                    .first()
+                organization = _lookup_active_organization(
+                    db, organization_id=api_key.tenant_id
+                )
+            elif hub_request:
+                organization = _lookup_active_organization(
+                    db, organization_id=hub_tenant_id
                 )
             else:
-                organization = (
-                    db.query(Organization)
-                    .filter(
-                        Organization.domain == request_domain,
-                        Organization.status == "active",
-                    )
-                    .first()
-                )
+                organization = _lookup_active_organization(db, domain=request_domain)
 
             if not organization:
                 return _unauthorized("Organization not found or inactive")
 
-            if not x_tenant_key:
+            if not x_tenant_key and not hub_request:
                 _cache_org(request_domain, organization)
 
             request.state.tenant_id = organization.organization_id
@@ -304,6 +358,13 @@ def origin_allowed_by_org_domain(origin: str) -> bool:
     return host in _active_org_hostnames()
 
 
+def origin_allowed_by_hub(origin: str) -> bool:
+    host = _hostname_from_origin_or_domain(origin)
+    if not host:
+        return False
+    return _is_hub_hostname(host)
+
+
 class DynamicCORSMiddleware(FastAPICORSMiddleware):
     """
     Allow origins from `BACKEND_CORS_ORIGINS` plus any active Organization.domain
@@ -312,5 +373,7 @@ class DynamicCORSMiddleware(FastAPICORSMiddleware):
 
     def is_allowed_origin(self, origin: str) -> bool:
         if super().is_allowed_origin(origin):
+            return True
+        if origin_allowed_by_hub(origin):
             return True
         return origin_allowed_by_org_domain(origin)
