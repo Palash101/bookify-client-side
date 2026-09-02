@@ -354,6 +354,8 @@ async def initiate_package_purchase(
             "package_pricing_id": str(pricing.id),
             "persons": persons_requested,
             "session_type": pricing.session_type,
+            "session_count": pricing.session_count,
+            "is_unlimited": bool(pricing.is_unlimited),
             "checkout_platform": checkout_platform,
             **discount_meta,
             **checkout_origin_metadata(request),

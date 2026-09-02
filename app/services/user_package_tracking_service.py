@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.class_booking import ClassBooking, ClassBookingStatus
 from app.models.package import Package
+from app.models.package_pricing import PackagePricing
 from app.models.sales import Sale, sale_session_count
 from app.models.user_package import UserPackage
 from app.models.user_package_tracking import (
@@ -138,13 +139,27 @@ def _tracking_exists(
     )
 
 
-def _resolved_session_total(sale: Sale, user_package: UserPackage) -> Optional[int]:
+def _session_total_from_pricing(db: Session, user_package: UserPackage) -> Optional[int]:
+    if user_package.pricing_id is None:
+        return None
+    pricing = db.query(PackagePricing).filter(PackagePricing.id == user_package.pricing_id).first()
+    if pricing is None or pricing.is_unlimited:
+        return None
+    if pricing.session_count is None:
+        return None
+    try:
+        return int(pricing.session_count)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolved_session_total(db: Session, sale: Sale, user_package: UserPackage) -> Optional[int]:
     total = _package_session_total(user_package, sale)
     if total is not None:
         return total
     if user_package.session_count is not None:
         return int(user_package.session_count)
-    return None
+    return _session_total_from_pricing(db, user_package)
 
 
 def record_package_purchase_credit(
@@ -166,7 +181,7 @@ def record_package_purchase_credit(
     ):
         return None
 
-    sessions = _resolved_session_total(sale, user_package)
+    sessions = _resolved_session_total(db, sale, user_package)
     if sessions is None:
         return None
 
@@ -359,3 +374,42 @@ def apply_package_session_debit_for_booking(
         notes=notes,
     )
     return 1 if row is not None else 0
+
+
+def backfill_missing_booking_debits(
+    db: Session,
+    *,
+    user_package: UserPackage,
+    sale: Sale,
+) -> None:
+    """
+    Write ledger debits for package bookings that deducted sessions but have no tracking row
+    (e.g. when session_count was null at booking time).
+    """
+    refs = _booking_package_ref_ids(user_package)
+    bookings = (
+        db.query(ClassBooking)
+        .filter(
+            ClassBooking.user_package_id.in_(refs),
+            ClassBooking.payment_mode == "package",
+            ClassBooking.status.in_(_ACTIVE_PACKAGE_BOOKING_STATUSES),
+            ClassBooking.sessions_deducted > 0,
+        )
+        .all()
+    )
+    for booking in bookings:
+        if _tracking_exists(
+            db,
+            reference_id=booking.id,
+            txn_type=SessionTxnType.debit,
+            txn_source=SessionTxnSource.booking,
+        ):
+            continue
+        record_booking_debit(
+            db,
+            user_package=user_package,
+            sale=sale,
+            booking=booking,
+            sessions=int(booking.sessions_deducted or 1),
+            notes="Class booking",
+        )
