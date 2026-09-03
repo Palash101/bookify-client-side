@@ -28,12 +28,17 @@ EXCLUDED_PATHS = [
 
 
 def _hostname_from_origin_header(raw: Optional[str]) -> Optional[str]:
+    """
+    Host used for hub matching. Keeps port when present so local hubs like
+    ``localhost:3001`` are distinct from ``localhost:3000``.
+    """
     if not raw:
         return None
     parsed = urlparse(raw)
     if not parsed.hostname:
         return None
-    return parsed.hostname.lower()
+    host = parsed.netloc.split("@")[-1].lower()
+    return host or None
 
 
 def _extract_origin_hostname(request: Request) -> Optional[str]:
@@ -184,8 +189,8 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
     Resolution order:
       1. `X-Tenant-Key` — active API key → organization (any caller).
-      2. Hub origin (`booking.fitnezstudios.com`) — `tenant_id` query param or
-         `X-Tenant-Id` header required → organization by id.
+      2. Hub origin (`localhost:3001` locally; later `booking.fitnezstudios.com`) —
+         `tenant_id` query param or `X-Tenant-Id` header required → organization by id.
       3. Tenant site domain — `Origin` / `Referer` matches `Organization.domain`.
 
     On success, `request.state.tenant_id` and `request.state.tenant` are set.
@@ -359,7 +364,10 @@ def origin_allowed_by_org_domain(origin: str) -> bool:
 
 
 def origin_allowed_by_hub(origin: str) -> bool:
-    host = _hostname_from_origin_or_domain(origin)
+    # Prefer host:port (netloc) so local hubs like localhost:3001 match.
+    host = _hostname_from_origin_header(origin)
+    if not host:
+        host = _hostname_from_origin_or_domain(origin)
     if not host:
         return False
     return _is_hub_hostname(host)

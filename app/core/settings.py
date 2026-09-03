@@ -67,11 +67,14 @@ class Settings(BaseSettings):
         "http://127.0.0.1:5173",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "https://booking.fitnezstudios.com",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
     ]
-    # Booking hub site: resolve tenant via tenant_id (query / X-Tenant-Id), not org domain.
+    # Booking hub site (local for now; switch back to booking.fitnezstudios.com later).
+    # Use host:port for localhost so :3001 is distinct from other local apps.
     TENANT_HUB_HOSTNAMES: List[str] = [
-        "booking.fitnezstudios.com",
+        "localhost:3001",
+        "127.0.0.1:3001",
     ]
     
     # Email
