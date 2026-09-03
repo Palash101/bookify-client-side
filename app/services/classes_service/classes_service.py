@@ -400,32 +400,38 @@ class ClassesService:
         search: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: str = "asc",
-    ) -> List[GymClassResponse]:
+        page: int = 1,
+        limit: int = 20,
+    ) -> tuple[List[GymClassResponse], int]:
         """
         Location-scoped class list for the client API.
 
-        A plain request is served from the cached catalog, then live occupancy
-        is applied. Search or sort goes to the database so those queries never
-        pollute the cache.
+        A plain request is paginated out of the cached catalog, then live
+        occupancy is applied to the page only. Search or sort goes to the
+        database so those queries never pollute the cache.
         """
         if not search and sort_by is None:
             rows = ClassesService.get_location_classes(
                 db, tenant_id, location_id, start_date, end_date
             )
-            return ClassesService._with_live_fields_for_page(db, rows)
+            offset = (page - 1) * limit
+            page_rows = rows[offset : offset + limit]
+            return ClassesService._with_live_fields_for_page(db, page_rows), len(rows)
 
-        rows = ClassesService._fetch_classes(
+        classes, total = ClassesService.list_classes(
             db,
-            tenant_id,
-            start_date,
-            end_date,
+            tenant_id=tenant_id,
+            start_date=start_date,
+            end_date=end_date,
             location_id=location_id,
             search=search,
             sort_by=sort_by,
             sort_order=sort_order,
+            page=page,
+            limit=limit,
         )
-        catalog = ClassesService._catalog_dicts(db, tenant_id, rows)
-        return ClassesService._with_live_fields_for_page(db, catalog)
+        catalog = ClassesService._catalog_dicts(db, tenant_id, classes)
+        return ClassesService._with_live_fields_for_page(db, catalog), total
 
     @staticmethod
     def get_class_details(

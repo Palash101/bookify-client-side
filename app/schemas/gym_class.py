@@ -4,6 +4,9 @@ from datetime import date as DateType, time, datetime
 from uuid import UUID
 from decimal import Decimal
 
+from app.schemas.transactions import PaginationMeta
+
+
 class GymClassBase(BaseModel):
     title: Optional[str] = None
     theme_name: Optional[str] = None
@@ -66,6 +69,7 @@ class ClassesListResponse(BaseModel):
     message: str = "Classes fetched successfully"
     data: List[GymClassResponse]
     count: int
+    pagination: Optional[PaginationMeta] = None
 
 
 # ---------------------------------------------------------------------------

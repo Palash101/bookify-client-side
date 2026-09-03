@@ -8,6 +8,7 @@ from app.schemas.gym_class import (
     ClassesListResponse,
     ClassDetailsOuterResponse,
 )
+from app.schemas.transactions import build_pagination
 from app.services.classes_service.classes_service import ClassesService
 import uuid
 from app.models.fitness_program import FitnessProgram
@@ -33,6 +34,8 @@ async def get_classes_by_date_for_location(
     sort_order: str = Query(
         "asc", description="Sort direction: asc or desc"
     ),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
@@ -43,7 +46,7 @@ async def get_classes_by_date_for_location(
     start_date = date.today()
     end_date = start_date + timedelta(days=days - 1)
 
-    classes = ClassesService.list_location_classes(
+    classes, total = ClassesService.list_location_classes(
         db,
         tenant_id=tenant_id,
         location_id=location_id,
@@ -52,12 +55,15 @@ async def get_classes_by_date_for_location(
         search=search,
         sort_by=sort_by,
         sort_order=sort_order,
+        page=page,
+        limit=limit,
     )
     return {
         "success": True,
         "message": "Classes fetched successfully",
         "data": classes,
         "count": len(classes),
+        "pagination": build_pagination(page, limit, total),
     }
 
 

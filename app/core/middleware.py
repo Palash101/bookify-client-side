@@ -188,9 +188,9 @@ class TenantMiddleware(BaseHTTPMiddleware):
     Middleware that resolves the active organization for every API request.
 
     Resolution order:
-      1. `X-Tenant-Key` — active API key → organization (any caller).
-      2. Hub origin (`localhost:3001` locally; later `booking.fitnezstudios.com`) —
-         `tenant_id` query param or `X-Tenant-Id` header required → organization by id.
+      1. Hub origin (`localhost:3001` locally; later `booking.fitnezstudios.com`)
+         + `tenant_id` / `X-Tenant-Id` → organization by id.
+      2. `X-Tenant-Key` — active API key → organization (non-hub callers).
       3. Tenant site domain — `Origin` / `Referer` matches `Organization.domain`.
 
     On success, `request.state.tenant_id` and `request.state.tenant` are set.
@@ -240,18 +240,23 @@ class TenantMiddleware(BaseHTTPMiddleware):
             hub_tenant_id or "(none)",
         )
 
-        if not x_tenant_key and not hub_request and not request_domain:
+        # Hub + tenant_id wins over X-Tenant-Key so booking sites are not blocked
+        # by a stale/wrong API key the frontend may still send.
+        use_hub = bool(hub_request and hub_tenant_id)
+        use_api_key = bool(x_tenant_key) and not use_hub
+
+        if not use_api_key and not use_hub and not hub_request and not request_domain:
             return _unauthorized(
                 "Either X-Tenant-Key header or a request domain is required"
             )
 
-        if hub_request and not x_tenant_key and not hub_tenant_id:
+        if hub_request and not use_hub and not use_api_key:
             return _unauthorized(
                 "tenant_id query parameter or X-Tenant-Id header is required for hub requests"
             )
 
         # Domain-only tenant sites can be served entirely from Redis.
-        if not x_tenant_key and not hub_request:
+        if not use_api_key and not use_hub:
             cached_org = _org_from_cache(request_domain)
             if cached_org is not None:
                 request.state.tenant_id = cached_org.organization_id
@@ -262,7 +267,11 @@ class TenantMiddleware(BaseHTTPMiddleware):
         try:
             organization: Optional[Organization] = None
 
-            if x_tenant_key:
+            if use_hub:
+                organization = _lookup_active_organization(
+                    db, organization_id=hub_tenant_id
+                )
+            elif use_api_key:
                 api_key = (
                     db.query(OrganizationAPIKey)
                     .filter(
@@ -278,17 +287,13 @@ class TenantMiddleware(BaseHTTPMiddleware):
                 organization = _lookup_active_organization(
                     db, organization_id=api_key.tenant_id
                 )
-            elif hub_request:
-                organization = _lookup_active_organization(
-                    db, organization_id=hub_tenant_id
-                )
             else:
                 organization = _lookup_active_organization(db, domain=request_domain)
 
             if not organization:
                 return _unauthorized("Organization not found or inactive")
 
-            if not x_tenant_key and not hub_request:
+            if not use_api_key and not use_hub:
                 _cache_org(request_domain, organization)
 
             request.state.tenant_id = organization.organization_id
