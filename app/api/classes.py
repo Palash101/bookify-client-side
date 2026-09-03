@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db
-from app.dependencies import get_current_tenant_id, get_current_active_user
+from app.dependencies import get_current_tenant_id, get_optional_current_user
 from app.schemas.gym_class import (
     ClassesListResponse,
     ClassDetailsOuterResponse,
@@ -70,14 +70,15 @@ async def get_class_details_for_location(
     location_id: uuid.UUID,
     class_id: uuid.UUID,
     tenant_id: str = Depends(get_current_tenant_id),
-    current_user: User = Depends(get_current_active_user),
+    current_user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Location-scoped class details.
     Route: /api/v1/locations/{location_id}/classes/{class_id}
 
-    Note: This currently validates the class is within the requested location.
+    Bearer token is optional: public class info works without login (e.g. iframe embed).
+    When a valid token is sent, ``user_booking`` reflects the caller's active booking.
     """
     # DB-level guard: gym_classes has no direct location_id.
     # We validate through gym_classes.training_programme_id -> fitness_programs.location_id.
@@ -122,7 +123,7 @@ async def get_class_details_for_location(
         db=db,
         tenant_id=tenant_id,
         class_id=class_id,
-        user_id=current_user.id,
+        user_id=current_user.id if current_user else None,
     )
 
     if payload is None:

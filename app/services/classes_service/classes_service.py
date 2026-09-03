@@ -432,11 +432,13 @@ class ClassesService:
         db: Session,
         tenant_id,
         class_id,
-        user_id,
+        user_id: Optional[UUID] = None,
     ):
         """
-        Returns a single class details payload including the current user's active booking
-        (if any) with cancellation eligibility.
+        Returns a single class details payload.
+
+        When ``user_id`` is set, includes that user's active booking (if any) with
+        cancellation eligibility. Without a user, ``user_booking.has_booked`` is false.
         """
         gym_class = (
             db.query(GymClass)
@@ -559,24 +561,25 @@ class ClassesService:
                 )
         # If there are no layout seats configured, return empty.
 
-        # Current user's booking (if any) for this class.
-        active_statuses = (
-            ClassBookingStatus.confirmed,
-            ClassBookingStatus.waiting,
-            ClassBookingStatus.pending,
-            ClassBookingStatus.pending_payment,
-        )
-        booking = (
-            db.query(ClassBooking)
-            .filter(
-                ClassBooking.tenant_id == tenant_id,
-                ClassBooking.class_id == class_id,
-                ClassBooking.user_id == user_id,
-                ClassBooking.status.in_(list(active_statuses)),
+        booking = None
+        if user_id is not None:
+            active_statuses = (
+                ClassBookingStatus.confirmed,
+                ClassBookingStatus.waiting,
+                ClassBookingStatus.pending,
+                ClassBookingStatus.pending_payment,
             )
-            .order_by(ClassBooking.created_at.desc())
-            .first()
-        )
+            booking = (
+                db.query(ClassBooking)
+                .filter(
+                    ClassBooking.tenant_id == tenant_id,
+                    ClassBooking.class_id == class_id,
+                    ClassBooking.user_id == user_id,
+                    ClassBooking.status.in_(list(active_statuses)),
+                )
+                .order_by(ClassBooking.created_at.desc())
+                .first()
+            )
 
         live_layout = ClassesService._with_live_layout_status(db, gym_class)
 

@@ -184,8 +184,8 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
     Resolution order:
       1. `X-Tenant-Key` — active API key → organization (any caller).
-      2. Hub origin (`www.fitnezstudios.com`, etc.) — `tenant_id` query param or
-         `X-Tenant-Id` header → organization by id.
+      2. Hub origin (`booking.fitnezstudios.com`) — `tenant_id` query param or
+         `X-Tenant-Id` header required → organization by id.
       3. Tenant site domain — `Origin` / `Referer` matches `Organization.domain`.
 
     On success, `request.state.tenant_id` and `request.state.tenant` are set.
