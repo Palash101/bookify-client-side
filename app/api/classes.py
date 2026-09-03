@@ -21,11 +21,16 @@ router = APIRouter()
 @router.get("/locations/{location_id}/classes", response_model=ClassesListResponse)
 async def get_classes_by_date_for_location(
     location_id: uuid.UUID,
+    class_date: Optional[date] = Query(
+        None,
+        alias="date",
+        description="Return all classes for this specific date (YYYY-MM-DD). If omitted, uses days range from today.",
+    ),
     days: int = Query(
         7,
         ge=1,
         le=30,
-        description="How many days ahead from today to include (e.g. 7 or 15).",
+        description="How many days ahead from today to include when date is not provided (e.g. 7 or 15).",
     ),
     search: Optional[str] = Query(None, description="Search classes by title"),
     sort_by: Optional[str] = Query(
@@ -43,8 +48,12 @@ async def get_classes_by_date_for_location(
     Location-scoped classes list.
     Route: /api/v1/locations/{location_id}/classes
     """
-    start_date = date.today()
-    end_date = start_date + timedelta(days=days - 1)
+    if class_date is not None:
+        start_date = class_date
+        end_date = class_date
+    else:
+        start_date = date.today()
+        end_date = start_date + timedelta(days=days - 1)
 
     classes, total = ClassesService.list_location_classes(
         db,

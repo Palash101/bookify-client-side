@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Optional, List, Any
 from uuid import UUID
@@ -126,17 +126,15 @@ class ClassesService:
         return int(waiting_n) >= max_w
 
     @staticmethod
-    def cache_key(
-        tenant_id: str, location_id: Any, start_date: date, end_date: date
-    ) -> str:
-        """``t:ORG-110:class:{location}:{start}:{end}`` — that window's catalog."""
+    def cache_key(tenant_id: str, location_id: Any, class_date: date) -> str:
+        """``t:ORG-110:class:{location}:{YYYY-MM-DD}`` — one day per key."""
         return tenant_key(
-            tenant_id, "class", location_id, start_date.isoformat(), end_date.isoformat()
+            tenant_id, "class", location_id, class_date.isoformat()
         )
 
     @staticmethod
     def invalidate(tenant_id: str, location_id: Any) -> int:
-        """Drop every cached date window for this location after a class write."""
+        """Drop every cached day for this location after a class write."""
         return cache.delete_prefix(tenant_key(tenant_id, "class", location_id) + ":")
 
     @staticmethod
@@ -339,6 +337,57 @@ class ClassesService:
         )
 
     @staticmethod
+    def _occupancy_counts(
+        db: Session, class_ids: list[UUID]
+    ) -> tuple[dict[UUID, int], dict[UUID, int]]:
+        """Batch occupying + waiting booking counts for a page of classes."""
+        occupying: dict[UUID, int] = {}
+        waiting: dict[UUID, int] = {}
+        if not class_ids:
+            return occupying, waiting
+
+        occupying_statuses = (
+            ClassBookingStatus.confirmed,
+            ClassBookingStatus.pending,
+            ClassBookingStatus.pending_payment,
+        )
+        for class_id, n in (
+            db.query(ClassBooking.class_id, func.count(ClassBooking.id))
+            .filter(
+                ClassBooking.class_id.in_(class_ids),
+                ClassBooking.status.in_(list(occupying_statuses)),
+            )
+            .group_by(ClassBooking.class_id)
+            .all()
+        ):
+            occupying[class_id] = int(n or 0)
+
+        for class_id, n in (
+            db.query(ClassBooking.class_id, func.count(ClassBooking.id))
+            .filter(
+                ClassBooking.class_id.in_(class_ids),
+                ClassBooking.status == ClassBookingStatus.waiting,
+            )
+            .group_by(ClassBooking.class_id)
+            .all()
+        ):
+            waiting[class_id] = int(n or 0)
+
+        return occupying, waiting
+
+    @staticmethod
+    def _fully_booked_from_counts(
+        proxy: Any, occupying_n: int, waiting_n: int
+    ) -> bool:
+        cap = _effective_capacity(proxy)
+        if cap <= 0 or occupying_n < cap:
+            return False
+        max_w = int(getattr(proxy, "max_waitings", None) or 0)
+        if max_w <= 0:
+            return True
+        return waiting_n >= max_w
+
+    @staticmethod
     def _with_live_fields(db: Session, row: dict, layouts: Any = None) -> GymClassResponse:
         item = dict(row)
         item.pop("layouts", None)
@@ -351,12 +400,54 @@ class ClassesService:
         db: Session, rows: list[dict]
     ) -> List[GymClassResponse]:
         layout_by_id = ClassesService._load_layouts(db, rows)
-        return [
-            ClassesService._with_live_fields(
-                db, row, layouts=layout_by_id.get(ClassesService._class_id(row))
-            )
-            for row in rows
+        class_ids = [
+            cid
+            for cid in (ClassesService._class_id(row) for row in rows)
+            if cid is not None
         ]
+        occupying, waiting = ClassesService._occupancy_counts(db, class_ids)
+
+        out: List[GymClassResponse] = []
+        for row in rows:
+            item = dict(row)
+            item.pop("layouts", None)
+            cid = ClassesService._class_id(item)
+            proxy = ClassesService._live_proxy(
+                item, layouts=layout_by_id.get(cid) if cid else None
+            )
+            item["fully_booked"] = ClassesService._fully_booked_from_counts(
+                proxy,
+                occupying.get(cid, 0) if cid else 0,
+                waiting.get(cid, 0) if cid else 0,
+            )
+            out.append(GymClassResponse.model_validate(item))
+        return out
+
+    @staticmethod
+    def get_day_classes(
+        db: Session,
+        tenant_id: str,
+        location_id: Any,
+        class_date: date,
+    ) -> list[dict]:
+        """Cached catalog for a single calendar day."""
+
+        def loader() -> list[dict]:
+            rows = ClassesService._fetch_classes(
+                db,
+                tenant_id,
+                class_date,
+                class_date,
+                location_id=location_id,
+            )
+            return ClassesService._catalog_dicts(db, tenant_id, rows)
+
+        payload = cache.get_or_set(
+            ClassesService.cache_key(tenant_id, location_id, class_date),
+            loader,
+            ttl=CACHE_TTL,
+        )
+        return payload if isinstance(payload, list) else []
 
     @staticmethod
     def get_location_classes(
@@ -367,28 +458,24 @@ class ClassesService:
         end_date: date,
     ) -> list[dict]:
         """
-        Location catalog for a date window, served from Redis.
+        Location catalog for a date window, assembled from per-day Redis keys.
 
-        Same pattern as locations: the list is cached whole; search/sort never
-        writes here. Concurrent misses each run the query.
+        Each day is ``t:{tenant}:class:{location}:{YYYY-MM-DD}``. Search/sort
+        never writes here. Concurrent misses each run the query for that day.
         """
-
-        def loader() -> list[dict]:
-            rows = ClassesService._fetch_classes(
-                db,
-                tenant_id,
-                start_date,
-                end_date,
-                location_id=location_id,
+        if start_date == end_date:
+            return ClassesService.get_day_classes(
+                db, tenant_id, location_id, start_date
             )
-            return ClassesService._catalog_dicts(db, tenant_id, rows)
 
-        payload = cache.get_or_set(
-            ClassesService.cache_key(tenant_id, location_id, start_date, end_date),
-            loader,
-            ttl=CACHE_TTL,
-        )
-        return payload if isinstance(payload, list) else []
+        rows: list[dict] = []
+        day = start_date
+        while day <= end_date:
+            rows.extend(
+                ClassesService.get_day_classes(db, tenant_id, location_id, day)
+            )
+            day += timedelta(days=1)
+        return rows
 
     @staticmethod
     def list_location_classes(
