@@ -262,12 +262,12 @@ async def reset_password(
     if otp_tenant_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Verification token missing tenant. Request password reset again with X-Tenant-Key.",
+            detail="Verification token missing tenant. Request password reset again with tenant_id.",
         )
-    if otp_tenant_id != tenant_id:
+    if str(otp_tenant_id).strip().lower() != str(tenant_id).strip().lower():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-Tenant-Key does not match the tenant on your reset session.",
+            detail="Request tenant_id does not match the tenant on your reset session.",
         )
     AuthService.reset_password(
         db,

@@ -42,6 +42,12 @@ class AuthService:
     """
     Authentication service for user management.
     """
+
+    @staticmethod
+    def _tenant_matches(left: Optional[object], right: Optional[object]) -> bool:
+        if left is None or right is None:
+            return left is right
+        return str(left).strip().lower() == str(right).strip().lower()
     
     @staticmethod
     def get_user_by_email(db: Session, email: str, tenant_id: str) -> Optional[User]:
@@ -403,17 +409,17 @@ class AuthService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
                     "Verification token missing tenant. Request OTP again with "
-                    "X-Tenant-Key on login, register, or forgot-password."
+                    "`tenant_id` on login, register, or forgot-password."
                 ),
             )
         if (
             tenant_id is not None
             and otp_tenant_id is not None
-            and otp_tenant_id != tenant_id
+            and not AuthService._tenant_matches(otp_tenant_id, tenant_id)
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="X-Tenant-Key does not match the tenant on your verification session.",
+                detail="Request tenant_id does not match the tenant on your verification session.",
             )
 
         user_data: Optional[Dict[str, Any]] = None
@@ -739,10 +745,10 @@ class AuthService:
             tid_raw = claims.get("tenant_id")
             if tid_raw:
                 otp_tenant_id = str(tid_raw)
-            if otp_tenant_id is not None and otp_tenant_id != tenant_id:
+            if otp_tenant_id is not None and not AuthService._tenant_matches(otp_tenant_id, tenant_id):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="X-Tenant-Key does not match your session tenant.",
+                    detail="Request tenant_id does not match your session tenant.",
                 )
             effective_tenant = otp_tenant_id or tenant_id
             return AuthService.get_user_for_login(db, claims["email"], effective_tenant)
@@ -771,10 +777,10 @@ class AuthService:
                         detail="Access token tenant mismatch",
                         headers={"WWW-Authenticate": "Bearer"},
                     )
-            if user.tenant_id != tenant_id:
+            if not AuthService._tenant_matches(user.tenant_id, tenant_id):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="X-Tenant-Key does not match the user tenant.",
+                    detail="Request tenant_id does not match the user tenant.",
                 )
             if not user.is_active:
                 raise HTTPException(
