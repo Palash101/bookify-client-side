@@ -4,6 +4,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db as tenant_get_db
 from app.core.security import verify_token
+from app.models.role import Role
 from app.models.user import User
 from app.models.master_org import Organization
 from app.schemas.gym_config_value import GymConfigValue
@@ -177,6 +178,28 @@ async def get_gym_config_for_active_user(
     Share this dependency on endpoints that also use get_current_active_user — FastAPI caches the user dependency.
     """
     return GymConfigService.get_gym_config(db, current_user.tenant_id)
+
+
+async def get_current_staff_or_trainer(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    Allow staff-side users to scan class attendance QR codes.
+    """
+    role_key = db.query(Role.key).filter(Role.id == current_user.role_id).scalar()
+    normalized_role = str(role_key or "").strip().lower()
+    normalized_user_type = str(current_user.user_type or "").strip().lower()
+
+    if (
+        normalized_role not in {"admin", "staff", "trainer", "senior_trainer"}
+        and normalized_user_type not in {"admin", "staff", "trainer"}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only trainers or staff can scan attendance QR codes.",
+        )
+    return current_user
 
 
 async def get_current_tenant_id(

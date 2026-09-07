@@ -71,6 +71,20 @@ class BookingCreateResponse(BaseModel):
     data: BookingCreatedData
 
 
+class BookingQrData(BaseModel):
+    booking_id: UUID
+    booking_ref: Optional[str] = None
+    class_id: UUID
+    qr_token: str
+    expires_at: Optional[str] = None
+
+
+class BookingQrResponse(BaseModel):
+    success: bool = True
+    message: str
+    data: BookingQrData
+
+
 class BookingCancelledData(BaseModel):
     booking_id: UUID
     status: str
@@ -82,6 +96,26 @@ class BookingCancelResponse(BaseModel):
     success: bool = True
     message: str
     data: BookingCancelledData
+
+
+class AttendanceCheckInRequestBody(BaseModel):
+    qr_token: str
+
+
+class AttendanceCheckInData(BaseModel):
+    booking_id: UUID
+    booking_ref: Optional[str] = None
+    class_id: UUID
+    user_id: UUID
+    member_name: Optional[str] = None
+    checked_in_at: str
+    already_checked_in: bool = False
+
+
+class AttendanceCheckInResponse(BaseModel):
+    success: bool = True
+    message: str
+    data: AttendanceCheckInData
 
 
 class MemberUpcomingBookingItem(BaseModel):

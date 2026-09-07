@@ -117,6 +117,7 @@ class ClassBooking(Base):
 
     sessions_deducted = Column(Integer, nullable=False, server_default="0")
     promoted_from_waiting_at = Column(DateTime(timezone=True), nullable=True)
+    checkin_token = Column(String(500), nullable=True, unique=True, index=True)
 
     cancelled_by_user_id = Column(UUID(as_uuid=True), nullable=True)
     cancellation_reason = Column(Text, nullable=True)

@@ -129,3 +129,43 @@ def verify_refresh_token(token: str) -> Optional[dict]:
     if payload and payload.get("type") == "refresh":
         return payload
     return None
+
+
+def create_class_checkin_token(
+    *,
+    booking_id: str,
+    class_id: str,
+    tenant_id: str,
+    user_id: str,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    """
+    Create a signed token used inside class attendance QR codes.
+    """
+    to_encode = {
+        "type": "class_checkin",
+        "booking_id": booking_id,
+        "class_id": class_id,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+    }
+    expire = datetime.utcnow() + (
+        expires_delta if expires_delta is not None else timedelta(hours=12)
+    )
+    to_encode["exp"] = expire
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def extract_class_checkin_claims(token: str) -> Optional[dict]:
+    """
+    Decode and validate a class attendance QR token.
+    """
+    payload = verify_token(token)
+    if not payload or payload.get("type") != "class_checkin":
+        return None
+    return {
+        "booking_id": payload.get("booking_id"),
+        "class_id": payload.get("class_id"),
+        "tenant_id": payload.get("tenant_id"),
+        "user_id": payload.get("user_id"),
+    }

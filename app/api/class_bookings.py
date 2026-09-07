@@ -8,16 +8,25 @@ from sqlalchemy.orm import Session
 
 from app.core.db.session import get_db
 from app.core.settings import settings
-from app.dependencies import get_current_active_user, get_gym_config_for_active_user
+from app.dependencies import (
+    get_current_active_user,
+    get_current_staff_or_trainer,
+    get_gym_config_for_active_user,
+)
 from app.models.class_booking import class_booking_status_value
 from app.models.gym_class import GymClass
 from app.models.user import User
 from app.schemas.booking import (
+    AttendanceCheckInData,
+    AttendanceCheckInRequestBody,
+    AttendanceCheckInResponse,
     BookingCancelRequestBody,
     BookingCancelResponse,
     BookingCancelledData,
     BookingCreateResponse,
     BookingCreatedData,
+    BookingQrData,
+    BookingQrResponse,
     MemberBookingsResponse,
     BookingRequestBody,
     BookingValidateData,
@@ -134,6 +143,33 @@ async def get_member_bookings(
         page=page,
         limit=limit,
     )
+
+
+@router.get(
+    "/{class_id}/bookings/{booking_id}/qr",
+    response_model=BookingQrResponse,
+)
+async def get_booking_qr(
+    class_id: uuid.UUID,
+    booking_id: uuid.UUID,
+    current_user: User = Depends(get_current_active_user),
+    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
+    db: Session = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    qr_data = BookingsService.get_checkin_qr(
+        db,
+        tenant_id=tenant_id,
+        user=current_user,
+        class_id=class_id,
+        booking_id=booking_id,
+        gym_config=gym_config,
+    )
+    return {
+        "success": True,
+        "message": "Booking QR fetched successfully",
+        "data": BookingQrData(**qr_data),
+    }
 
 
 @router.post(
@@ -380,4 +416,32 @@ async def cancel_class_booking(
             cancelled_at=booking.cancelled_at.isoformat() if booking.cancelled_at else None,
             booking_counts=int(gym_class.booking_counts or 0) if gym_class else None,
         ),
+    }
+
+
+@router.post(
+    "/{class_id}/attendance/checkin",
+    response_model=AttendanceCheckInResponse,
+)
+async def checkin_class_attendance(
+    class_id: uuid.UUID,
+    body: AttendanceCheckInRequestBody,
+    current_user: User = Depends(get_current_staff_or_trainer),
+    db: Session = Depends(get_db),
+):
+    tenant_id = current_user.tenant_id
+    data = _persist_booking_write(
+        db,
+        lambda: BookingsService.checkin_by_qr(
+            db,
+            tenant_id=tenant_id,
+            scanner_user=current_user,
+            class_id=class_id,
+            qr_token=body.qr_token,
+        ),
+    )
+    return {
+        "success": True,
+        "message": "Attendance already marked" if data["already_checked_in"] else "Attendance marked successfully",
+        "data": AttendanceCheckInData(**data),
     }

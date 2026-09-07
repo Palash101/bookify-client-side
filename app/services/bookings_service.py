@@ -29,6 +29,7 @@ from app.models.wallet_transactions import WalletTransaction
 from fastapi import HTTPException, status
 
 from app.core.settings import settings
+from app.core.security import create_class_checkin_token, extract_class_checkin_claims
 from app.schemas.booking import PaymentMode
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
@@ -277,6 +278,10 @@ OCCUPYING_SLOT_STATUSES: Tuple[ClassBookingStatus, ...] = (
 
 WAITING_STATUS = ClassBookingStatus.waiting
 CANCELLED_STATUS = ClassBookingStatus.cancelled
+CHECKIN_ELIGIBLE_STATUSES: Tuple[ClassBookingStatus, ...] = (
+    ClassBookingStatus.confirmed,
+    ClassBookingStatus.completed,
+)
 
 # Wallet is charged upfront for any active booking that reserves the member's spot.
 WALLET_CHARGE_STATUSES: Tuple[ClassBookingStatus, ...] = (
@@ -574,6 +579,33 @@ def _within_free_cancel_window(
         return True
     cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
     return now <= cutoff
+
+
+def _utc_iso(dt: datetime) -> str:
+    return dt.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _member_display_name(user: Optional[User]) -> Optional[str]:
+    if user is None:
+        return None
+    full = f"{user.first_name or ''} {user.last_name or ''}".strip()
+    return full or user.email
+
+
+def _attendance_checkin_window(
+    gym_class: GymClass,
+    *,
+    tz: ZoneInfo,
+    before_minutes: int = 30,
+    after_minutes: int = 15,
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    starts_at = _class_starts_at(gym_class, tz)
+    if starts_at is None:
+        return None, None
+    return (
+        starts_at - timedelta(minutes=max(0, before_minutes)),
+        starts_at + timedelta(minutes=max(0, after_minutes)),
+    )
 
 
 def _finalize_booking_validation(outcome: "BookingValidationOutcome", payment_mode: str) -> None:
@@ -1748,3 +1780,170 @@ class BookingsService:
         if promoted_booking is not None:
             db.refresh(promoted_booking)
         return booking, promoted_booking
+
+    @staticmethod
+    def get_checkin_qr(
+        db: Session,
+        *,
+        tenant_id: str,
+        user: User,
+        class_id: UUID,
+        booking_id: UUID,
+        gym_config: Optional[GymConfigValue] = None,
+    ) -> dict[str, Any]:
+        booking = (
+            db.query(ClassBooking)
+            .filter(
+                ClassBooking.id == booking_id,
+                ClassBooking.class_id == class_id,
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.user_id == user.id,
+            )
+            .first()
+        )
+        if booking is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+        if booking.status not in ACTIVE_USER_BOOKING_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QR is not available for this booking status",
+            )
+
+        config = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
+        if not bool(config.attendance_check_in.enable_qr_code_check_in):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QR code check-in is disabled for this gym",
+            )
+
+        gym_class = BookingsService._load_class_for_tenant(db, tenant_id, class_id)
+        if gym_class is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
+
+        tz = _tenant_tz(db, tenant_id, gym_config=config)
+        today = datetime.now(tz).date()
+        if gym_class.class_date != today:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QR is available only for today's class booking",
+            )
+
+        token = booking.checkin_token
+        expires_at: Optional[str] = None
+        if not token:
+            token = create_class_checkin_token(
+                booking_id=str(booking.id),
+                class_id=str(class_id),
+                tenant_id=str(tenant_id),
+                user_id=str(user.id),
+                expires_delta=timedelta(hours=24),
+            )
+            booking.checkin_token = token
+            db.flush()
+        return {
+            "booking_id": booking.id,
+            "booking_ref": booking.booking_ref,
+            "class_id": class_id,
+            "qr_token": token,
+            "expires_at": expires_at,
+        }
+
+    @staticmethod
+    def checkin_by_qr(
+        db: Session,
+        *,
+        tenant_id: str,
+        scanner_user: User,
+        class_id: UUID,
+        qr_token: str,
+        gym_config: Optional[GymConfigValue] = None,
+    ) -> dict[str, Any]:
+        claims = extract_class_checkin_claims(qr_token)
+        if not claims:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid QR code")
+
+        if str(claims.get("tenant_id")) != str(tenant_id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="QR does not belong to this gym")
+
+        try:
+            token_booking_id = UUID(str(claims.get("booking_id")))
+            token_class_id = UUID(str(claims.get("class_id")))
+            token_user_id = UUID(str(claims.get("user_id")))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid QR code data")
+
+        if token_class_id != class_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This QR code is for a different class",
+            )
+
+        gym_class = BookingsService._load_class_for_tenant(db, tenant_id, class_id)
+        if gym_class is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
+
+        config = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
+        if not bool(config.attendance_check_in.enable_qr_code_check_in):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="QR code check-in is disabled for this gym",
+            )
+
+        booking = (
+            db.query(ClassBooking)
+            .filter(
+                ClassBooking.id == token_booking_id,
+                ClassBooking.class_id == class_id,
+                ClassBooking.tenant_id == tenant_id,
+                ClassBooking.user_id == token_user_id,
+            )
+            .first()
+        )
+        if booking is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+        if booking.status not in CHECKIN_ELIGIBLE_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Attendance is not allowed for booking status {class_booking_status_value(booking.status)}",
+            )
+
+        tz = _tenant_tz(db, tenant_id, gym_config=config)
+        now = datetime.now(tz)
+        window_start, window_end = _attendance_checkin_window(gym_class, tz=tz)
+        if window_start is not None and now < window_start:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Check-in is not open yet for this class",
+            )
+        if window_end is not None and now > window_end:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Check-in window has closed for this class",
+            )
+
+        member = db.get(User, booking.user_id)
+        checked_in_at = booking.checkin_time
+        already_checked_in = checked_in_at is not None
+        if checked_in_at is None:
+            checked_in_at = now
+            booking.checkin_time = checked_in_at
+            current_attendance = int(gym_class.attendance_count or 0)
+            gym_class.attendance_count = current_attendance + 1
+            if booking.status == ClassBookingStatus.confirmed:
+                booking.status = ClassBookingStatus.completed
+            booking.notes = (booking.notes or "").strip() or None
+            scan_note = f"QR checked in by {scanner_user.id}"
+            booking.notes = scan_note if booking.notes is None else f"{booking.notes}\n{scan_note}"
+            db.flush()
+
+        return {
+            "booking_id": booking.id,
+            "booking_ref": booking.booking_ref,
+            "class_id": gym_class.id,
+            "user_id": booking.user_id,
+            "member_name": _member_display_name(member),
+            "checked_in_at": _utc_iso(checked_in_at),
+            "already_checked_in": already_checked_in,
+        }
