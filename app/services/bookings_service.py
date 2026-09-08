@@ -1786,7 +1786,6 @@ class BookingsService:
         db: Session,
         *,
         tenant_id: str,
-        user: User,
         class_id: UUID,
         booking_id: UUID,
         gym_config: Optional[GymConfigValue] = None,
@@ -1797,7 +1796,6 @@ class BookingsService:
                 ClassBooking.id == booking_id,
                 ClassBooking.class_id == class_id,
                 ClassBooking.tenant_id == tenant_id,
-                ClassBooking.user_id == user.id,
             )
             .first()
         )
@@ -1836,7 +1834,7 @@ class BookingsService:
                 booking_id=str(booking.id),
                 class_id=str(class_id),
                 tenant_id=str(tenant_id),
-                user_id=str(user.id),
+                user_id=str(booking.user_id),
                 expires_delta=timedelta(hours=24),
             )
             booking.checkin_token = token

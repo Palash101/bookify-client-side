@@ -11,6 +11,7 @@ from app.core.settings import settings
 from app.dependencies import (
     get_current_active_user,
     get_current_staff_or_trainer,
+    get_current_tenant_id,
     get_gym_config_for_active_user,
 )
 from app.models.class_booking import class_booking_status_value
@@ -152,18 +153,14 @@ async def get_member_bookings(
 async def get_booking_qr(
     class_id: uuid.UUID,
     booking_id: uuid.UUID,
-    current_user: User = Depends(get_current_active_user),
-    gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
+    tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
-    tenant_id = current_user.tenant_id
     qr_data = BookingsService.get_checkin_qr(
         db,
         tenant_id=tenant_id,
-        user=current_user,
         class_id=class_id,
         booking_id=booking_id,
-        gym_config=gym_config,
     )
     return {
         "success": True,

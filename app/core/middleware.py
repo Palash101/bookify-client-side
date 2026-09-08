@@ -65,6 +65,17 @@ def _hub_tenant_id(request: Request) -> Optional[str]:
     return value or None
 
 
+def _public_qr_tenant_id(request: Request) -> Optional[str]:
+    path = request.url.path
+    if not path.endswith("/qr") or "/bookings/" not in path:
+        return None
+    raw = request.query_params.get("tenant_id") or request.headers.get("X-Tenant-Id")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
 def _lookup_active_organization(
     db: Session,
     *,
@@ -229,34 +240,37 @@ class TenantMiddleware(BaseHTTPMiddleware):
         request_domain = _extract_request_domain(request)
         hub_request = _is_hub_hostname(origin_hostname)
         hub_tenant_id = _hub_tenant_id(request) if hub_request else None
+        public_qr_tenant_id = _public_qr_tenant_id(request)
         # Never log the key itself -- it is a credential. Whether one was sent
         # is all that is needed to debug tenant resolution.
         logger.debug(
-            "Resolving tenant: domain=%s origin=%s hub=%s api_key=%s hub_tenant_id=%s",
+            "Resolving tenant: domain=%s origin=%s hub=%s api_key=%s hub_tenant_id=%s public_qr_tenant_id=%s",
             request_domain,
             origin_hostname,
             hub_request,
             "present" if x_tenant_key else "absent",
             hub_tenant_id or "(none)",
+            public_qr_tenant_id or "(none)",
         )
 
         # Hub + tenant_id wins over X-Tenant-Key so booking sites are not blocked
         # by a stale/wrong API key the frontend may still send.
         use_hub = bool(hub_request and hub_tenant_id)
+        use_public_qr_tenant = bool(public_qr_tenant_id)
         use_api_key = bool(x_tenant_key) and not use_hub
 
-        if not use_api_key and not use_hub and not hub_request and not request_domain:
+        if not use_api_key and not use_hub and not use_public_qr_tenant and not hub_request and not request_domain:
             return _unauthorized(
                 "Either X-Tenant-Key header or a request domain is required"
             )
 
-        if hub_request and not use_hub and not use_api_key:
+        if hub_request and not use_hub and not use_api_key and not use_public_qr_tenant:
             return _unauthorized(
                 "tenant_id query parameter or X-Tenant-Id header is required for hub requests"
             )
 
         # Domain-only tenant sites can be served entirely from Redis.
-        if not use_api_key and not use_hub:
+        if not use_api_key and not use_hub and not use_public_qr_tenant:
             cached_org = _org_from_cache(request_domain)
             if cached_org is not None:
                 request.state.tenant_id = cached_org.organization_id
@@ -270,6 +284,10 @@ class TenantMiddleware(BaseHTTPMiddleware):
             if use_hub:
                 organization = _lookup_active_organization(
                     db, organization_id=hub_tenant_id
+                )
+            elif use_public_qr_tenant:
+                organization = _lookup_active_organization(
+                    db, organization_id=public_qr_tenant_id
                 )
             elif use_api_key:
                 api_key = (
@@ -293,7 +311,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
             if not organization:
                 return _unauthorized("Organization not found or inactive")
 
-            if not use_api_key and not use_hub:
+            if not use_api_key and not use_hub and not use_public_qr_tenant:
                 _cache_org(request_domain, organization)
 
             request.state.tenant_id = organization.organization_id
