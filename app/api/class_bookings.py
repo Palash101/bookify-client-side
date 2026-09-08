@@ -64,10 +64,10 @@ def _booking_qr_html(*, qr_svg: str, brand_name: str, logo_url: Optional[str], p
     safe_name = escape(brand_name or "Bookify")
     safe_logo = escape(logo_url) if logo_url else ""
     safe_primary = escape(primary_color or "#1d4ed8")
-    logo_html = (
-        f'<img src="{safe_logo}" alt="{safe_name} logo" style="width:92px;height:92px;object-fit:contain;border-radius:999px;background:#fff;padding:10px;box-shadow:0 6px 16px rgba(15,23,42,.12);" />'
+    center_logo_html = (
+        f'<img src="{safe_logo}" alt="{safe_name} logo" style="width:108px;height:108px;object-fit:contain;border-radius:999px;background:#fff;padding:10px;box-shadow:0 8px 22px rgba(15,23,42,.16);" />'
         if safe_logo
-        else f'<div style="width:92px;height:92px;border-radius:999px;background:#fff;display:flex;align-items:center;justify-content:center;color:{safe_primary};font-weight:700;box-shadow:0 6px 16px rgba(15,23,42,.12);">LOGO</div>'
+        else f'<div style="width:108px;height:108px;border-radius:999px;background:#fff;display:flex;align-items:center;justify-content:center;color:{safe_primary};font-weight:700;box-shadow:0 8px 22px rgba(15,23,42,.16);">LOGO</div>'
     )
     return f"""<!doctype html>
 <html lang="en">
@@ -79,12 +79,14 @@ def _booking_qr_html(*, qr_svg: str, brand_name: str, logo_url: Optional[str], p
 <body style="margin:0;background:#f4f7fb;font-family:Inter,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;">
   <div style="width:100%;max-width:720px;background:#fff;border:12px solid {safe_primary};border-radius:38px;padding:32px;box-shadow:0 18px 40px rgba(15,23,42,.14);">
     <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;">
-      {logo_html}
       <div style="font-size:32px;font-weight:800;color:#0f172a;">{safe_name}</div>
       <div style="font-size:18px;color:#475569;">Class Check-In</div>
     </div>
-    <div style="margin:28px auto 24px;max-width:460px;background:#fff;border-radius:24px;padding:18px;box-shadow:inset 0 0 0 1px #e2e8f0;">
+    <div style="position:relative;margin:28px auto 24px;max-width:460px;background:#fff;border-radius:24px;padding:18px;box-shadow:inset 0 0 0 1px #e2e8f0;">
       {qr_svg}
+      <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;justify-content:center;">
+        {center_logo_html}
+      </div>
     </div>
     <div style="margin:0 auto;max-width:420px;background:{safe_primary};color:#fff;border-radius:999px;padding:18px 24px;text-align:center;font-size:22px;font-weight:700;">
       Scan Me
