@@ -8,6 +8,7 @@ from app.core.db.master_db import SessionLocal
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
 from app.core.redis.cache import cache, tenant_key
+from app.core.security import verify_token
 from app.core.settings import settings
 import logging
 import threading
@@ -69,6 +70,15 @@ def _public_qr_tenant_id(request: Request) -> Optional[str]:
     path = request.url.path
     if not path.endswith("/qr") or "/bookings/" not in path:
         return None
+    token = request.query_params.get("token")
+    if token:
+        payload = verify_token(token)
+        if payload:
+            raw_tid = payload.get("tenant_id")
+            if raw_tid is not None:
+                value = str(raw_tid).strip()
+                if value:
+                    return value
     raw = request.query_params.get("tenant_id") or request.headers.get("X-Tenant-Id")
     if raw is None:
         return None

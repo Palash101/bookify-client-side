@@ -1,8 +1,12 @@
 import json
 import logging
 import uuid
+from html import escape
+from io import BytesIO
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -16,6 +20,7 @@ from app.dependencies import (
 )
 from app.models.class_booking import class_booking_status_value
 from app.models.gym_class import GymClass
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.booking import (
     AttendanceCheckInData,
@@ -36,6 +41,7 @@ from app.schemas.booking import (
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.bookings_service import BookingsService
 from app.services.notification_service import BookingNotificationService
+from app.services.tenant_website_config_service import TenantWebsiteConfigService
 from app.core.events.event_types import (
     CLIENT_BOOKING_CANCELLED,
     CLIENT_BOOKING_CONFIRMED,
@@ -52,6 +58,40 @@ from app.core.events.event_payloads import (
 
 router = APIRouter()
 _log = logging.getLogger(__name__)
+
+
+def _booking_qr_html(*, qr_svg: str, brand_name: str, logo_url: Optional[str], primary_color: str) -> str:
+    safe_name = escape(brand_name or "Bookify")
+    safe_logo = escape(logo_url) if logo_url else ""
+    safe_primary = escape(primary_color or "#1d4ed8")
+    logo_html = (
+        f'<img src="{safe_logo}" alt="{safe_name} logo" style="width:92px;height:92px;object-fit:contain;border-radius:999px;background:#fff;padding:10px;box-shadow:0 6px 16px rgba(15,23,42,.12);" />'
+        if safe_logo
+        else f'<div style="width:92px;height:92px;border-radius:999px;background:#fff;display:flex;align-items:center;justify-content:center;color:{safe_primary};font-weight:700;box-shadow:0 6px 16px rgba(15,23,42,.12);">LOGO</div>'
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{safe_name} QR Check-In</title>
+</head>
+<body style="margin:0;background:#f4f7fb;font-family:Inter,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px;">
+  <div style="width:100%;max-width:720px;background:#fff;border:12px solid {safe_primary};border-radius:38px;padding:32px;box-shadow:0 18px 40px rgba(15,23,42,.14);">
+    <div style="display:flex;flex-direction:column;align-items:center;text-align:center;gap:12px;">
+      {logo_html}
+      <div style="font-size:32px;font-weight:800;color:#0f172a;">{safe_name}</div>
+      <div style="font-size:18px;color:#475569;">Class Check-In</div>
+    </div>
+    <div style="margin:28px auto 24px;max-width:460px;background:#fff;border-radius:24px;padding:18px;box-shadow:inset 0 0 0 1px #e2e8f0;">
+      {qr_svg}
+    </div>
+    <div style="margin:0 auto;max-width:420px;background:{safe_primary};color:#fff;border-radius:999px;padding:18px 24px;text-align:center;font-size:22px;font-weight:700;">
+      Scan Me
+    </div>
+  </div>
+</body>
+</html>"""
 
 
 def _commit_booking_or_raise(db: Session) -> None:
@@ -151,8 +191,10 @@ async def get_member_bookings(
     response_model=BookingQrResponse,
 )
 async def get_booking_qr(
+    request: Request,
     class_id: uuid.UUID,
     booking_id: uuid.UUID,
+    token: Optional[str] = Query(None),
     tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
@@ -161,12 +203,99 @@ async def get_booking_qr(
         tenant_id=tenant_id,
         class_id=class_id,
         booking_id=booking_id,
+        access_token=token,
     )
+    wants_html = "text/html" in (request.headers.get("accept") or "").lower()
+    if wants_html:
+        try:
+            import qrcode
+            import qrcode.image.svg
+        except ImportError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="QR rendering dependency is not installed on the server",
+            ) from exc
+
+        factory = qrcode.image.svg.SvgPathImage
+        img = qrcode.make(qr_data["qr_token"], image_factory=factory, box_size=12, border=2)
+        buffer = BytesIO()
+        img.save(buffer)
+        qr_svg = buffer.getvalue().decode("utf-8")
+
+        website = TenantWebsiteConfigService.get_active_config(db, tenant_id=tenant_id)
+        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+        brand_name = (
+            getattr(tenant, "business_name", None)
+            or getattr(website, "theme_name", None)
+            or "Bookify"
+        )
+        logo_url = getattr(website, "logo_url", None) if website else None
+        primary_color = getattr(website, "primary_color", None) if website else None
+        return HTMLResponse(
+            content=_booking_qr_html(
+                qr_svg=qr_svg,
+                brand_name=brand_name,
+                logo_url=logo_url,
+                primary_color=primary_color or "#1d4ed8",
+            )
+        )
     return {
         "success": True,
         "message": "Booking QR fetched successfully",
         "data": BookingQrData(**qr_data),
     }
+
+
+@router.get(
+    "/{class_id}/bookings/{booking_id}/qr/view",
+    response_class=HTMLResponse,
+)
+async def view_booking_qr(
+    class_id: uuid.UUID,
+    booking_id: uuid.UUID,
+    token: Optional[str] = Query(None),
+    tenant_id: str = Depends(get_current_tenant_id),
+    db: Session = Depends(get_db),
+):
+    qr_data = BookingsService.get_checkin_qr(
+        db,
+        tenant_id=tenant_id,
+        class_id=class_id,
+        booking_id=booking_id,
+        access_token=token,
+    )
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="QR rendering dependency is not installed on the server",
+        ) from exc
+
+    factory = qrcode.image.svg.SvgPathImage
+    img = qrcode.make(qr_data["qr_token"], image_factory=factory, box_size=12, border=2)
+    buffer = BytesIO()
+    img.save(buffer)
+    qr_svg = buffer.getvalue().decode("utf-8")
+
+    website = TenantWebsiteConfigService.get_active_config(db, tenant_id=tenant_id)
+    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
+    brand_name = (
+        getattr(tenant, "business_name", None)
+        or getattr(website, "theme_name", None)
+        or "Bookify"
+    )
+    logo_url = getattr(website, "logo_url", None) if website else None
+    primary_color = getattr(website, "primary_color", None) if website else None
+    return HTMLResponse(
+        content=_booking_qr_html(
+            qr_svg=qr_svg,
+            brand_name=brand_name,
+            logo_url=logo_url,
+            primary_color=primary_color or "#1d4ed8",
+        )
+    )
 
 
 @router.post(

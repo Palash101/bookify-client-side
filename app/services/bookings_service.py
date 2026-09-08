@@ -29,7 +29,11 @@ from app.models.wallet_transactions import WalletTransaction
 from fastapi import HTTPException, status
 
 from app.core.settings import settings
-from app.core.security import create_class_checkin_token, extract_class_checkin_claims
+from app.core.security import (
+    create_class_checkin_token,
+    extract_class_checkin_claims,
+    verify_token,
+)
 from app.schemas.booking import PaymentMode
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
@@ -1788,6 +1792,7 @@ class BookingsService:
         tenant_id: str,
         class_id: UUID,
         booking_id: UUID,
+        access_token: Optional[str] = None,
         gym_config: Optional[GymConfigValue] = None,
     ) -> dict[str, Any]:
         booking = (
@@ -1801,6 +1806,26 @@ class BookingsService:
         )
         if booking is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+        if access_token:
+            payload = verify_token(access_token)
+            if payload is None:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token",
+                )
+            token_tenant = str(payload.get("tenant_id") or "").strip()
+            token_user_id = str(payload.get("sub") or "").strip()
+            if token_tenant != str(tenant_id):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token tenant does not match booking tenant",
+                )
+            if token_user_id != str(booking.user_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Token user does not match booking owner",
+                )
 
         if booking.status not in ACTIVE_USER_BOOKING_STATUSES:
             raise HTTPException(
