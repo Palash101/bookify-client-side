@@ -15,12 +15,12 @@ from app.core.settings import settings
 from app.dependencies import (
     get_current_active_user,
     get_current_staff_or_trainer,
+    get_current_tenant,
     get_current_tenant_id,
     get_gym_config_for_active_user,
 )
 from app.models.class_booking import class_booking_status_value
 from app.models.gym_class import GymClass
-from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.booking import (
     AttendanceCheckInData,
@@ -195,6 +195,7 @@ async def get_booking_qr(
     class_id: uuid.UUID,
     booking_id: uuid.UUID,
     token: Optional[str] = Query(None),
+    current_tenant=Depends(get_current_tenant),
     tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
@@ -223,9 +224,8 @@ async def get_booking_qr(
         qr_svg = buffer.getvalue().decode("utf-8")
 
         website = TenantWebsiteConfigService.get_active_config(db, tenant_id=tenant_id)
-        tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
         brand_name = (
-            getattr(tenant, "business_name", None)
+            getattr(current_tenant, "name", None)
             or getattr(website, "theme_name", None)
             or "Bookify"
         )
@@ -254,6 +254,7 @@ async def view_booking_qr(
     class_id: uuid.UUID,
     booking_id: uuid.UUID,
     token: Optional[str] = Query(None),
+    current_tenant=Depends(get_current_tenant),
     tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
@@ -280,9 +281,8 @@ async def view_booking_qr(
     qr_svg = buffer.getvalue().decode("utf-8")
 
     website = TenantWebsiteConfigService.get_active_config(db, tenant_id=tenant_id)
-    tenant = db.query(Tenant).filter(Tenant.id == tenant_id).first()
     brand_name = (
-        getattr(tenant, "business_name", None)
+        getattr(current_tenant, "name", None)
         or getattr(website, "theme_name", None)
         or "Bookify"
     )
