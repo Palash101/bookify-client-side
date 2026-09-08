@@ -1844,14 +1844,6 @@ class BookingsService:
         if gym_class is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Class not found")
 
-        tz = _tenant_tz(db, tenant_id, gym_config=config)
-        today = datetime.now(tz).date()
-        if gym_class.class_date != today:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="QR is available only for today's class booking",
-            )
-
         token = booking.checkin_token
         expires_at: Optional[str] = None
         if not token:
@@ -1864,6 +1856,8 @@ class BookingsService:
             )
             booking.checkin_token = token
             db.flush()
+            db.commit()
+            db.refresh(booking)
         return {
             "booking_id": booking.id,
             "booking_ref": booking.booking_ref,
