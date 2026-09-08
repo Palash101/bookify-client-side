@@ -43,7 +43,10 @@ class Settings(BaseSettings):
         return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
     
     # Security
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-here-change-in-production")
+    SECRET_KEY: str = os.getenv(
+        "SECRET_KEY",
+        "fitnez-qr-shared-secret-2026-9xK7pL2vQm8Rt4Yn3Hz1Ab6Wu5Cs9Df",
+    )
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
     # Access JWT lifetime (login / Bearer). Override via ACCESS_TOKEN_EXPIRE_MINUTES in .env
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
