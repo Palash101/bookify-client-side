@@ -209,7 +209,7 @@ class TenantMiddleware(BaseHTTPMiddleware):
     Middleware that resolves the active organization for every API request.
 
     Resolution order:
-      1. Hub origin (`localhost:3001` locally; later `booking.fitnezstudios.com`)
+      1. Hub origin (`localhost:3001` locally, or `www.fitnezstudios.com`)
          + `tenant_id` / `X-Tenant-Id` → organization by id.
       2. `X-Tenant-Key` — active API key → organization (non-hub callers).
       3. Tenant site domain — `Origin` / `Referer` matches `Organization.domain`.

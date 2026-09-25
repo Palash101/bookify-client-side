@@ -72,12 +72,13 @@ class Settings(BaseSettings):
         "http://127.0.0.1:8000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
+        "https://www.fitnezstudios.com",
     ]
-    # Booking hub site (local for now; switch back to booking.fitnezstudios.com later).
-    # Use host:port for localhost so :3001 is distinct from other local apps.
+    # Booking hub sites. Local uses host:port so :3001 is distinct from other apps.
     TENANT_HUB_HOSTNAMES: List[str] = [
         "localhost:3001",
         "127.0.0.1:3001",
+        "www.fitnezstudios.com",
     ]
     
     # Email
