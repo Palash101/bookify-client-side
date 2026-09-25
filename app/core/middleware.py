@@ -1,54 +1,101 @@
-from fastapi import Request
-from fastapi.middleware.cors import CORSMiddleware as FastAPICORSMiddleware
-from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from app.core.db.master_db import SessionLocal
-from app.models.master_org import Organization
-from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
-from app.core.redis.cache import cache, tenant_key
-from app.core.security import verify_token
-from app.core.settings import settings
+from __future__ import annotations
+
 import logging
 import threading
 import time
-from typing import Optional
+from contextlib import contextmanager
+from typing import Iterator, Optional, Union
 from urllib.parse import urlparse
+
+from fastapi import Request
+from fastapi.middleware.cors import CORSMiddleware as FastAPICORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.core.db.master_db import SessionLocal
+from app.core.redis.cache import cache, tenant_key
+from app.core.security import verify_token
+from app.core.settings import settings
+from app.models.master_org import Organization
+from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
 
 logger = logging.getLogger(__name__)
 
 _api_prefix = settings.API_V1_STR.rstrip("/")
 
-EXCLUDED_PATHS = [
+EXCLUDED_PATHS = {
     "/health",
     f"{_api_prefix}/docs",
     f"{_api_prefix}/redoc",
     f"{_api_prefix}/openapi.json",
-]
+}
+_DOCS_PREFIXES = (f"{_api_prefix}/docs", f"{_api_prefix}/redoc")
+_PAYMENT_REDIRECT_PATHS = {
+    f"{_api_prefix}/payment/success",
+    f"{_api_prefix}/payment/cancel",
+}
+_PAYMENT_CALLBACK_PREFIXES = (
+    f"{_api_prefix}/payment/callback/",
+    f"{_api_prefix}/callback/",
+)
+
+ResolveResult = Union[Organization, JSONResponse]
 
 
-def _hostname_from_origin_header(raw: Optional[str]) -> Optional[str]:
-    """
-    Host used for hub matching. Keeps port when present so local hubs like
-    ``localhost:3001`` are distinct from ``localhost:3000``.
-    """
+def _nonempty(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _host_from_url(raw: Optional[str], *, keep_port: bool) -> Optional[str]:
+    """Parse Origin/Referer-style URLs. Hub matching keeps the port (localhost:3001)."""
     if not raw:
         return None
     parsed = urlparse(raw)
     if not parsed.hostname:
         return None
-    host = parsed.netloc.split("@")[-1].lower()
-    return host or None
+    host = parsed.netloc.split("@")[-1] if keep_port else parsed.hostname
+    return host.lower() or None
 
 
-def _extract_origin_hostname(request: Request) -> Optional[str]:
-    """Browser origin only (Origin / Referer). Used for hub-site tenant routing."""
+def _hostname_from_origin_or_domain(value: str) -> Optional[str]:
+    """Normalize `https://gym.example.com` or `gym.example.com` to a hostname (no port)."""
+    raw = str(value or "").strip().rstrip("/").lower()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    host = urlparse(raw).hostname
+    return host.lower() if host else None
+
+
+def _origin_or_referer_host(request: Request) -> Optional[str]:
     for header in ("origin", "referer"):
-        host = _hostname_from_origin_header(request.headers.get(header))
+        host = _host_from_url(request.headers.get(header), keep_port=True)
         if host:
             return host
     return None
+
+
+def _extract_request_domain(request: Request) -> Optional[str]:
+    """
+    Calling site's host, port kept so `localhost:3000` and `:3001` are distinct.
+
+    Origin/Referer first (browser). Host / X-Forwarded-Host only as a fallback
+    for non-browser callers — those headers are the API host, not the tenant site.
+    """
+    host = _origin_or_referer_host(request)
+    if host:
+        return host
+    raw = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    if not raw:
+        return None
+    host = raw.split(",")[0].strip()
+    return host.lower() or None
 
 
 def _is_hub_hostname(hostname: Optional[str]) -> bool:
@@ -59,11 +106,9 @@ def _is_hub_hostname(hostname: Optional[str]) -> bool:
 
 
 def _hub_tenant_id(request: Request) -> Optional[str]:
-    raw = request.headers.get("X-Tenant-Id") or request.query_params.get("tenant_id")
-    if raw is None:
-        return None
-    value = str(raw).strip()
-    return value or None
+    return _nonempty(
+        request.headers.get("X-Tenant-Id") or request.query_params.get("tenant_id")
+    )
 
 
 def _public_qr_tenant_id(request: Request) -> Optional[str]:
@@ -74,16 +119,44 @@ def _public_qr_tenant_id(request: Request) -> Optional[str]:
     if token:
         payload = verify_token(token)
         if payload:
-            raw_tid = payload.get("tenant_id")
-            if raw_tid is not None:
-                value = str(raw_tid).strip()
-                if value:
-                    return value
-    raw = request.query_params.get("tenant_id") or request.headers.get("X-Tenant-Id")
-    if raw is None:
-        return None
-    value = str(raw).strip()
-    return value or None
+            tid = _nonempty(payload.get("tenant_id"))
+            if tid:
+                return tid
+    return _nonempty(
+        request.query_params.get("tenant_id") or request.headers.get("X-Tenant-Id")
+    )
+
+
+def _skip_tenant_resolution(request: Request) -> bool:
+    if request.method == "OPTIONS":
+        return True
+    path = request.url.path
+    if path in EXCLUDED_PATHS or path.startswith(_DOCS_PREFIXES):
+        return True
+    if path in _PAYMENT_REDIRECT_PATHS or path.startswith(_PAYMENT_CALLBACK_PREFIXES):
+        return True
+    return not path.startswith("/api/")
+
+
+def _unauthorized(message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={"success": False, "message": message, "detail": message},
+    )
+
+
+def _attach_tenant(request: Request, organization: Organization) -> None:
+    request.state.tenant_id = organization.organization_id
+    request.state.tenant = organization
+
+
+@contextmanager
+def _master_session() -> Iterator[Session]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def _lookup_active_organization(
@@ -94,61 +167,18 @@ def _lookup_active_organization(
 ) -> Optional[Organization]:
     query = db.query(Organization).filter(Organization.status == "active")
     if organization_id:
-        return (
-            query.filter(
-                func.lower(Organization.organization_id) == organization_id.strip().lower()
-            ).first()
-        )
+        return query.filter(
+            func.lower(Organization.organization_id) == organization_id.strip().lower()
+        ).first()
     if domain:
         return query.filter(Organization.domain == domain).first()
     return None
 
 
-def _extract_request_domain(request: Request) -> Optional[str]:
-    """
-    Resolve the originating domain of the *client* that issued the request.
-
-    For browser clients the calling site's domain is carried by the `Origin`
-    header (falling back to `Referer`). For example, a page served from
-    `https://velo.fitnezstudios.com` calling `https://api.fitnezstudios.com`
-    sends `Origin: https://velo.fitnezstudios.com`.
-
-    The `Host` / `X-Forwarded-Host` headers reflect the API endpoint that was
-    *dialled* (`api.fitnezstudios.com`), not the calling site, so they are only
-    used as a last-resort fallback for non-browser callers.
-
-    The port is preserved so distinct local origins such as `localhost:3000`
-    and `localhost:3001` resolve to different tenants and match the value
-    stored on `Organization.domain`.
-    """
-    # Preferred: the frontend origin reported by the browser.
-    for header in ("origin", "referer"):
-        raw = request.headers.get(header)
-        if not raw:
-            continue
-        parsed = urlparse(raw)
-        if parsed.hostname:
-            # netloc keeps the port (and strips any userinfo); lowercase for
-            # case-insensitive host matching (ports are digits, unaffected).
-            host = parsed.netloc.split("@")[-1]
-            return host.lower()
-
-    # Fallback for non-browser callers that don't send Origin/Referer.
-    raw = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    if not raw:
-        return None
-    # X-Forwarded-Host may contain a comma-separated list; take the first entry.
-    host = raw.split(",")[0].strip()
-    if not host:
-        return None
-    return host.lower() or None
-
-
-def _unauthorized(message: str) -> JSONResponse:
-    return JSONResponse(
-        status_code=401,
-        content={"success": False, "message": message, "detail": message},
-    )
+def _found_org(organization: Optional[Organization]) -> ResolveResult:
+    if organization is None:
+        return _unauthorized("Organization not found or inactive")
+    return organization
 
 
 def domain_key(domain: str) -> str:
@@ -163,11 +193,8 @@ def org_cache_key(organization_id: str) -> str:
 
 def _org_from_cache(request_domain: str) -> Optional[Organization]:
     """
-    Resolve an organization from the entries the auth service writes:
+    Resolve from auth-service Redis entries:
     ``domain:<host> -> ORG-110`` then ``t:ORG-110 -> {...}``.
-
-    Returns a transient (session-less) Organization carrying just the fields
-    downstream code reads, or None to fall through to the master DB.
     """
     org_id = cache.get_text(domain_key(request_domain))
     if not org_id:
@@ -177,8 +204,7 @@ def _org_from_cache(request_domain: str) -> Optional[Organization]:
     if not isinstance(payload, dict):
         return None
 
-    # Absent status means the auth service only caches active orgs; an explicit
-    # non-active value is honoured so a blocked org cannot slip through.
+    # Absent status means the auth service only caches active orgs.
     if str(payload.get("status") or "active").lower() != "active":
         return None
 
@@ -191,7 +217,6 @@ def _org_from_cache(request_domain: str) -> Optional[Organization]:
 
 
 def _cache_org(request_domain: str, organization: Organization) -> None:
-    """Write the same two entries the auth service does, after a DB lookup."""
     cache.set(domain_key(request_domain), organization.organization_id)
     cache.set(
         org_cache_key(organization.organization_id),
@@ -204,132 +229,96 @@ def _cache_org(request_domain: str, organization: Organization) -> None:
     )
 
 
-class TenantMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware that resolves the active organization for every API request.
-
-    Resolution order:
-      1. Hub origin (`localhost:3001` locally, or `www.fitnezstudios.com`)
-         + `tenant_id` / `X-Tenant-Id` → organization by id.
-      2. `X-Tenant-Key` — active API key → organization (non-hub callers).
-      3. Tenant site domain — `Origin` / `Referer` matches `Organization.domain`.
-
-    On success, `request.state.tenant_id` and `request.state.tenant` are set.
-    """
-
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-
-        if request.method == "OPTIONS":
-            return await call_next(request)
-
-        if (
-            path in EXCLUDED_PATHS
-            or path.startswith(f"{_api_prefix}/docs")
-            or path.startswith(f"{_api_prefix}/redoc")
-        ):
-            return await call_next(request)
-
-        # Payment redirects & webhooks (no tenant header — called by Stripe/browser).
-        if path in (
-            f"{_api_prefix}/payment/success",
-            f"{_api_prefix}/payment/cancel",
-        ) or path.startswith(
-            (
-                f"{_api_prefix}/payment/callback/",
-                f"{_api_prefix}/callback/",
-            )
-        ):
-            return await call_next(request)
-
-        if not path.startswith("/api/"):
-            return await call_next(request)
-
-        x_tenant_key = request.headers.get("X-Tenant-Key")
-        origin_hostname = _extract_origin_hostname(request)
-        request_domain = _extract_request_domain(request)
-        hub_request = _is_hub_hostname(origin_hostname)
-        hub_tenant_id = _hub_tenant_id(request) if hub_request else None
-        public_qr_tenant_id = _public_qr_tenant_id(request)
-        # Never log the key itself -- it is a credential. Whether one was sent
-        # is all that is needed to debug tenant resolution.
-        logger.debug(
-            "Resolving tenant: domain=%s origin=%s hub=%s api_key=%s hub_tenant_id=%s public_qr_tenant_id=%s",
-            request_domain,
-            origin_hostname,
-            hub_request,
-            "present" if x_tenant_key else "absent",
-            hub_tenant_id or "(none)",
-            public_qr_tenant_id or "(none)",
+def _resolve_by_organization_id(organization_id: str) -> ResolveResult:
+    with _master_session() as db:
+        return _found_org(
+            _lookup_active_organization(db, organization_id=organization_id)
         )
 
-        # Hub + tenant_id wins over X-Tenant-Key so booking sites are not blocked
-        # by a stale/wrong API key the frontend may still send.
-        use_hub = bool(hub_request and hub_tenant_id)
-        use_public_qr_tenant = bool(public_qr_tenant_id)
-        use_api_key = bool(x_tenant_key) and not use_hub
 
-        if not use_api_key and not use_hub and not use_public_qr_tenant and not hub_request and not request_domain:
-            return _unauthorized(
-                "Either X-Tenant-Key header or a request domain is required"
+def _resolve_by_api_key(api_key_value: str) -> ResolveResult:
+    with _master_session() as db:
+        api_key = (
+            db.query(OrganizationAPIKey)
+            .filter(
+                OrganizationAPIKey.api_key == api_key_value,
+                OrganizationAPIKey.status == APIKeyStatus.active,
             )
+            .first()
+        )
+        if not api_key:
+            return _unauthorized("Invalid or inactive organization API key")
+        return _found_org(
+            _lookup_active_organization(db, organization_id=api_key.tenant_id)
+        )
 
-        if hub_request and not use_hub and not use_api_key and not use_public_qr_tenant:
-            return _unauthorized(
-                "tenant_id query parameter or X-Tenant-Id header is required for hub requests"
-            )
 
-        # Domain-only tenant sites can be served entirely from Redis.
-        if not use_api_key and not use_hub and not use_public_qr_tenant:
-            cached_org = _org_from_cache(request_domain)
-            if cached_org is not None:
-                request.state.tenant_id = cached_org.organization_id
-                request.state.tenant = cached_org
-                return await call_next(request)
+def _resolve_by_domain(request_domain: str) -> ResolveResult:
+    cached = _org_from_cache(request_domain)
+    if cached is not None:
+        return cached
+    with _master_session() as db:
+        organization = _lookup_active_organization(db, domain=request_domain)
+        if organization is None:
+            return _unauthorized("Organization not found or inactive")
+        _cache_org(request_domain, organization)
+        return organization
 
-        db: Session = SessionLocal()
-        try:
-            organization: Optional[Organization] = None
 
-            if use_hub:
-                organization = _lookup_active_organization(
-                    db, organization_id=hub_tenant_id
-                )
-            elif use_public_qr_tenant:
-                organization = _lookup_active_organization(
-                    db, organization_id=public_qr_tenant_id
-                )
-            elif use_api_key:
-                api_key = (
-                    db.query(OrganizationAPIKey)
-                    .filter(
-                        OrganizationAPIKey.api_key == x_tenant_key,
-                        OrganizationAPIKey.status == APIKeyStatus.active,
-                    )
-                    .first()
-                )
+def _resolve_tenant(request: Request) -> ResolveResult:
+    """
+    Resolution order:
+      1. Hub origin + tenant_id / X-Tenant-Id (wins over a stale API key)
+      2. Public booking QR (`/bookings/.../qr`)
+      3. X-Tenant-Key
+      4. Tenant site domain (Origin / Referer, then Host)
+    """
+    api_key = request.headers.get("X-Tenant-Key")
+    origin_hostname = _origin_or_referer_host(request)
+    request_domain = _extract_request_domain(request)
+    is_hub = _is_hub_hostname(origin_hostname)
+    hub_tenant_id = _hub_tenant_id(request) if is_hub else None
+    qr_tenant_id = _public_qr_tenant_id(request)
 
-                if not api_key:
-                    return _unauthorized("Invalid or inactive organization API key")
+    logger.debug(
+        "Resolving tenant: domain=%s origin=%s hub=%s api_key=%s hub_tenant_id=%s public_qr_tenant_id=%s",
+        request_domain,
+        origin_hostname,
+        is_hub,
+        "present" if api_key else "absent",
+        hub_tenant_id or "(none)",
+        qr_tenant_id or "(none)",
+    )
 
-                organization = _lookup_active_organization(
-                    db, organization_id=api_key.tenant_id
-                )
-            else:
-                organization = _lookup_active_organization(db, domain=request_domain)
+    if is_hub and hub_tenant_id:
+        return _resolve_by_organization_id(hub_tenant_id)
+    if qr_tenant_id:
+        return _resolve_by_organization_id(qr_tenant_id)
+    if api_key:
+        return _resolve_by_api_key(api_key)
+    if is_hub:
+        return _unauthorized(
+            "tenant_id query parameter or X-Tenant-Id header is required for hub requests"
+        )
+    if not request_domain:
+        return _unauthorized(
+            "Either X-Tenant-Key header or a request domain is required"
+        )
+    return _resolve_by_domain(request_domain)
 
-            if not organization:
-                return _unauthorized("Organization not found or inactive")
 
-            if not use_api_key and not use_hub and not use_public_qr_tenant:
-                _cache_org(request_domain, organization)
+class TenantMiddleware(BaseHTTPMiddleware):
+    """Attach `request.state.tenant_id` / `request.state.tenant` for /api/* requests."""
 
-            request.state.tenant_id = organization.organization_id
-            request.state.tenant = organization
+    async def dispatch(self, request: Request, call_next):
+        if _skip_tenant_resolution(request):
+            return await call_next(request)
 
-        finally:
-            db.close()
+        result = _resolve_tenant(request)
+        if isinstance(result, JSONResponse):
+            return result
 
+        _attach_tenant(request, result)
         return await call_next(request)
 
 
@@ -339,20 +328,15 @@ _org_hostnames: set[str] = set()
 _org_hostnames_at: Optional[float] = None
 
 
-def _hostname_from_origin_or_domain(value: str) -> Optional[str]:
-    """Normalize `https://gym.example.com` or `gym.example.com` to a hostname."""
-    raw = str(value or "").strip().rstrip("/").lower()
-    if not raw:
-        return None
-    if "://" not in raw:
-        raw = f"https://{raw}"
-    host = urlparse(raw).hostname
-    return host.lower() if host else None
+def _org_hostname_cache_fresh(now: float) -> bool:
+    return (
+        _org_hostnames_at is not None
+        and (now - _org_hostnames_at) < _ORG_HOSTNAME_TTL_SECONDS
+    )
 
 
 def _load_active_org_hostnames() -> set[str]:
-    db: Session = SessionLocal()
-    try:
+    with _master_session() as db:
         rows = (
             db.query(Organization.domain)
             .filter(Organization.status == "active")
@@ -364,19 +348,17 @@ def _load_active_org_hostnames() -> set[str]:
             if host:
                 hostnames.add(host)
         return hostnames
-    finally:
-        db.close()
 
 
 def _active_org_hostnames() -> set[str]:
     """Cached hostnames from master `organizations.domain` (active rows only)."""
     global _org_hostnames, _org_hostnames_at
     now = time.monotonic()
-    if _org_hostnames_at is not None and (now - _org_hostnames_at) < _ORG_HOSTNAME_TTL_SECONDS:
+    if _org_hostname_cache_fresh(now):
         return _org_hostnames
     with _org_hostname_lock:
         now = time.monotonic()
-        if _org_hostnames_at is not None and (now - _org_hostnames_at) < _ORG_HOSTNAME_TTL_SECONDS:
+        if _org_hostname_cache_fresh(now):
             return _org_hostnames
         try:
             _org_hostnames = _load_active_org_hostnames()
@@ -397,12 +379,9 @@ def origin_allowed_by_org_domain(origin: str) -> bool:
 
 
 def origin_allowed_by_hub(origin: str) -> bool:
-    # Prefer host:port (netloc) so local hubs like localhost:3001 match.
-    host = _hostname_from_origin_header(origin)
-    if not host:
-        host = _hostname_from_origin_or_domain(origin)
-    if not host:
-        return False
+    host = _host_from_url(origin, keep_port=True) or _hostname_from_origin_or_domain(
+        origin
+    )
     return _is_hub_hostname(host)
 
 
