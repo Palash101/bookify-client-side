@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 master_engine: Engine = create_engine(
     settings.database_url,
     poolclass=QueuePool,
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_recycle=1_800,
+    pool_size=settings.POSTGRES_POOL_SIZE,
+    max_overflow=settings.POSTGRES_MAX_OVERFLOW,
+    pool_timeout=settings.POSTGRES_POOL_TIMEOUT,
+    pool_recycle=settings.POSTGRES_POOL_RECYCLE,
     pool_pre_ping=True,
 )
 

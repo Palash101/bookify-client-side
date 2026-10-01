@@ -41,7 +41,15 @@ class Settings(BaseSettings):
         if self.DATABASE_URL:
             return self.DATABASE_URL
         return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
-    
+
+    # QueuePool per engine (master, and one engine per tenant).
+    # A request holds its tenant connection until the handler finishes.
+    # Max in-flight requests per pool = POOL_SIZE + MAX_OVERFLOW (1000).
+    POSTGRES_POOL_SIZE: int = Field(default=100, env="POSTGRES_POOL_SIZE")
+    POSTGRES_MAX_OVERFLOW: int = Field(default=900, env="POSTGRES_MAX_OVERFLOW")
+    POSTGRES_POOL_TIMEOUT: int = Field(default=30, env="POSTGRES_POOL_TIMEOUT")
+    POSTGRES_POOL_RECYCLE: int = Field(default=1_800, env="POSTGRES_POOL_RECYCLE")
+
     # Security
     SECRET_KEY: str = os.getenv(
         "SECRET_KEY",
@@ -161,9 +169,8 @@ class Settings(BaseSettings):
     # Managed providers drop idle connections; ping this often to catch it
     # before a request does.
     REDIS_HEALTH_CHECK_INTERVAL: int = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))
-    # Cap connections per process so many service instances cannot exhaust the
-    # server's connection limit.
-    REDIS_MAX_CONNECTIONS: int = int(os.getenv("REDIS_MAX_CONNECTIONS", "32"))
+    # One connection can be borrowed per in-flight request during a burst.
+    REDIS_MAX_CONNECTIONS: int = int(os.getenv("REDIS_MAX_CONNECTIONS", "1000"))
     REDIS_RETRIES: int = int(os.getenv("REDIS_RETRIES", "1"))
 
     # Circuit breaker: after this many consecutive failures, skip Redis

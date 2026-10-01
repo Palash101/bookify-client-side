@@ -42,8 +42,8 @@ class TenantDBConnectionManager(metaclass=SingletonMeta):
     def __init__(
         self,
         *,
-        pool_size: int = 5,
-        max_overflow: int = 10,
+        pool_size: int = 100,
+        max_overflow: int = 900,
         pool_timeout: int = 30,
         pool_recycle: int = 1_800,
         connect_args: Optional[Dict[str, Any]] = None,
@@ -213,10 +213,10 @@ def get_tenant_connection_manager() -> TenantDBConnectionManager:
     settings = get_settings()
 
     return TenantDBConnectionManager(
-        pool_size=int(getattr(settings, "POSTGRES_POOL_SIZE", 5)),
-        max_overflow=int(getattr(settings, "POSTGRES_MAX_OVERFLOW", 10)),
-        pool_timeout=int(getattr(settings, "POSTGRES_POOL_TIMEOUT", 30)),
-        pool_recycle=int(getattr(settings, "POSTGRES_POOL_RECYCLE", 1_800)),
+        pool_size=int(settings.POSTGRES_POOL_SIZE),
+        max_overflow=int(settings.POSTGRES_MAX_OVERFLOW),
+        pool_timeout=int(settings.POSTGRES_POOL_TIMEOUT),
+        pool_recycle=int(settings.POSTGRES_POOL_RECYCLE),
         connect_args=getattr(settings, "POSTGRES_CONNECT_ARGS", None),
     )
 
