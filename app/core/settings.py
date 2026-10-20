@@ -136,7 +136,8 @@ class Settings(BaseSettings):
     )
 
     # Pub/Sub — one topic for all domain events; consumer fans out internally.
-    PUBSUB_TOPIC_ID: str = Field(default="bookify-events", env="PUBSUB_TOPIC_ID")
+    # Default matches the main backend / activities consumer topic.
+    PUBSUB_TOPIC_ID: str = Field(default="fitnezstudios-activities", env="PUBSUB_TOPIC_ID")
     PUBSUB_EMULATOR_HOST: Optional[str] = Field(default=None, env="PUBSUB_EMULATOR_HOST")
     PUBSUB_ENABLE_MESSAGE_ORDERING: bool = Field(
         default=False, env="PUBSUB_ENABLE_MESSAGE_ORDERING"

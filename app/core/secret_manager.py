@@ -37,6 +37,7 @@ class SecretManager:
         self._client = None
         self._jwt_secret: Optional[str] = None
         self._tenant_db_secrets: Dict[str, str] = {}
+        self._redis_secret: Optional[str] = None
 
     @staticmethod
     def _tenant_key(tenant_id: Union[str, "object"]) -> str:
@@ -46,6 +47,7 @@ class SecretManager:
         with self._cache_lock:
             self._jwt_secret = None
             self._tenant_db_secrets.clear()
+            self._redis_secret = None
 
     def _get_client(self):
         if self._client is None:
@@ -118,6 +120,46 @@ class SecretManager:
                 self._jwt_secret = secret
 
         return secret
+
+    def get_redis_secret(self) -> Optional[str]:
+        """
+        Redis connection credentials (JSON string) from GCP Secret Manager, using
+        the secret id in ``REDIS_SECRET_TEMPLATE`` (versions/latest).
+
+        Mirrors the authentication service's ``get_redis_secret``. Returns None
+        when the template is unset, GCP_PROJECT_ID is missing, or the lookup
+        fails, so the Redis client falls back to REDIS_* environment variables.
+        """
+        secret_id = getattr(settings, "REDIS_SECRET_TEMPLATE", None)
+        if not secret_id:
+            return None
+
+        with self._cache_lock:
+            if self._redis_secret:
+                return self._redis_secret
+
+        if not settings.GCP_PROJECT_ID:
+            log.warning(
+                "REDIS_SECRET_TEMPLATE is set but GCP_PROJECT_ID is not; using Redis env vars"
+            )
+            return None
+
+        try:
+            secret = self._access_latest_secret(
+                settings.GCP_PROJECT_ID, secret_id, self._get_client()
+            ).strip()
+        except Exception as exc:
+            log.warning(
+                "GCP Secret Manager lookup failed for Redis secret %s: %s; using env fallback",
+                secret_id,
+                type(exc).__name__,
+            )
+            return None
+
+        if secret:
+            with self._cache_lock:
+                self._redis_secret = secret
+        return secret or None
 
     def get_tenant_db_secret(self, tenant_id: Union[str, "object"]) -> Optional[str]:
         """

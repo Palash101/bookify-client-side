@@ -224,14 +224,13 @@ class AuthService:
             "otp": otp_code,
             "expiry_minutes": f"{OTP_EXPIRY_MINUTES}Min",
         }
+        # No recipient/name here: the email + OTP live only in the event payload.
+        # The OTP is echoed only when the dev-only EXPOSE_OTP_IN_RESPONSE flag is on.
         log.info(
-            "client_otp_prepare purpose=%s event_type=%s tenant_id=%s to_email=%s "
-            "full_name=%s otp=%s topic=%s/%s",
+            "client_otp_prepare purpose=%s event_type=%s tenant_id=%s otp=%s topic=%s/%s",
             purpose,
             event_type,
             tid_str,
-            email,
-            full_name,
             otp_code if settings.EXPOSE_OTP_IN_RESPONSE else "******",
             settings.GCP_PROJECT_ID,
             settings.PUBSUB_TOPIC_ID,
@@ -245,11 +244,10 @@ class AuthService:
                 ordering_key=tid_str,
             )
             log.info(
-                "client_otp_published purpose=%s event_type=%s to_email=%s tenant_id=%s "
+                "client_otp_published purpose=%s event_type=%s tenant_id=%s "
                 "event_id=%s message_id=%s",
                 purpose,
                 event_type,
-                email,
                 tid_str,
                 published.event_id,
                 published.message_id,

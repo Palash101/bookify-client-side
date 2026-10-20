@@ -2,25 +2,34 @@ from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
 import bcrypt
+from passlib.hash import bcrypt_sha256 as _bcrypt_sha256
 from app.core.settings import settings
 
 
 def verify_password(plain_password: str, hashed_password: Optional[str]) -> bool:
     """
-    Verify a password against a hash using bcrypt directly.
+    Verify a password against a stored hash.
+
+    Supports both formats found in tenant ``users.password_hash``:
+    - raw bcrypt (``$2a$``/``$2b$``/``$2y$``), written by this service, and
+    - passlib ``bcrypt_sha256`` (``$bcrypt-sha256$...``), written by the
+      authentication service (staff created/invited there, password resets).
     """
-    if not hashed_password:
+    if not hashed_password or plain_password is None:
         return False
-    
+
     try:
+        if hashed_password.startswith("$bcrypt-sha256$"):
+            return _bcrypt_sha256.verify(plain_password, hashed_password)
+
         # Ensure password is bytes
         password_bytes = plain_password.encode('utf-8')
         hash_bytes = hashed_password.encode('utf-8')
-        
+
         # Verify password
         return bcrypt.checkpw(password_bytes, hash_bytes)
-    except (ValueError, TypeError, Exception) as e:
-        # Handle bcrypt errors (e.g., password too long, invalid hash)
+    except (ValueError, TypeError, Exception):
+        # Handle bcrypt errors (e.g., password too long, invalid/unknown hash)
         return False
 
 
