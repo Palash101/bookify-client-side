@@ -25,6 +25,14 @@ from app.models.tenant_website_sections import TenantWebsiteSection
 from app.models.notification_template import NotificationTemplate
 from app.models.event_event import EventEvent, EventStatus, EventType
 from app.models.event_enroll import EventEnroll
+from app.models.event_challenge import (
+    EventBadge,
+    EventCondition,
+    EventReward,
+    EventRewardGrant,
+    EventRewardRel,
+    UserBadge,
+)
 
 __all__ = [
     "Base",
@@ -53,4 +61,10 @@ __all__ = [
     "EventStatus",
     "EventType",
     "EventEnroll",
+    "EventCondition",
+    "EventReward",
+    "EventRewardRel",
+    "EventBadge",
+    "EventRewardGrant",
+    "UserBadge",
 ]

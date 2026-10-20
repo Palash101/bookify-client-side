@@ -184,6 +184,12 @@ class Settings(BaseSettings):
 
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
 
+    # DEV ONLY: echo the OTP code in auth responses (login / register /
+    # resend-otp / forgot-password) and in logs. Never enable in production:
+    # anyone could register or reset a password for an email they don't own.
+    # Read from the EXPOSE_OTP_IN_RESPONSE env var; defaults to False.
+    EXPOSE_OTP_IN_RESPONSE: bool = False
+
     @property
     def publisher_is_console(self) -> bool:
         if self.PUBLISHER_CONSOLE:

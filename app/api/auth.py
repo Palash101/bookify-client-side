@@ -29,19 +29,21 @@ log = logging.getLogger(__name__)
 
 
 def _otp_response(message: str, token: str, email: str, otp_code: str) -> dict:
-    # TODO: remove otp_code from response before production (testing only).
     response = {
         "success": True,
         "message": message,
         "token": token,
-        "otp_code": otp_code,
     }
+    # The OTP is delivered by email only. Echoing it back would let anyone
+    # verify an email they don't own; allowed only behind an explicit dev flag.
+    if settings.EXPOSE_OTP_IN_RESPONSE:
+        response["otp_code"] = otp_code
     if settings.DEBUG:
         response["debug_otp_sent_to"] = email
     return response
 
 
-@router.post("/login", response_model=OTPResponse)
+@router.post("/login", response_model=OTPResponse, response_model_exclude_none=True)
 async def login(
     user_credentials: OTPRequest,
     tenant_id: str = Depends(get_current_tenant_id),
@@ -71,7 +73,7 @@ async def login(
     )
 
 
-@router.post("/register", response_model=OTPResponse)
+@router.post("/register", response_model=OTPResponse, response_model_exclude_none=True)
 async def register(
     user_data: UserCreate,
     tenant_id: str = Depends(get_current_tenant_id),
@@ -156,7 +158,7 @@ async def verify_otp_endpoint(
     }
 
 
-@router.post("/resend-otp", response_model=OTPResponse)
+@router.post("/resend-otp", response_model=OTPResponse, response_model_exclude_none=True)
 async def resend_otp(
     request: Request,
     tenant_id: str = Depends(get_current_tenant_id),
@@ -193,7 +195,7 @@ async def resend_otp(
     return _otp_response(message, verification_token, email, otp_code)
 
 
-@router.post("/forgot-password", response_model=PasswordResetResponse)
+@router.post("/forgot-password", response_model=PasswordResetResponse, response_model_exclude_none=True)
 async def forgot_password(
     reset_data: PasswordResetRequest,
     tenant_id: str = Depends(get_current_tenant_id),

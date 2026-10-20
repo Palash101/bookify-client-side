@@ -232,7 +232,7 @@ class AuthService:
             tid_str,
             email,
             full_name,
-            otp_code,
+            otp_code if settings.EXPOSE_OTP_IN_RESPONSE else "******",
             settings.GCP_PROJECT_ID,
             settings.PUBSUB_TOPIC_ID,
         )
