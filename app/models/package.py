@@ -23,6 +23,9 @@ class Package(Base):
     status = Column(String(20), nullable=True)  # active | draft | block (package_status_enum)
     package_type = Column(String(20), nullable=True)  # e.g. one_time, recurring (package_type_enum)
     tenant_id = Column(String, ForeignKey("tenants.id"), nullable=True, index=True)
+    # feature_type_enum: normal | time_based | location | program_based | event_based.
+    # Selects which booking_restriction block is enforced (see docs/booking-rules.md §1).
+    feature_type = Column(String(20), nullable=True)
     booking_restriction = Column(JSONB, nullable=True)
     # Hidden from client/website catalog; staff can still assign it from admin.
     is_private = Column(Boolean, nullable=False, default=False, server_default="false")

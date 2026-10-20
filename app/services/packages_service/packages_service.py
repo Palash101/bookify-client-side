@@ -589,6 +589,7 @@ class PackagesService:
                     "package_id": package.id,
                     "package_name": package.name,
                     "package_description": package.description,
+                    "feature_type": package.feature_type,
                     "booking_restriction": package.booking_restriction,
                     "validity_days": package.validity_days,
                     "validity_end": package.validity_end,
