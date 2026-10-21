@@ -10,6 +10,7 @@ It is responsible for:
 
 from typing import Any, Optional, Union
 import logging
+import time
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError, OperationalError
@@ -63,14 +64,19 @@ class TenantPaymentSettings:
         }
     """
 
-    # Simple in-process cache: tenant_id -> settings dict
-    _cache: dict[str, dict[str, Any]] = {}
+    # In-process cache: tenant_id -> (loaded_at, settings dict). Gyms change their
+    # gateway from the dashboard (main backend), which can't reach this process, so
+    # entries expire and a saved key is picked up within CACHE_TTL_SECONDS.
+    CACHE_TTL_SECONDS = 60
+    _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     @classmethod
     def get(cls, tenant_id: str) -> dict[str, Any]:
-        if tenant_id not in cls._cache:
-            cls._cache[tenant_id] = cls._load_from_db(tenant_id)
-        return cls._cache[tenant_id]
+        hit = cls._cache.get(tenant_id)
+        if hit is None or time.monotonic() - hit[0] > cls.CACHE_TTL_SECONDS:
+            hit = (time.monotonic(), cls._load_from_db(tenant_id))
+            cls._cache[tenant_id] = hit
+        return hit[1]
 
     @classmethod
     def invalidate(cls, tenant_id: str) -> None:
@@ -92,6 +98,8 @@ class TenantPaymentSettings:
                     .filter(
                         TenantSetting.tenant_id == tenant_id,
                         TenantSetting.setting_key == "payment_gateway",
+                        # Turned off in the dashboard -> no online payments.
+                        TenantSetting.is_enabled.isnot(False),
                     )
                     .all()
                 )
