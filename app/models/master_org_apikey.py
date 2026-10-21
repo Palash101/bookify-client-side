@@ -26,7 +26,12 @@ class OrganizationAPIKey(Base):
         index=True,
     )
 
-    api_key = Column(Text, nullable=False)
+    # Legacy plain-text key; NULL once hashed (tasks/sql/master/001-002 in the main backend).
+    api_key = Column(Text, nullable=True)
+    # sha256 of the key: what X-Tenant-Key is matched against.
+    key_hash = Column(Text, nullable=True, unique=True)
+    key_prefix = Column(Text, nullable=True)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
 
     status = Column(
         Enum(APIKeyStatus, name="api_key_status"),

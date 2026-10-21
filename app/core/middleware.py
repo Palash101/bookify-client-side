@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -16,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.db.master_db import SessionLocal
 from app.core.redis.cache import cache, tenant_key
+from app.core.redis.client import get_redis_client
 from app.core.security import verify_token
 from app.core.settings import settings
 from app.models.master_org import Organization
@@ -236,21 +238,84 @@ def _resolve_by_organization_id(organization_id: str) -> ResolveResult:
         )
 
 
-def _resolve_by_api_key(api_key_value: str) -> ResolveResult:
+# X-Tenant-Key -> tenant, cached so a normal request skips the master DB. The main
+# backend deletes ``api_key:{hash}`` when a gym replaces or revokes its key, so this
+# raw (unprefixed) key name must match app/services/api_key_service.py there.
+API_KEY_CACHE_TTL_SECONDS = 300
+API_KEY_LAST_USED_EVERY_SECONDS = 3600
+
+
+def _hash_api_key(api_key_value: str) -> str:
+    return hashlib.sha256(api_key_value.strip().encode("utf-8")).hexdigest()
+
+
+def _redis():
+    try:
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def _tenant_for_api_key(key_hash: str, api_key_value: str) -> Optional[str]:
+    redis = _redis()
+    if redis is not None:
+        try:
+            cached = redis.get(f"api_key:{key_hash}")
+            if cached:
+                return cached
+        except Exception:
+            logger.warning("API key cache read failed", exc_info=True)
+
     with _master_session() as db:
-        api_key = (
-            db.query(OrganizationAPIKey)
-            .filter(
-                OrganizationAPIKey.api_key == api_key_value,
-                OrganizationAPIKey.status == APIKeyStatus.active,
+        active = OrganizationAPIKey.status == APIKeyStatus.active
+        row = (
+            db.query(OrganizationAPIKey).filter(OrganizationAPIKey.key_hash == key_hash, active).first()
+            # Keys not hashed yet (before the master migration ran).
+            or db.query(OrganizationAPIKey).filter(OrganizationAPIKey.api_key == api_key_value, active).first()
+        )
+        tenant_id = row.tenant_id if row else None
+
+    if tenant_id and redis is not None:
+        try:
+            redis.set(f"api_key:{key_hash}", tenant_id, ex=API_KEY_CACHE_TTL_SECONDS)
+        except Exception:
+            logger.warning("API key cache write failed", exc_info=True)
+    return tenant_id
+
+
+def _note_api_key_used(key_hash: str) -> None:
+    """Shown in the dashboard as "last used"; written at most once an hour per key."""
+    redis = _redis()
+    try:
+        if redis is not None and not redis.set(
+            f"api_key_used:{key_hash}", "1", nx=True, ex=API_KEY_LAST_USED_EVERY_SECONDS
+        ):
+            return
+        with _master_session() as db:
+            db.query(OrganizationAPIKey).filter(OrganizationAPIKey.key_hash == key_hash).update(
+                {OrganizationAPIKey.last_used_at: func.now()}, synchronize_session=False
             )
-            .first()
+            db.commit()
+    except Exception:
+        logger.warning("Could not record API key use", exc_info=True)
+
+
+def _resolve_by_api_key(api_key_value: str) -> ResolveResult:
+    key_hash = _hash_api_key(api_key_value)
+    tenant_id = _tenant_for_api_key(key_hash, api_key_value)
+    if not tenant_id:
+        return _unauthorized("Invalid or inactive organization API key")
+    _note_api_key_used(key_hash)
+
+    payload = cache.get(org_cache_key(tenant_id))
+    if isinstance(payload, dict) and str(payload.get("status") or "active").lower() == "active":
+        return Organization(
+            organization_id=payload.get("organization_id") or tenant_id,
+            name=payload.get("name"),
+            domain=payload.get("domain"),
+            status="active",
         )
-        if not api_key:
-            return _unauthorized("Invalid or inactive organization API key")
-        return _found_org(
-            _lookup_active_organization(db, organization_id=api_key.tenant_id)
-        )
+    return _resolve_by_organization_id(tenant_id)
 
 
 def _resolve_by_domain(request_domain: str) -> ResolveResult:
