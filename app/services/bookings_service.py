@@ -593,6 +593,11 @@ def _is_cancelled_class(status_value: Optional[str]) -> bool:
     return s in ("cancelled", "canceled")
 
 
+# Classes members can't see or book until their publish_at time: drafts, and classes
+# in a scheduled drop (the main backend's cron later flips those to "published").
+UNRELEASED_STATUSES = ("draft", "scheduled")
+
+
 def _is_inactive_class(status_value: Optional[str]) -> bool:
     s = (status_value or "").strip().lower()
     return s in ("inactive", "disabled", "deleted")
@@ -1389,7 +1394,7 @@ class BookingsService:
             outcome.set_check("class_active", False, message="Class is not active")
             _finalize_booking_validation(outcome, pm)
             return outcome
-        if (str(getattr(gym_class, "status", "") or "").strip().lower() == "draft"):
+        if (str(getattr(gym_class, "status", "") or "").strip().lower() in UNRELEASED_STATUSES):
             pub = getattr(gym_class, "publish_at", None)
             if pub is None:
                 outcome.set_check("class_active", False, message="Class is not published yet")
