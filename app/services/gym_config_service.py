@@ -31,30 +31,26 @@ class GymConfigService:
         key_match = func.lower(TenantSetting.setting_key) == GYM_CONFIG_KEY
         type_match = TenantSetting.value["type"].astext == GYM_CONFIG_KEY
 
+        # A disabled config row counts as no row (defaults), like the staff backend.
         row = _ordered(
             db.query(TenantSetting).filter(
                 key_match,
                 TenantSetting.tenant_id == tenant_id,
+                TenantSetting.is_enabled.is_(True),
             )
         ).first()
         if row:
             return row
 
-        row = _ordered(
+        # Only ever this gym's row: several gyms share one database, and
+        # settings.tenant_id is NOT NULL, so a row of another tenant is never ours.
+        return _ordered(
             db.query(TenantSetting).filter(
                 type_match,
                 TenantSetting.tenant_id == tenant_id,
+                TenantSetting.is_enabled.is_(True),
             )
         ).first()
-        if row:
-            return row
-
-        # Per-tenant DB may store a single gym_config row without tenant_id match.
-        row = _ordered(db.query(TenantSetting).filter(key_match)).first()
-        if row:
-            return row
-
-        return _ordered(db.query(TenantSetting).filter(type_match)).first()
 
     @staticmethod
     def get_gym_config(db: Session, tenant_id: str) -> GymConfigValue:
