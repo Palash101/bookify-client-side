@@ -37,6 +37,7 @@ from app.core.security import (
 )
 from app.schemas.booking import PaymentMode
 from app.schemas.gym_config_value import GymConfigValue
+from app.services.no_show_block import booking_blocked_until
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 from app.services.user_package_tracking_service import (
@@ -529,6 +530,8 @@ OCCUPYING_SLOT_STATUSES: Tuple[ClassBookingStatus, ...] = (
 
 WAITING_STATUS = ClassBookingStatus.waiting
 CANCELLED_STATUS = ClassBookingStatus.cancelled
+# Both mean "cancelled"; late_cancelled = outside the free-cancel window, not refunded.
+CANCELLED_STATUSES = (ClassBookingStatus.cancelled, ClassBookingStatus.late_cancelled)
 CHECKIN_ELIGIBLE_STATUSES: Tuple[ClassBookingStatus, ...] = (
     ClassBookingStatus.confirmed,
     ClassBookingStatus.completed,
@@ -575,7 +578,7 @@ def booking_cancel_info(
     can_cancel = False
     starts_at = _class_starts_at(gym_class, tz) if gym_class is not None else None
 
-    if booking.status != CANCELLED_STATUS and starts_at is not None:
+    if booking.status not in CANCELLED_STATUSES and starts_at is not None:
         cancel_hours = int(gym_config.booking_settings.cancellation_window_hours or 0)
         allow_late = bool(gym_config.booking_settings.allow_late_cancellations)
         cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
@@ -629,7 +632,8 @@ def _normalize_class_gender_for_booking(raw: Optional[Any]) -> str:
         return "mixed"
     if s in ("male", "men", "man", "m"):
         return "male"
-    if s in ("female", "women", "woman", "f"):
+    # "ladies" is a class gender the dashboard offers (staff backend GenderEnum).
+    if s in ("female", "women", "woman", "f", "ladies"):
         return "female"
     return "mixed"
 
@@ -1002,7 +1006,7 @@ class BookingsService:
             )
 
             cancelled_at_iso: Optional[str] = None
-            if booking.status == CANCELLED_STATUS and booking.cancelled_at is not None:
+            if booking.status in CANCELLED_STATUSES and booking.cancelled_at is not None:
                 cancelled_at_iso = (
                     booking.cancelled_at.astimezone(dt_timezone.utc)
                     .isoformat()
@@ -1162,6 +1166,9 @@ class BookingsService:
         assign that seat_id on promotion.
         """
         cfg = gym_config if gym_config is not None else GymConfigService.get_gym_config(db, tenant_id)
+        # Waiting list switched off: nobody is promoted (same as the staff backend).
+        if not cfg.booking_settings.allow_waiting_list:
+            return None
         target_status = (
             ClassBookingStatus.confirmed
             if cfg.booking_settings.auto_confirm_booking
@@ -1418,6 +1425,18 @@ class BookingsService:
             user_gender=(ug if ug is not None else None),
         )
         if not gender_ok:
+            _finalize_booking_validation(outcome, pm)
+            return outcome
+
+        # No-show penalty "booking_block" (see services/no_show_block.py).
+        blocked_until = booking_blocked_until(db, tenant_id, user.id, config.attendance_check_in, now.date())
+        if blocked_until:
+            outcome.set_check(
+                "no_show_block",
+                False,
+                message=f"You can't book until {blocked_until:%d %b %Y} because of missed classes.",
+                blocked_until=blocked_until.isoformat(),
+            )
             _finalize_booking_validation(outcome, pm)
             return outcome
 
@@ -1962,7 +1981,7 @@ class BookingsService:
         if not booking:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
 
-        if booking.status in (CANCELLED_STATUS, ClassBookingStatus.completed):
+        if booking.status in (*CANCELLED_STATUSES, ClassBookingStatus.completed, ClassBookingStatus.no_show):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Booking already {class_booking_status_value(booking.status)}",
@@ -2058,7 +2077,8 @@ class BookingsService:
                         booking=booking,
                     )
 
-            booking.status = CANCELLED_STATUS
+            refunded = within_free_window or previous_status == WAITING_STATUS
+            booking.status = CANCELLED_STATUS if refunded else ClassBookingStatus.late_cancelled
             booking.cancelled_at = now
             booking.cancelled_by_user_id = user.id
             booking.cancellation_reason = (reason or "").strip() or None
@@ -2235,7 +2255,9 @@ class BookingsService:
 
         tz = _tenant_tz(db, tenant_id, gym_config=config)
         now = datetime.now(tz)
-        window_start, window_end = _attendance_checkin_window(gym_class, tz=tz)
+        # Late arrival grace period on: check-in stays open 15 minutes after the start.
+        grace = 15 if config.attendance_check_in.late_arrival_grace_period else 0
+        window_start, window_end = _attendance_checkin_window(gym_class, tz=tz, after_minutes=grace)
         if window_start is not None and now < window_start:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

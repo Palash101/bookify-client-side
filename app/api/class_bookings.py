@@ -383,10 +383,12 @@ async def _publish_booking_event(
     event_type: str,
     gym_config: GymConfigValue,
 ) -> dict[str, str]:
+    # Always published (the activity feed uses it too); the email itself is skipped by
+    # fitnez_activites when the gym switched it off (notification_settings).
     cfg = gym_config or GymConfigValue()
     if not BookingNotificationService._notification_enabled(cfg, event_type):
-        _log.warning(
-            "booking_gym_notification_off tenant_id=%s event_type=%s booking_id=%s",
+        _log.info(
+            "booking_email_switched_off tenant_id=%s event_type=%s booking_id=%s",
             tenant_id,
             event_type,
             booking.id,
@@ -618,15 +620,17 @@ async def create_class_booking(
             event_type=CLIENT_BOOKING_CONFIRMED,
             gym_config=gym_config,
         )
-        try:
-            await _send_booking_qr_email(
-                db=db,
-                tenant_id=tenant_id,
-                booking=booking,
-                current_user=current_user,
-            )
-        except Exception:
-            _log.exception("booking_qr_email_failed booking_id=%s", booking.id)
+        # The QR email is a booking confirmation too: same switch.
+        if (gym_config or GymConfigValue()).notification_settings.booking_confirmation:
+            try:
+                await _send_booking_qr_email(
+                    db=db,
+                    tenant_id=tenant_id,
+                    booking=booking,
+                    current_user=current_user,
+                )
+            except Exception:
+                _log.exception("booking_qr_email_failed booking_id=%s", booking.id)
     elif status == "pending_payment":
         pubsub["booking"] = await _publish_booking_event(
             db,
