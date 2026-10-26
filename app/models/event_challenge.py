@@ -1,6 +1,6 @@
 """
 Read-only mappings for challenge configuration, reward grants and earned badges
-(tenant DB). Schema: fitnez_main_backend/tasks/sql/tenant/002_event_challenges.sql.
+(tenant DB). Schema: fitnez_main_backend/tasks/sql/tenant.sql (challenge events).
 
 Rows are written by the main backend (config) and fitnez_activites (grants,
 badges); the client backend only reads them. Postgres enum columns are mapped as

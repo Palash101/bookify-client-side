@@ -26,7 +26,7 @@ class OrganizationAPIKey(Base):
         index=True,
     )
 
-    # Legacy plain-text key; NULL once hashed (tasks/sql/master/001-002 in the main backend).
+    # Legacy plain-text key; NULL once hashed (main backend tasks/sql/master.sql + run_later_api_key_wipe.sql).
     api_key = Column(Text, nullable=True)
     # sha256 of the key: what X-Tenant-Key is matched against.
     key_hash = Column(Text, nullable=True, unique=True)
