@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("/locations/{location_id}/classes", response_model=ClassesListResponse)
-async def get_classes_by_date_for_location(
+def get_classes_by_date_for_location(
     location_id: uuid.UUID,
     class_date: Optional[date] = Query(
         None,
@@ -81,7 +81,7 @@ async def get_classes_by_date_for_location(
     response_model=ClassDetailsOuterResponse,
     response_model_exclude_none=True,
 )
-async def get_class_details_for_location(
+def get_class_details_for_location(
     location_id: uuid.UUID,
     class_id: uuid.UUID,
     tenant_id: str = Depends(get_current_tenant_id),

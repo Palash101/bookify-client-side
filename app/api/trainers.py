@@ -15,7 +15,7 @@ TRAINER_ROLE_KEYS = ("trainer", "admin")
 
 
 @router.get("", response_model=TrainersListResponse)
-async def get_trainers(
+def get_trainers(
     search: Optional[str] = Query(None, description="Search trainers by first/last name"),
     sort_by: Optional[str] = Query(
         None, description="Sort by: name, created_at"

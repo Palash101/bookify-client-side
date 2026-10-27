@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=LocationsListResponse)
-async def get_locations(
+def get_locations(
     search: Optional[str] = Query(None, description="Search locations by name"),
     sort_by: Optional[str] = Query(
         None, description="Sort by: name, created_at"

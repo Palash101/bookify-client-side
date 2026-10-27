@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from threading import Lock
 from typing import Any, Dict, Optional
 from urllib.parse import quote_plus
@@ -206,6 +207,7 @@ class TenantDBConnectionManager(metaclass=SingletonMeta):
         )
 
 
+@lru_cache(maxsize=1)
 def get_tenant_connection_manager() -> TenantDBConnectionManager:
     """
     Convenience accessor that wires the manager with application settings.

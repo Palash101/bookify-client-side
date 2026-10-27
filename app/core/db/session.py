@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from threading import Lock
-from typing import Dict, Optional
+from typing import AsyncIterator, Dict, Optional
 
 from fastapi import Request
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -25,15 +25,17 @@ _factory_lock: Lock = Lock()
 
 
 def get_session_factory(tenant: str) -> sessionmaker:
-    manager = get_tenant_connection_manager()
-    engine_for_tenant = manager.get_engine(tenant)
-
+    factory = _session_factory_cache.get(tenant)
+    if factory is not None:
+        return factory
     with _factory_lock:
         factory = _session_factory_cache.get(tenant)
         if factory is None:
             logger.debug("Creating session factory for tenant %s", tenant)
             factory = sessionmaker(
-                bind=engine_for_tenant, expire_on_commit=False, autoflush=False
+                bind=get_tenant_connection_manager().get_engine(tenant),
+                expire_on_commit=False,
+                autoflush=False,
             )
             _session_factory_cache[tenant] = factory
     return factory
@@ -46,11 +48,17 @@ def _get_tenant_from_request(request: Request) -> Optional[str]:
     return None
 
 
-def get_db(request: Request) -> Session:
+async def get_db(request: Request) -> AsyncIterator[Session]:
     """
     FastAPI dependency that returns a tenant-scoped SQLAlchemy Session.
 
     Existing endpoints can keep using: db: Session = Depends(get_db)
+
+    Async on purpose: opening and closing the session then run on the event loop, not in
+    the thread pool. As a sync generator, its cleanup (which hands the connection back)
+    had to wait for a free thread; under load every thread was waiting for a connection,
+    so finished requests never gave theirs back and the service deadlocked. A session
+    opens no connection until its first query, and close() is a quick rollback.
     """
     tenant = _get_tenant_from_request(request)
     if not tenant:

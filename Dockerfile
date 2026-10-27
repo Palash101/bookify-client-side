@@ -18,5 +18,9 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
+# At most this many requests in flight per process; more get an immediate 503 instead
+# of queueing until they time out. Workers: set UVICORN_WORKERS (default 1).
+ENV UVICORN_LIMIT_CONCURRENCY=100
+
 # Run the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

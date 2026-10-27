@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/me/badges", response_model=MyBadgesListResponse)
-async def get_my_badges(
+def get_my_badges(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=100),
     current_user: User = Depends(get_current_active_user),

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 from app.core.db.session import get_db
 from app.schemas.user import (
@@ -53,8 +54,9 @@ async def login(
     User login endpoint - sends OTP to email.
     Tenant is resolved from X-Tenant-Key header.
     """
-    user = AuthService.authenticate_user(
-        db, user_credentials.email, user_credentials.password, tenant_id
+    # DB lookup + bcrypt check: slow on purpose, so off the event loop.
+    user = await run_in_threadpool(
+        AuthService.authenticate_user, db, user_credentials.email, user_credentials.password, tenant_id
     )
     log.info(
         "login_otp_request login_email=%s tenant_id=%s db_user_email=%s user_id=%s",
@@ -84,9 +86,10 @@ async def register(
     User will be created only after OTP verification.
     """
     AuthService.validate_registration_data(user_data)
-    AuthService.check_user_exists(db, user_data.email, tenant_id)
-    
-    user_data_dict = AuthService.prepare_registration_data(user_data, tenant_id)
+    await run_in_threadpool(AuthService.check_user_exists, db, user_data.email, tenant_id)
+
+    # hashes the password (bcrypt)
+    user_data_dict = await run_in_threadpool(AuthService.prepare_registration_data, user_data, tenant_id)
     log.info(
         "register_otp_request email=%s tenant_id=%s",
         user_data.email,
@@ -109,7 +112,7 @@ async def register(
 
 
 @router.post("/verify-otp", response_model=Token)
-async def verify_otp_endpoint(
+def verify_otp_endpoint(
     otp_data: OTPVerify,
     request: Request,
     db: Session = Depends(get_db)
@@ -205,7 +208,7 @@ async def forgot_password(
     Forgot password - email bhejo, OTP email par aayega.
     User must exist and be active. Same as request-password-reset.
     """
-    user = AuthService.get_user_for_login(db, reset_data.email, tenant_id)
+    user = await run_in_threadpool(AuthService.get_user_for_login, db, reset_data.email, tenant_id)
     log.info(
         "password_reset_otp_request email=%s tenant_id=%s",
         reset_data.email,
@@ -221,7 +224,7 @@ async def forgot_password(
 
 
 @router.post("/reset-password", response_model=MessageResponse)
-async def reset_password(
+def reset_password(
     reset_data: PasswordResetVerify,
     request: Request,
     db: Session = Depends(get_db),
@@ -286,7 +289,7 @@ async def reset_password(
 
 
 @router.post("/refresh-token", response_model=RefreshTokenResponse)
-async def refresh_token(
+def refresh_token(
     token_data: RefreshTokenRequest,
     db: Session = Depends(get_db)
 ):
@@ -305,7 +308,7 @@ async def refresh_token(
 
 
 @router.get("/me", response_model=ProfileResponse)
-async def get_me(
+def get_me(
     current_user: UserModel = Depends(get_current_active_user),
 ):
     """
@@ -320,7 +323,7 @@ async def get_me(
 
 
 @router.put("/me", response_model=ProfileResponse)
-async def update_me(
+def update_me(
     profile_data: ProfileUpdate,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db)
@@ -338,7 +341,7 @@ async def update_me(
 
 
 @router.post("/delete-account", response_model=MessageResponse)
-async def delete_account(
+def delete_account(
     body: DeleteAccountRequest,
     current_user: UserModel = Depends(get_current_active_user),
     db: Session = Depends(get_db),

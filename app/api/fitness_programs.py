@@ -18,7 +18,7 @@ router = APIRouter()
     "/locations/{location_id}/training-programs",
     response_model=FitnessProgramsListResponse,
 )
-async def get_training_programs_for_location(
+def get_training_programs_for_location(
     location_id: uuid.UUID,
     search: Optional[str] = Query(None, description="Search programs by name"),
     sort_by: Optional[str] = Query(

@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.openapi.utils import get_openapi
 from typing import Optional
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError, TimeoutError as PoolTimeoutError
 from app.core.settings import settings
 from app.core.middleware import DynamicCORSMiddleware, TenantMiddleware
 from app.api import api_router
@@ -13,6 +13,8 @@ from app.payments.redirect_handlers import (
     build_payment_success_response,
 )
 import logging
+
+import anyio
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,12 @@ app = FastAPI(
     redoc_url=f"{settings.API_V1_STR}/redoc",
     swagger_ui_parameters={"persistAuthorization": True},
 )
+
+
+@app.on_event("startup")
+async def size_threadpool() -> None:
+    # Sync routes and dependencies run here; one thread per DB connection.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = settings.THREADPOOL_SIZE
 
 
 @app.on_event("startup")
@@ -143,6 +151,19 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+@app.exception_handler(PoolTimeoutError)
+@app.exception_handler(OperationalError)
+async def database_busy_handler(request: Request, exc: Exception):
+    """No free DB connection (pool timeout) or the DB refused one: busy, not the caller's fault."""
+    logger.warning("Database unavailable on %s %s: %s", request.method, request.url.path, type(exc).__name__)
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"success": False, "message": "Server is busy, please try again.",
+                 "detail": "Server is busy, please try again."},
+        headers={"Retry-After": "2"},
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Log unexpected errors and return JSON (so CORS + clients see a real message, not a blank 500)."""
@@ -176,7 +197,7 @@ app.include_router(api_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/health")
-async def health_check():
+def health_check():
     return {"status": "healthy"}
 
 
