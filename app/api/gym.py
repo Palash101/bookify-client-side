@@ -9,7 +9,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=GymTenantResponse)
-async def get_gym_details(
+def get_gym_details(
     tenant: Organization = Depends(get_current_tenant),
 ):
     """

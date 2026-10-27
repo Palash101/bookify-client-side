@@ -56,7 +56,7 @@ class AddWalletBalanceRequest(BaseModel):
 
 
 @router.post("/add/wallet/balance")
-async def add_wallet_balance(
+def add_wallet_balance(
     body: AddWalletBalanceRequest,
     request: Request,
     tenant_id=Depends(get_current_tenant_id),
@@ -148,7 +148,7 @@ async def add_wallet_balance(
 
 
 @router.get("/balance", response_model=WalletBalanceResponse)
-async def get_wallet_balance(
+def get_wallet_balance(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -178,7 +178,7 @@ async def get_wallet_balance(
 
 
 @router.get("/transactions", response_model=WalletTransactionsListResponse)
-async def get_wallet_transactions(
+def get_wallet_transactions(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -258,7 +258,7 @@ async def get_wallet_transactions(
     "/transactions/purchases",
     response_model=PurchasesHistoryResponse,
 )
-async def get_purchases_history(
+def get_purchases_history(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),

@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=EventsListResponse)
-async def get_active_events(
+def get_active_events(
     search: Optional[str] = Query(None, description="Search events by name"),
     sort_by: Optional[str] = Query(
         None, description="Sort by: name, starts_at, created_at, sort_order"
@@ -65,7 +65,7 @@ async def get_active_events(
 
 
 @router.get("/me", response_model=MyEnrollmentsListResponse)
-async def get_my_enrollments(
+def get_my_enrollments(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_active_user),
@@ -92,7 +92,7 @@ async def get_my_enrollments(
 
 
 @router.post("/{event_id}/enroll", response_model=EventEnrollCreateResponse)
-async def enroll_in_event(
+def enroll_in_event(
     event_id: uuid.UUID,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -115,7 +115,7 @@ async def enroll_in_event(
 
 
 @router.delete("/{event_id}/enroll", response_model=EventLeaveResponse)
-async def leave_event(
+def leave_event(
     event_id: uuid.UUID,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),

@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=AllPackagesListResponse)
-async def get_all_packages(
+def get_all_packages(
     search: Optional[str] = Query(None, description="Search packages by name"),
     sort_by: Optional[str] = Query(
         None, description="Sort by: name, created_at, validity_days, sort_order"
@@ -77,7 +77,7 @@ async def get_all_packages(
 
 
 @router.get("/active", response_model=ActivePackagesListResponse)
-async def get_active_packages(
+def get_active_packages(
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -127,7 +127,7 @@ async def get_active_packages(
 
 
 @router.get("/{package_id}", response_model=PackageDetailResponse)
-async def get_package_detail(
+def get_package_detail(
     package_id: uuid.UUID,
     tenant_id: str = Depends(get_current_tenant_id),
     current_user: Optional[User] = Depends(get_optional_current_user),

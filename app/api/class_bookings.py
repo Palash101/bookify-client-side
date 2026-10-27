@@ -8,7 +8,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -72,15 +73,17 @@ def _public_booking_qr_url(*, class_id: uuid.UUID, booking_id: uuid.UUID, tenant
     )
 
 
-async def _send_booking_qr_email(
+def _booking_qr_email(
     *,
     db: Session,
     tenant_id: str,
     booking,
     current_user: User,
-) -> None:
+) -> Optional[dict]:
+    """The QR email for a confirmed booking (send_email kwargs), or None without an address.
+    Built while the request still has its DB session; sent after the response."""
     if not current_user.email:
-        return
+        return None
     qr_data = BookingsService.get_checkin_qr(
         db,
         tenant_id=tenant_id,
@@ -114,12 +117,20 @@ async def _send_booking_qr_email(
       </body>
     </html>
     """
-    await email_service.send_email(
-        subject="Your Booking QR Code",
-        recipients=[current_user.email],
-        body="Your booking QR code is ready.",
-        html_body=html_body,
-    )
+    return {
+        "subject": "Your Booking QR Code",
+        "recipients": [current_user.email],
+        "body": "Your booking QR code is ready.",
+        "html_body": html_body,
+    }
+
+
+async def _send_booking_qr_email(message: dict, booking_id) -> None:
+    """Background task: SMTP is slow, the member should not wait for it."""
+    try:
+        await email_service.send_email(**message)
+    except Exception:
+        _log.exception("booking_qr_email_failed booking_id=%s", booking_id)
 
 
 def _booking_qr_html(*, qr_svg: str, brand_name: str, logo_url: Optional[str], primary_color: str) -> str:
@@ -418,7 +429,7 @@ async def _publish_wallet_debited(
     "/bookings",
     response_model=MemberBookingsResponse,
 )
-async def get_member_bookings(
+def get_member_bookings(
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
@@ -440,7 +451,7 @@ async def get_member_bookings(
     "/{class_id}/bookings/{booking_id}/qr",
     response_model=BookingQrResponse,
 )
-async def get_booking_qr(
+def get_booking_qr(
     request: Request,
     class_id: uuid.UUID,
     booking_id: uuid.UUID,
@@ -486,7 +497,7 @@ async def get_booking_qr(
     "/{class_id}/bookings/{booking_id}/qr/view",
     response_class=HTMLResponse,
 )
-async def view_booking_qr(
+def view_booking_qr(
     class_id: uuid.UUID,
     booking_id: uuid.UUID,
     token: Optional[str] = Query(None),
@@ -524,7 +535,7 @@ async def view_booking_qr(
     "/{class_id}/bookings/validate",
     response_model=BookingValidateResponse,
 )
-async def validate_class_booking(
+def validate_class_booking(
     request: Request,
     class_id: uuid.UUID,
     body: BookingRequestBody,
@@ -583,15 +594,20 @@ async def validate_class_booking(
 async def create_class_booking(
     class_id: uuid.UUID,
     body: BookingRequestBody,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_active_user),
     gym_config: GymConfigValue = Depends(get_gym_config_for_active_user),
     db: Session = Depends(get_db),
 ):
     """
     Validate then create a booking. Re-runs validation on submit (do not trust client-only checks).
+
+    The DB work runs in the thread pool (the session is synchronous), so other requests keep
+    being served while this one waits on Postgres.
     """
     tenant_id = current_user.tenant_id
-    booking, wallet_txn_id = _persist_booking_write(
+    booking, wallet_txn_id = await run_in_threadpool(
+        _persist_booking_write,
         db,
         lambda: BookingsService.create(
             db,
@@ -623,12 +639,15 @@ async def create_class_booking(
         # The QR email is a booking confirmation too: same switch.
         if (gym_config or GymConfigValue()).notification_settings.booking_confirmation:
             try:
-                await _send_booking_qr_email(
+                message = await run_in_threadpool(
+                    _booking_qr_email,
                     db=db,
                     tenant_id=tenant_id,
                     booking=booking,
                     current_user=current_user,
                 )
+                if message:
+                    background_tasks.add_task(_send_booking_qr_email, message, booking.id)
             except Exception:
                 _log.exception("booking_qr_email_failed booking_id=%s", booking.id)
     elif status == "pending_payment":
@@ -680,7 +699,8 @@ async def create_waiting_booking(
     max_waitings controls how many waiting bookings are allowed.
     """
     tenant_id = current_user.tenant_id
-    booking, wallet_txn_id = _persist_booking_write(
+    booking, wallet_txn_id = await run_in_threadpool(
+        _persist_booking_write,
         db,
         lambda: BookingsService.create(
             db,
@@ -736,7 +756,8 @@ async def cancel_class_booking(
     db: Session = Depends(get_db),
 ):
     tenant_id = current_user.tenant_id
-    booking, promoted_booking = _persist_booking_write(
+    booking, promoted_booking = await run_in_threadpool(
+        _persist_booking_write,
         db,
         lambda: BookingsService.cancel(
             db=db,
@@ -765,7 +786,7 @@ async def cancel_class_booking(
             event_type=CLIENT_BOOKING_WAITLIST_PROMOTED,
             gym_config=gym_config,
         )
-    gym_class = db.query(GymClass).filter(GymClass.id == class_id).first()
+    gym_class = await run_in_threadpool(lambda: db.query(GymClass).filter(GymClass.id == class_id).first())
     return {
         "success": True,
         "message": "Booking cancelled",
@@ -782,7 +803,7 @@ async def cancel_class_booking(
     "/{class_id}/attendance/checkin",
     response_model=AttendanceCheckInResponse,
 )
-async def checkin_class_attendance(
+def checkin_class_attendance(
     class_id: uuid.UUID,
     body: AttendanceCheckInRequestBody,
     current_user: User = Depends(get_current_staff_or_trainer),

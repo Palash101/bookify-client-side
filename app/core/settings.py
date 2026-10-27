@@ -42,12 +42,18 @@ class Settings(BaseSettings):
             return self.DATABASE_URL
         return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
 
-    # QueuePool per engine (master, and one engine per tenant).
-    # A request holds its tenant connection until the handler finishes.
-    # Max in-flight requests per pool = POOL_SIZE + MAX_OVERFLOW (1000).
-    POSTGRES_POOL_SIZE: int = Field(default=100, env="POSTGRES_POOL_SIZE")
-    POSTGRES_MAX_OVERFLOW: int = Field(default=900, env="POSTGRES_MAX_OVERFLOW")
-    POSTGRES_POOL_TIMEOUT: int = Field(default=30, env="POSTGRES_POOL_TIMEOUT")
+    # QueuePool per engine (master, and one engine per tenant), per worker process.
+    # A request holds its tenant connection until the handler finishes, so a request
+    # needs a connection for ~20 ms of DB time: 10 + 20 serve hundreds of requests/s.
+    # Keep workers x (POOL_SIZE + MAX_OVERFLOW) x services under Postgres max_connections
+    # (or PgBouncer). POOL_TIMEOUT is short so a saturated DB answers 503 quickly
+    # instead of queueing requests for minutes.
+    POSTGRES_POOL_SIZE: int = Field(default=10, env="POSTGRES_POOL_SIZE")
+    POSTGRES_MAX_OVERFLOW: int = Field(default=20, env="POSTGRES_MAX_OVERFLOW")
+    POSTGRES_POOL_TIMEOUT: int = Field(default=5, env="POSTGRES_POOL_TIMEOUT")
+    # Threads that run sync routes / dependencies (Starlette's default is 40). Matching it
+    # to the pool keeps threads from queueing on connections.
+    THREADPOOL_SIZE: int = Field(default=30, env="THREADPOOL_SIZE")
     POSTGRES_POOL_RECYCLE: int = Field(default=1_800, env="POSTGRES_POOL_RECYCLE")
 
     # Security

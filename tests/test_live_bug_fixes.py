@@ -172,7 +172,8 @@ def test_unhandled_db_error_is_not_echoed(app):
                 return await c.get(path, headers={"X-Tenant-Key": "local-dev-org-201"})
 
         r = asyncio.run(go())
-        assert r.status_code == 500
+        # DB unreachable / refused: "busy, retry" (503), still without the SQL or values
+        assert r.status_code == 503
         body = r.text
         assert "hunter2" not in body and "secret_col" not in body
     finally:

@@ -1,4 +1,4 @@
-from typing import Generator, Optional
+from typing import Optional
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -24,13 +24,11 @@ optional_bearer_scheme = HTTPBearer(
 )
 
 
-def get_db(request: Request) -> Generator:
-    """
-    Tenant-scoped database dependency.
-
-    Uses `TenantMiddleware` -> `request.state.tenant_id` to connect to the correct tenant DB.
-    """
-    yield from tenant_get_db(request)
+# Tenant-scoped database dependency (TenantMiddleware -> request.state.tenant_id).
+# The same function as app.core.db.session.get_db, so a request that needs both the user
+# and the route's queries gets one session (FastAPI shares a dependency per request only
+# when it is the same callable), not two connections.
+get_db = tenant_get_db
 
 
 def _request_tenant_id(request: Request) -> Optional[str]:
@@ -58,7 +56,7 @@ def _raise_tenant_mismatch() -> None:
     )
 
 
-async def get_current_user(
+def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),
@@ -109,7 +107,7 @@ async def get_current_user(
     return user
 
 
-async def get_current_active_user(
+def get_current_active_user(
     current_user: User = Depends(get_current_user)
 ) -> User:
     """
@@ -124,7 +122,7 @@ async def get_current_active_user(
     return current_user
 
 
-async def get_optional_current_user(
+def get_optional_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_bearer_scheme),
     db: Session = Depends(get_db),
@@ -169,7 +167,7 @@ async def get_optional_current_user(
     return user
 
 
-async def get_gym_config_for_active_user(
+def get_gym_config_for_active_user(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> GymConfigValue:
@@ -180,7 +178,7 @@ async def get_gym_config_for_active_user(
     return GymConfigService.get_gym_config(db, current_user.tenant_id)
 
 
-async def get_current_staff_or_trainer(
+def get_current_staff_or_trainer(
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> User:

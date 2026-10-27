@@ -919,7 +919,7 @@ async def _handle_payment_callback(
 
 
 @router.get("/sales-transactions", response_model=SalesTransactionsListResponse)
-async def get_sales_transactions(
+def get_sales_transactions(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
@@ -1012,7 +1012,7 @@ async def get_sales_transactions(
 
 
 @router.get("/gateways")
-async def list_active_gateways(
+def list_active_gateways(
     tenant_id: str = Depends(get_tenant_id),
     current_user: User = Depends(get_current_active_user),
 ):

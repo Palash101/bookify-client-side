@@ -11,7 +11,7 @@ router = APIRouter()
 
 
 @router.get("", response_model=TenantWebsiteConfigResponse)
-async def get_website_config(
+def get_website_config(
     tenant_id: str = Depends(get_current_tenant_id),
     db: Session = Depends(get_db),
 ):
