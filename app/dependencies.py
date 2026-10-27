@@ -104,6 +104,7 @@ def get_current_user(
     if not _tenant_ids_match(user.tenant_id, request_tenant):
         _raise_tenant_mismatch()
 
+    request.state.user_id = str(user.id)
     return user
 
 

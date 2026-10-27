@@ -22,6 +22,7 @@ from app.core.security import verify_token
 from app.core.settings import settings
 from app.models.master_org import Organization
 from app.models.master_org_apikey import APIKeyStatus, OrganizationAPIKey
+from app.core.observability import bind_request
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,7 @@ def _unauthorized(message: str) -> JSONResponse:
 def _attach_tenant(request: Request, organization: Organization) -> None:
     request.state.tenant_id = organization.organization_id
     request.state.tenant = organization
+    bind_request(tenant_id=organization.organization_id)
 
 
 @contextmanager
