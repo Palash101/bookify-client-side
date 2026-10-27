@@ -13,7 +13,8 @@ class WalletTransaction(Base):
     """
     Wallet ledger row (amounts + Stripe session id).
     Context (type) lives on ``reference_type`` / ``reference_id``.
-    Class-booking wallet rows use ``ClassBooking.notes`` markers (no sale).
+    Class-booking wallet rows use reference_type='class_booking', reference_id=booking.id
+    (older rows only carry a ``ClassBooking.notes`` marker).
     """
 
     __tablename__ = "wallet_transactions"
@@ -77,6 +78,10 @@ class WalletTransaction(Base):
     @property
     def transaction_type(self) -> str:
         if self.reference_type:
+            # Class-booking debits and refunds share reference_type='class_booking'
+            # (both services); keep the refund label the wallet history already uses.
+            if self.reference_type == "class_booking" and self.direction == "credit":
+                return "class_booking_refund"
             return str(self.reference_type)
         sess = object_session(self)
         if sess is None:

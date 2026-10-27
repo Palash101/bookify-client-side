@@ -30,13 +30,11 @@ class ConsolePublisher(EventPublisher):
     """Logs events instead of publishing — handy for local dev and tests."""
 
     async def publish(self, event: EventEnvelope) -> str:
-        to_email = (event.data or {}).get("to", "")
+        # Never log the payload/recipient: it carries PII (email) and OTP codes.
         log.info(
-            "pubsub_publish_console event_type=%s to_email=%s event_id=%s payload=%s",
+            "pubsub_publish_console event_type=%s event_id=%s",
             event.event_type,
-            to_email,
             event.event_id,
-            event.to_bytes().decode("utf-8"),
         )
         return f"console-{event.event_id}"
 
@@ -69,21 +67,18 @@ class GooglePubSubPublisher(EventPublisher):
         return future.result()
 
     async def publish(self, event: EventEnvelope) -> str:
-        to_email = (event.data or {}).get("to", "")
+        # Never log the payload/recipient: it carries PII (email) and OTP codes.
         log.info(
-            "pubsub_publish_start event_type=%s topic=%s/%s to_email=%s event_id=%s payload=%s",
+            "pubsub_publish_start event_type=%s topic=%s/%s event_id=%s",
             event.event_type,
             settings.GCP_PROJECT_ID,
             settings.PUBSUB_TOPIC_ID,
-            to_email,
             event.event_id,
-            event.to_bytes().decode("utf-8"),
         )
         message_id = await asyncio.to_thread(self._publish_sync, event)
         log.info(
-            "pubsub_publish_ok event_type=%s to_email=%s event_id=%s message_id=%s topic=%s/%s",
+            "pubsub_publish_ok event_type=%s event_id=%s message_id=%s topic=%s/%s",
             event.event_type,
-            to_email,
             event.event_id,
             message_id,
             settings.GCP_PROJECT_ID,

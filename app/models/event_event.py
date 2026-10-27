@@ -17,6 +17,7 @@ class EventStatus(str, enum.Enum):
     active = "active"
     inactive = "inactive"
     draft = "draft"
+    completed = "completed"  # challenge finalized (rewards decided)
 
 
 class EventEvent(Base):
@@ -55,3 +56,5 @@ class EventEvent(Base):
     btn_name = Column(Text, nullable=True)
     sort_order = Column(Integer, nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=True)
+    # Set by the finalize job (fitnez_activites) once rewards are decided.
+    finalized_at = Column(DateTime(timezone=True), nullable=True)

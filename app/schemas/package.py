@@ -49,6 +49,9 @@ class PackageResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     package_type: Optional[str] = None
+    # normal | time_based | location | program_based | event_based — decides which
+    # booking_restriction block applies (fitnez_main_backend/docs/booking-rules.md §1).
+    feature_type: Optional[str] = None
     booking_restriction: Optional[Any] = None
     is_private: bool = False
     pricing_list: List[PackagePricingResponse] = []
@@ -82,6 +85,7 @@ class ActivePackageData(BaseModel):
     package_id: UUID
     package_name: Optional[str] = None
     package_description: Optional[str] = None
+    feature_type: Optional[str] = None
     booking_restriction: Optional[Any] = None
     validity_days: Optional[int] = None
     validity_end: Optional[date] = None

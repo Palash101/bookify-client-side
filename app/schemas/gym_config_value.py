@@ -100,22 +100,27 @@ class OrganizationConfig(BaseModel):
     )
 
 
+# Defaults for keys a gym's config doesn't have. They match what a new gym starts with
+# (admin backend tenant_settings.py) and what the staff backend falls back to, so a
+# missing key never makes the member app stricter than the dashboard.
+
+
 class PaymentPricingConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    enable_free_classes: bool = False
-    enable_class_package: bool = False
-    enable_pay_per_class: bool = False
+    enable_free_classes: bool = True
+    enable_class_package: bool = True
+    enable_pay_per_class: bool = True
 
 
 class BookingSettingsConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    allow_waiting_list: bool = False
+    allow_waiting_list: bool = True
     auto_confirm_booking: bool = True
-    allow_late_cancellations: bool = False
-    cancellation_window_hours: int = 0
-    advance_booking_window_days: int = 0
+    allow_late_cancellations: bool = True
+    cancellation_window_hours: int = 24
+    advance_booking_window_days: int = 30
     booking_cutoff_minutes: int = 0
 
 
@@ -126,6 +131,11 @@ class AttendanceCheckInConfig(BaseModel):
     auto_mark_no_shows: bool = False
     enable_qr_code_check_in: bool = False
     late_arrival_grace_period: bool = False
+    # no_show_penalty = "booking_block": blocked for booking_block_days once the member
+    # has no_show_limit no-shows within no_show_period_days.
+    no_show_limit: int = 3
+    no_show_period_days: int = 30
+    booking_block_days: int = 7
 
 
 class ClassConfigurationConfig(BaseModel):
@@ -142,10 +152,10 @@ class ClassConfigurationConfig(BaseModel):
 class NotificationSettingsConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    class_reminder: bool = False
-    waitlist_updates: bool = False
-    booking_confirmation: bool = False
-    birthday_notification: bool = False
+    class_reminder: bool = True
+    waitlist_updates: bool = True
+    booking_confirmation: bool = True
+    birthday_notification: bool = True
 
 
 class GymConfigValue(BaseModel):

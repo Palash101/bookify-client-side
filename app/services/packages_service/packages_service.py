@@ -164,7 +164,10 @@ class PackagesService:
         user_id: uuid.UUID,
         package: Package,
     ) -> None:
-        """Raise 400 when package is not catalog-visible or one-time already purchased."""
+        """Raise 400 when package is not catalog-visible or one-time already purchased
+        (404 when it belongs to another gym)."""
+        if str(package.tenant_id) != str(tenant_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Package not found")
         today = PackagesService.tenant_today(db, tenant_id)
         if not PackagesService.is_published_package(package):
             raise HTTPException(
@@ -589,6 +592,7 @@ class PackagesService:
                     "package_id": package.id,
                     "package_name": package.name,
                     "package_description": package.description,
+                    "feature_type": package.feature_type,
                     "booking_restriction": package.booking_restriction,
                     "validity_days": package.validity_days,
                     "validity_end": package.validity_end,

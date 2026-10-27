@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Column, DateTime, ForeignKey, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -13,6 +13,9 @@ class EventEnroll(Base):
     """
 
     __tablename__ = "event_enroll"
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_id", name="uq_event_enroll_event_user"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     tenant_id = Column(String, nullable=False, index=True)
@@ -39,3 +42,9 @@ class EventEnroll(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+    # Challenge progress — written only by fitnez_activites; read-only here.
+    progress_count = Column(Integer, nullable=False, server_default="0")
+    eligible_at = Column(DateTime(timezone=True), nullable=True)
+    last_progress_at = Column(DateTime(timezone=True), nullable=True)
+    final_rank = Column(Integer, nullable=True)

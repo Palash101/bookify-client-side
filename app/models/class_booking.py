@@ -26,12 +26,18 @@ class ClassBookingStatus(str, enum.Enum):
     pending = "pending"
     pending_payment = "pending_payment"
     completed = "completed"
+    # Written by the staff backend's class sweep / staff check-out.
+    no_show = "no_show"
+    # Cancelled outside the free-cancel window: no refund.
+    late_cancelled = "late_cancelled"
 
 
 TERMINAL_CLASS_BOOKING_STATUSES = frozenset(
     {
         ClassBookingStatus.cancelled,
         ClassBookingStatus.completed,
+        ClassBookingStatus.no_show,
+        ClassBookingStatus.late_cancelled,
     }
 )
 
@@ -56,6 +62,8 @@ def normalize_class_booking_status(value: Any) -> ClassBookingStatus:
         "pending": ClassBookingStatus.pending,
         "pending_payment": ClassBookingStatus.pending_payment,
         "completed": ClassBookingStatus.completed,
+        "no_show": ClassBookingStatus.no_show,
+        "late_cancelled": ClassBookingStatus.late_cancelled,
     }
     return mapping.get(raw.strip().lower(), ClassBookingStatus.pending)
 

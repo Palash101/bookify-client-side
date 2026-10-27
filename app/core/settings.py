@@ -136,7 +136,8 @@ class Settings(BaseSettings):
     )
 
     # Pub/Sub — one topic for all domain events; consumer fans out internally.
-    PUBSUB_TOPIC_ID: str = Field(default="bookify-events", env="PUBSUB_TOPIC_ID")
+    # Default matches the main backend / activities consumer topic.
+    PUBSUB_TOPIC_ID: str = Field(default="fitnezstudios-activities", env="PUBSUB_TOPIC_ID")
     PUBSUB_EMULATOR_HOST: Optional[str] = Field(default=None, env="PUBSUB_EMULATOR_HOST")
     PUBSUB_ENABLE_MESSAGE_ORDERING: bool = Field(
         default=False, env="PUBSUB_ENABLE_MESSAGE_ORDERING"
@@ -183,6 +184,12 @@ class Settings(BaseSettings):
     REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "")
 
     DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
+
+    # DEV ONLY: echo the OTP code in auth responses (login / register /
+    # resend-otp / forgot-password) and in logs. Never enable in production:
+    # anyone could register or reset a password for an email they don't own.
+    # Read from the EXPOSE_OTP_IN_RESPONSE env var; defaults to False.
+    EXPOSE_OTP_IN_RESPONSE: bool = False
 
     @property
     def publisher_is_console(self) -> bool:

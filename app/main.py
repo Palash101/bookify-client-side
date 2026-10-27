@@ -4,6 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from fastapi.openapi.utils import get_openapi
 from typing import Optional
+from sqlalchemy.exc import SQLAlchemyError
 from app.core.settings import settings
 from app.core.middleware import DynamicCORSMiddleware, TenantMiddleware
 from app.api import api_router
@@ -28,7 +29,9 @@ app = FastAPI(
 @app.on_event("startup")
 async def log_pubsub_startup_config() -> None:
     mode = "console" if settings.publisher_is_console else "gcp"
-    logger.info(
+    # Use uvicorn's logger so the line is emitted at INFO without app-level
+    # logging config (the module logger's INFO lines are otherwise dropped).
+    logging.getLogger("uvicorn.error").info(
         "pubsub_startup mode=%s project=%s topic=%s ordering=%s",
         mode,
         settings.GCP_PROJECT_ID or "(none)",
@@ -144,7 +147,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Log unexpected errors and return JSON (so CORS + clients see a real message, not a blank 500)."""
     logger.exception("Unhandled server error on %s %s", request.method, request.url.path)
-    detail = str(exc) if settings.DEBUG else "Internal server error"
+    # Database errors are never echoed (str(exc) carries SQL, constraint names
+    # and row values) — not even with DEBUG on, which is the default when unset.
+    if settings.DEBUG and not isinstance(exc, SQLAlchemyError):
+        detail = str(exc)
+    else:
+        detail = "Internal server error"
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"success": False, "message": detail, "detail": detail},

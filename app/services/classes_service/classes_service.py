@@ -14,14 +14,13 @@ from app.models.user import User
 from app.models.fitness_program import FitnessProgram
 from app.models.location import Location
 from app.schemas.gym_class import GymClassResponse
-from app.services.bookings_service import _effective_capacity, _tenant_tz, booking_cancel_info
+from app.services.bookings_service import UNRELEASED_STATUSES, _effective_capacity, _tenant_tz, booking_cancel_info
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 
 # Same window as locations: catalog can go stale this long, live booking
 # fields are never stored — they are overlaid on every request.
 CACHE_TTL = 300
-
 ACTIVE_LAYOUT_SEAT_STATUSES = (
     ClassBookingStatus.confirmed,
     ClassBookingStatus.pending,
@@ -153,8 +152,8 @@ class ClassesService:
         Rules:
           - Classes for this tenant: trainer belongs to tenant, OR training programme belongs to tenant.
           - Status/publish gating is based on gym_classes.status + gym_classes.publish_at.
-          - Always include status != 'draft'.
-          - For status = 'draft', include only when publish_at <= tenant's current time.
+          - Draft and scheduled classes (a scheduled drop) are hidden until publish_at;
+            every other status is included.
         """
         gym_config = GymConfigService.get_gym_config(db, tenant_id)
         tz = GymConfigService.resolve_zoneinfo(gym_config)
@@ -207,7 +206,7 @@ class ClassesService:
         result: List[GymClass] = []
         for gym_class in query.all():
             status = (gym_class.status or "").lower()
-            if status == "draft":
+            if status in UNRELEASED_STATUSES:
                 publish_at = gym_class.publish_at
                 if publish_at is None:
                     continue

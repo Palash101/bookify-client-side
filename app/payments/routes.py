@@ -173,6 +173,8 @@ async def initiate_package_purchase(
         .filter(
             PackagePricing.id == body.package_pricing_id,
             PackagePricing.package_id == body.package_id,
+            # Several gyms share one database: only this gym's packages can be bought.
+            Package.tenant_id == tenant_id,
         )
     )
     pricing_row = pricing_query.first()
@@ -690,9 +692,15 @@ async def _handle_payment_callback(
     wallet_topup_txn_id = None
     wallet_topup_failed_txn_id = None
     if result.transaction_id:
+        # Gateway transaction ids can repeat across gyms (each gym has its own gateway
+        # account), so only this gym's members' transactions match.
         wallet_txn = (
             db.query(WalletTransaction)
-            .filter(WalletTransaction.transaction_id == result.transaction_id)
+            .join(User, User.id == WalletTransaction.user_id)
+            .filter(
+                WalletTransaction.transaction_id == result.transaction_id,
+                User.tenant_id == tenant_id,
+            )
             .first()
         )
     else:
@@ -703,6 +711,7 @@ async def _handle_payment_callback(
         init_wallet_txn = (
             db.query(SalesTransactions)
             .filter(
+                SalesTransactions.tenant_id == tenant_id,
                 SalesTransactions.source == "wallet",
                 SalesTransactions.gateway_txn_id == result.transaction_id,
                 SalesTransactions.extra_metadata["event"].astext == "created",
@@ -822,6 +831,7 @@ async def _handle_payment_callback(
                 st = (
                     db.query(SalesTransactions)
                     .filter(
+                        SalesTransactions.tenant_id == tenant_id,
                         SalesTransactions.gateway_txn_id == result.transaction_id,
                         SalesTransactions.source == "wallet",
                     )
