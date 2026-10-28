@@ -33,6 +33,18 @@ def get_user_package_for_sale(db: Session, sale_id: UUID) -> Optional[UserPackag
     return db.query(UserPackage).filter(UserPackage.sale_id == sale_id).first()
 
 
+def _lock_user_package(db: Session, user_package: UserPackage) -> UserPackage:
+    """Re-read the package row locked until commit, before changing its session count
+    (the dashboard locks the same row, so the two apps can't overwrite each other)."""
+    return (
+        db.query(UserPackage)
+        .filter(UserPackage.id == user_package.id)
+        .with_for_update()
+        .populate_existing()
+        .one()
+    )
+
+
 def _remaining_from_sale_metadata(sale: Sale) -> Optional[int]:
     return None
 
@@ -270,6 +282,7 @@ def record_booking_refund_credit(
     """
     if sessions <= 0:
         return None
+    user_package = _lock_user_package(db, user_package)  # before the idempotency check
     if _tracking_exists(
         db,
         reference_id=booking.id,
@@ -352,6 +365,7 @@ def apply_package_session_debit_for_booking(
     user_package = get_user_package_for_sale(db, sale.id)
     if user_package is None:
         return 0
+    user_package = _lock_user_package(db, user_package)
 
     if _tracking_exists(
         db,

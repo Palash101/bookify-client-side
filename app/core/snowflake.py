@@ -7,8 +7,10 @@ Layout (MSB → LSB):
 from __future__ import annotations
 
 import os
+import socket
 import threading
 import time
+import zlib
 
 # Custom epoch: 2024-01-01T00:00:00.000Z
 DEFAULT_EPOCH_MS = 1704067200000
@@ -86,13 +88,26 @@ _generator: SnowflakeGenerator | None = None
 _generator_lock = threading.Lock()
 
 
+def _process_ids() -> tuple[int, int]:
+    """Worker / datacenter ids for this process when none are configured.
+
+    Every process used to default to 1 / 1, so two processes (uvicorn workers, Cloud Run
+    instances, or the member app and the dashboard) creating a booking in the same
+    millisecond produced the same BK- / TXN- ref. Derived from host + pid instead: 1024
+    combinations, and the unique ref index still rejects the rare collision.
+    """
+    h = zlib.crc32(f"{socket.gethostname()}:{os.getpid()}".encode())
+    return h % (MAX_WORKER_ID + 1), (h >> WORKER_ID_BITS) % (MAX_DATACENTER_ID + 1)
+
+
 def get_snowflake_generator() -> SnowflakeGenerator:
     global _generator
     if _generator is None:
         with _generator_lock:
             if _generator is None:
-                worker_id = int(os.getenv("SNOWFLAKE_WORKER_ID", "1"))
-                datacenter_id = int(os.getenv("SNOWFLAKE_DATACENTER_ID", "1"))
+                default_worker, default_dc = _process_ids()
+                worker_id = int(os.getenv("SNOWFLAKE_WORKER_ID", default_worker))
+                datacenter_id = int(os.getenv("SNOWFLAKE_DATACENTER_ID", default_dc))
                 _generator = SnowflakeGenerator(
                     worker_id=worker_id,
                     datacenter_id=datacenter_id,
