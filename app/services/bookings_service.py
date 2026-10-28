@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String as SAString, and_, cast, func, or_
+from sqlalchemy import String as SAString, and_, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError, ProgrammingError, OperationalError
 from sqlalchemy.orm import Session, aliased, attributes
 
@@ -40,6 +40,7 @@ from app.schemas.gym_config_value import GymConfigValue
 from app.services.no_show_block import booking_blocked_until
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
+from app.services.wallet_locks import lock_member
 from app.services.user_package_tracking_service import (
     apply_package_session_debit_for_booking,
     get_user_package_for_sale,
@@ -85,11 +86,21 @@ def _wallet_refund_already_recorded(notes: Optional[str]) -> bool:
 
 
 def _wallet_user(db: Session, user: User) -> User:
-    """Load user in the active DB session before wallet balance updates."""
-    db_user = db.get(User, user.id)
+    """The member's row, locked until commit, with its committed balance.
+
+    Rows are always locked in one order -- class -> booking -> member -> package (the staff
+    dashboard does the same) -- so concurrent bookings, cancels and top-ups queue instead of
+    overwriting each other's balance or refunding twice.
+    """
+    db_user = lock_member(db, user.id)
     if db_user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return db_user
+
+
+def _lock_class(db: Session, class_id: UUID) -> None:
+    """Lock the class row until commit (bookings of one class are serialized)."""
+    db.execute(select(GymClass.id).where(GymClass.id == class_id).with_for_update())
 
 
 def _location_id_for_class(
@@ -441,6 +452,8 @@ def _refund_wallet_for_cancelled_booking(
         return None
     if not refund_due:
         return None
+    # Lock before checking: two cancels at once would both see "not refunded yet".
+    _wallet_user(db, user)
     if _wallet_refund_recorded(db, user.id, booking):
         return None
 
@@ -1796,6 +1809,11 @@ class BookingsService:
         force_waiting: bool = False,
         gym_config: Optional[GymConfigValue] = None,
     ) -> Tuple[ClassBooking, Optional[UUID]]:
+        # Lock the class, then the member, before validating: the capacity, seat and
+        # "already booked" checks then see every booking committed before this one, and a
+        # second request (member app or dashboard) waits instead of passing the same checks.
+        _lock_class(db, class_id)
+        _wallet_user(db, user)
         outcome = BookingsService.validate(
             db,
             tenant_id,
@@ -1968,6 +1986,9 @@ class BookingsService:
         reason: Optional[str],
         gym_config: Optional[GymConfigValue] = None,
     ) -> Tuple[ClassBooking, Optional[ClassBooking]]:
+        # Class first, then the booking (same order as create and the dashboard): a cancel
+        # that commits while we wait is seen below, so it is not cancelled or refunded twice.
+        _lock_class(db, class_id)
         booking = (
             db.query(ClassBooking)
             .filter(
@@ -1976,6 +1997,8 @@ class BookingsService:
                 ClassBooking.tenant_id == tenant_id,
                 ClassBooking.user_id == user.id,
             )
+            .with_for_update()
+            .populate_existing()
             .first()
         )
         if not booking:

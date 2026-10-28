@@ -20,6 +20,7 @@ from app.services.packages_service.packages_service import PackagesService
 from app.services.locations_service.locations_service import LocationsService
 from app.services.gym_config_service import GymConfigService
 from app.services.wallet_notification_service import wallet_topup_email_pending
+from app.services.wallet_locks import lock_member, lock_payment_rows
 
 
 class PaymentSuccessService:
@@ -30,6 +31,9 @@ class PaymentSuccessService:
         Returns a small debug dict for the HTTP handler to expose.
         """
         debug: dict[str, str] = {"session_id": session_id}
+        # Same payment as the gateway callback may be processing right now: lock it first
+        # (see lock_payment_rows) so only one of them credits the wallet.
+        lock_payment_rows(db, session_id)
 
         # 1) Sale lookup by gateway session id
         sale = find_sale_by_gateway_session(db, session_id)
@@ -104,7 +108,7 @@ class PaymentSuccessService:
             debug["init_wallet_found"] = "1" if init_wallet else "0"
             if init_wallet and init_wallet.user_id:
                 attach_checkout_platform_debug(debug, init_wallet.extra_metadata)
-                user = db.query(User).filter(User.id == init_wallet.user_id).first()
+                user = lock_member(db, init_wallet.user_id)
                 before = float(user.wallet or 0) if user else 0.0
                 credited = float(init_wallet.amount or 0)
                 after = before + credited

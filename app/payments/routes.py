@@ -52,6 +52,7 @@ from app.services.locations_service.locations_service import LocationsService
 from app.services.gym_config_service import GymConfigService
 from app.services.package_notification_service import PackageNotificationService
 from app.services.payment_notification_service import PaymentNotificationService
+from app.services.wallet_locks import lock_member, lock_payment_rows
 from app.services.wallet_notification_service import (
     WalletNotificationService,
     mark_wallet_topup_email_sent,
@@ -220,6 +221,7 @@ async def initiate_package_purchase(
     # WALLET payment method
     # --------------------------
     if body.payment_method == "wallet":
+        current_user = lock_member(db, current_user.id)  # committed balance, held until commit
         balance_before = float(current_user.wallet or 0)
         if balance_before < amount_value:
             raise HTTPException(
@@ -691,6 +693,10 @@ async def _handle_payment_callback(
     # ----------------------------------------------------------------
     wallet_topup_txn_id = None
     wallet_topup_failed_txn_id = None
+    # The gateway callback and the success redirect can process the same payment at once.
+    # Lock its initiation rows first: the second one then waits and sees what the first
+    # committed (wallet transaction / sale) instead of crediting the wallet again.
+    lock_payment_rows(db, result.transaction_id)
     if result.transaction_id:
         # Gateway transaction ids can repeat across gyms (each gym has its own gateway
         # account), so only this gym's members' transactions match.
@@ -720,7 +726,7 @@ async def _handle_payment_callback(
             .first()
         )
         if init_wallet_txn and init_wallet_txn.user_id:
-            user = db.query(User).filter(User.id == init_wallet_txn.user_id).first()
+            user = lock_member(db, init_wallet_txn.user_id)
             before = float(user.wallet or 0) if user else 0.0
             credited = float(init_wallet_txn.amount or 0)
             after = before + credited
@@ -813,7 +819,7 @@ async def _handle_payment_callback(
                 and wallet_txn.direction == "credit"
                 and wallet_txn.transaction_type == "wallet_add"
             ):
-                user = db.query(User).filter(User.id == wallet_txn.user_id).first()
+                user = lock_member(db, wallet_txn.user_id)
                 if user:
                     before = float(user.wallet or 0)
                     credited = float(wallet_txn.amount or 0)
