@@ -395,7 +395,9 @@ def _setup_tracing(service: str, app: Any, rate: float) -> bool:
         from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
         from opentelemetry.propagators.cloud_trace_propagator import CloudTraceFormatPropagator
 
-        exporter = CloudTraceSpanExporter(project_id=_PROJECT or None)
+        # resource_regex keeps service.name / service.version on every span (the exporter drops
+        # resource attributes otherwise), so Trace Explorer can filter by service.
+        exporter = CloudTraceSpanExporter(project_id=_PROJECT or None, resource_regex=r"service\..*")
         # Continue the trace Cloud Run starts (X-Cloud-Trace-Context): logs and spans share it.
         propagators.insert(0, CloudTraceFormatPropagator())
     else:
