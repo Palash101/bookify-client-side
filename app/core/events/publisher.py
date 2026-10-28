@@ -16,6 +16,7 @@ from typing import Any, Optional
 from app.core.events.envelope import EventEnvelope
 from app.core.logging import get_logger
 from app.core.settings import settings
+from app.core.observability import current_request_id
 
 log = get_logger(__name__)
 
@@ -56,6 +57,9 @@ class GooglePubSubPublisher(EventPublisher):
 
     def _publish_sync(self, event: EventEnvelope) -> str:
         publish_kwargs: dict[str, Any] = event.pubsub_attributes()
+        # Lets the consumer log under the same id as the request that caused it.
+        if request_id := current_request_id():
+            publish_kwargs["request_id"] = request_id
         if settings.PUBSUB_ENABLE_MESSAGE_ORDERING and event.ordering_key:
             publish_kwargs["ordering_key"] = event.ordering_key
 

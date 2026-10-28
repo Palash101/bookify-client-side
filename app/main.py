@@ -16,6 +16,11 @@ import logging
 
 import anyio
 
+from app.core.observability import RequestContextMiddleware, configure_logging, init_error_tracking
+
+# JSON logs on stdout (Cloud Logging), request id on every line: app/core/observability.py
+configure_logging("client-backend")
+init_error_tracking("client-backend")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -37,9 +42,7 @@ async def size_threadpool() -> None:
 @app.on_event("startup")
 async def log_pubsub_startup_config() -> None:
     mode = "console" if settings.publisher_is_console else "gcp"
-    # Use uvicorn's logger so the line is emitted at INFO without app-level
-    # logging config (the module logger's INFO lines are otherwise dropped).
-    logging.getLogger("uvicorn.error").info(
+    logger.info(
         "pubsub_startup mode=%s project=%s topic=%s ordering=%s",
         mode,
         settings.GCP_PROJECT_ID or "(none)",
@@ -191,6 +194,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Outermost: request id + one access line for every request.
+app.add_middleware(RequestContextMiddleware)
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)

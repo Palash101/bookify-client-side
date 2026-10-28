@@ -189,7 +189,8 @@ class Settings(BaseSettings):
     # cache atomically when a cached payload shape changes.
     REDIS_KEY_PREFIX: str = os.getenv("REDIS_KEY_PREFIX", "")
 
-    DEBUG: bool = os.getenv("DEBUG", "True").lower() == "true"
+    # Off unless set: on, error responses carry exception text and debug context.
+    DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 
     # DEV ONLY: echo the OTP code in auth responses (login / register /
     # resend-otp / forgot-password) and in logs. Never enable in production:
