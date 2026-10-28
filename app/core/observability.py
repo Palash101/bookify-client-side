@@ -15,6 +15,12 @@ as a message attribute, so a consumer can log under the same id.
 Secrets never reach the output: bearer tokens, JWTs and ``password= / token= / otp= ...``
 values are replaced, emails and phone numbers are masked (also inside stack traces).
 
+Tracing (``init_tracing``) is on when ``TRACE_SAMPLE_RATE`` > 0: requests, SQL, Redis and
+outgoing HTTP become spans sent to Cloud Trace (on Cloud Run) or an OTLP collector such as
+Jaeger (``TRACE_EXPORTER=otlp``, ``OTEL_EXPORTER_OTLP_ENDPOINT``). Pub/Sub messages carry
+the trace (``trace_carrier`` / ``consumer_span``), so one booking is one trace across the
+API and the activities worker; log lines carry its trace and span id.
+
 Errors go to Sentry when ``SENTRY_DSN`` is set (``init_error_tracking``): unhandled exceptions
 and ``logger.error`` / ``logger.exception``, tagged with request_id, tenant_id, user id and
 release ``<service>@<version>``; no headers, cookies or IPs, same redaction. Without the
@@ -25,6 +31,7 @@ This file is the same in every service; keep the copies in sync.
 from __future__ import annotations
 
 import contextvars
+import importlib.util
 import json
 import logging
 import os
@@ -33,6 +40,7 @@ import sys
 import time
 import traceback
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -46,6 +54,7 @@ _VERSION = os.getenv("K_REVISION") or os.getenv("GIT_SHA") or "dev"
 _PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT_ID") or ""
 _SKIP_ACCESS_LOG = ("/health", "/ready", "/live", "/favicon.ico")
 _sentry_on = False
+_tracing_on = False
 _REQUEST_ID_OK = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
@@ -67,6 +76,15 @@ def bind_request(*, tenant_id: Any = None, user_id: Any = None) -> None:
             sentry_sdk.set_tag("tenant_id", str(tenant_id))
         if user_id:
             sentry_sdk.set_user({"id": str(user_id)})
+    if _tracing_on and (tenant_id or user_id):
+        from opentelemetry import trace
+
+        span = trace.get_current_span()  # the request's span: lets you search traces by gym
+        if span.is_recording():
+            if tenant_id:
+                span.set_attribute("tenant.id", str(tenant_id))
+            if user_id:
+                span.set_attribute("enduser.id", str(user_id))
 
 
 def bind_message(*, request_id: Optional[str] = None, tenant_id: Any = None) -> list:
@@ -177,6 +195,16 @@ def _context() -> dict:
             out[key] = value
     if _trace.get():
         out["logging.googleapis.com/trace"] = _trace.get()
+    if _tracing_on:
+        from opentelemetry import trace
+
+        span = trace.get_current_span().get_span_context()
+        if span.is_valid:
+            trace_id = format(span.trace_id, "032x")
+            out["trace_id"] = trace_id
+            out["logging.googleapis.com/trace"] = f"projects/{_PROJECT}/traces/{trace_id}" if _PROJECT else trace_id
+            out["logging.googleapis.com/spanId"] = format(span.span_id, "016x")
+            out["logging.googleapis.com/trace_sampled"] = span.trace_flags.sampled
     return out
 
 
@@ -292,3 +320,131 @@ def init_error_tracking(service: str) -> bool:
     _sentry_on = True
     logging.getLogger(__name__).info("error tracking on (Sentry), release %s@%s", service, _VERSION)
     return True
+
+
+# ---------------------------------------------------------------- tracing (OpenTelemetry)
+def _instrument(library: str, module: str, cls: str, **kwargs) -> None:
+    """Turn on one auto-instrumentation; a library this service doesn't use is skipped."""
+    if importlib.util.find_spec(library) is None:
+        return
+    try:
+        instrumentor = getattr(__import__(module, fromlist=[cls]), cls)()
+        if not instrumentor.is_instrumented_by_opentelemetry:
+            instrumentor.instrument(**kwargs)
+    except ImportError:
+        pass
+
+
+def _trace_sql() -> None:
+    """Query spans for every engine. Hooked on first connect rather than on create_engine,
+    because our modules import create_engine before tracing starts (and tenant engines come later)."""
+    import weakref
+
+    if importlib.util.find_spec("sqlalchemy") is None:
+        return
+    try:
+        from opentelemetry import metrics, trace
+        from opentelemetry.instrumentation.sqlalchemy.engine import EngineTracer
+    except ImportError:
+        return
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    tracer = trace.get_tracer("sqlalchemy")
+    usage = metrics.get_meter("sqlalchemy").create_up_down_counter("db.client.connections.usage")
+    traced = weakref.WeakSet()
+
+    @event.listens_for(Engine, "engine_connect")
+    def _trace_engine(conn, *_):
+        if conn.engine not in traced:
+            traced.add(conn.engine)
+            EngineTracer(tracer, conn.engine, usage)
+
+
+def init_tracing(service: str, app: Any = None) -> bool:
+    """Trace a share of requests when TRACE_SAMPLE_RATE > 0 (e.g. 0.1). Call at startup."""
+    rate = float(os.getenv("TRACE_SAMPLE_RATE") or 0)
+    if rate <= 0:
+        return False
+    try:
+        return _setup_tracing(service, app, rate)
+    except ImportError:
+        # Tracing must never stop a service from starting: run without it.
+        logging.getLogger(__name__).exception("tracing requested (TRACE_SAMPLE_RATE) but its packages are missing")
+        return False
+
+
+def _setup_tracing(service: str, app: Any, rate: float) -> bool:
+    global _tracing_on
+    if _tracing_on:  # already set up in this process (e.g. worker + API): just add the app
+        if app is not None:
+            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+            FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,live,favicon.ico")
+        return True
+    from opentelemetry import propagate, trace
+    from opentelemetry.propagators.composite import CompositePropagator
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    propagators = [TraceContextTextMapPropagator()]
+    if (os.getenv("TRACE_EXPORTER") or ("gcp" if os.getenv("K_SERVICE") else "otlp")) == "gcp":
+        from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
+        from opentelemetry.propagators.cloud_trace_propagator import CloudTraceFormatPropagator
+
+        exporter = CloudTraceSpanExporter(project_id=_PROJECT or None)
+        # Continue the trace Cloud Run starts (X-Cloud-Trace-Context): logs and spans share it.
+        propagators.insert(0, CloudTraceFormatPropagator())
+    else:
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+        exporter = OTLPSpanExporter()  # OTEL_EXPORTER_OTLP_ENDPOINT, e.g. http://jaeger:4318
+
+    provider = TracerProvider(
+        resource=Resource.create({"service.name": os.getenv("K_SERVICE") or service, "service.version": _VERSION}),
+        # Follow the caller's decision; sample `rate` of new traces.
+        sampler=ParentBased(TraceIdRatioBased(rate)),
+    )
+    provider.add_span_processor(BatchSpanProcessor(exporter))
+    trace.set_tracer_provider(provider)
+    propagate.set_global_textmap(CompositePropagator(propagators))
+
+    if app is not None:
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        FastAPIInstrumentor.instrument_app(app, excluded_urls="health,ready,live,favicon.ico")
+    _trace_sql()
+    _instrument("redis", "opentelemetry.instrumentation.redis", "RedisInstrumentor")
+    _instrument("httpx", "opentelemetry.instrumentation.httpx", "HTTPXClientInstrumentor")
+    _instrument("requests", "opentelemetry.instrumentation.requests", "RequestsInstrumentor")
+    _tracing_on = True
+    logging.getLogger(__name__).info("tracing on, sample rate %s", rate)
+    return True
+
+
+def trace_carrier() -> dict:
+    """The current trace as Pub/Sub message attributes (empty when tracing is off)."""
+    if not _tracing_on:
+        return {}
+    from opentelemetry import propagate
+
+    carrier: dict = {}
+    propagate.inject(carrier)
+    return carrier
+
+
+def consumer_span(name: str, attributes: Optional[dict] = None, carrier: Optional[dict] = None):
+    """Context manager for handling a message: a span continuing the publisher's trace."""
+    if not _tracing_on:
+        return nullcontext()
+    from opentelemetry import propagate, trace
+
+    return trace.get_tracer("pubsub").start_as_current_span(
+        name,
+        context=propagate.extract(dict(carrier or {})),
+        kind=trace.SpanKind.CONSUMER,
+        attributes={k: str(v) for k, v in (attributes or {}).items() if v is not None},
+    )

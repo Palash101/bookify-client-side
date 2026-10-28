@@ -16,7 +16,7 @@ import logging
 
 import anyio
 
-from app.core.observability import RequestContextMiddleware, configure_logging, init_error_tracking
+from app.core.observability import RequestContextMiddleware, configure_logging, init_error_tracking, init_tracing
 
 # JSON logs on stdout (Cloud Logging), request id on every line: app/core/observability.py
 configure_logging("client-backend")
@@ -197,6 +197,7 @@ app.add_middleware(
 
 # Outermost: request id + one access line for every request.
 app.add_middleware(RequestContextMiddleware)
+init_tracing("client-backend", app)  # off unless TRACE_SAMPLE_RATE is set
 
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
