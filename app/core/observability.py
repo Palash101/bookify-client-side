@@ -15,6 +15,11 @@ as a message attribute, so a consumer can log under the same id.
 Secrets never reach the output: bearer tokens, JWTs and ``password= / token= / otp= ...``
 values are replaced, emails and phone numbers are masked (also inside stack traces).
 
+Errors go to Sentry when ``SENTRY_DSN`` is set (``init_error_tracking``): unhandled exceptions
+and ``logger.error`` / ``logger.exception``, tagged with request_id, tenant_id, user id and
+release ``<service>@<version>``; no headers, cookies or IPs, same redaction. Without the
+DSN nothing is sent and the package is not even imported.
+
 This file is the same in every service; keep the copies in sync.
 """
 from __future__ import annotations
@@ -40,6 +45,7 @@ _SERVICE = "app"
 _VERSION = os.getenv("K_REVISION") or os.getenv("GIT_SHA") or "dev"
 _PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT_ID") or ""
 _SKIP_ACCESS_LOG = ("/health", "/ready", "/live", "/favicon.ico")
+_sentry_on = False
 _REQUEST_ID_OK = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
 
 
@@ -54,6 +60,13 @@ def bind_request(*, tenant_id: Any = None, user_id: Any = None) -> None:
         _tenant_id.set(str(tenant_id))
     if user_id:
         _user_id.set(str(user_id))
+    if _sentry_on and (tenant_id or user_id):
+        import sentry_sdk
+
+        if tenant_id:
+            sentry_sdk.set_tag("tenant_id", str(tenant_id))
+        if user_id:
+            sentry_sdk.set_user({"id": str(user_id)})
 
 
 def bind_message(*, request_id: Optional[str] = None, tenant_id: Any = None) -> list:
@@ -91,6 +104,12 @@ class RequestContextMiddleware:
             trace = f"projects/{_PROJECT}/traces/{cloud_trace.split('/', 1)[0]}"
         tokens = [_request_id.set(request_id), _trace.set(trace), _tenant_id.set(None), _user_id.set(None)]
         scope.setdefault("state", {})["request_id"] = request_id
+        if _sentry_on:
+            # On Sentry's per-request scope: an unhandled error is reported after this
+            # middleware has already reset its context variables.
+            import sentry_sdk
+
+            sentry_sdk.set_tag("request_id", request_id)
         status = 500
         start = time.perf_counter()
 
@@ -207,3 +226,69 @@ def configure_logging(service: str) -> None:
     # RequestContextMiddleware writes the access line (with request id and latency).
     logging.getLogger("uvicorn.access").handlers = []
     logging.getLogger("uvicorn.access").propagate = False
+
+
+# ---------------------------------------------------------------- error tracking (Sentry)
+def _scrub_event(event: dict, _hint: dict) -> dict:
+    for key in ("request_id", "tenant_id"):
+        value = (_request_id if key == "request_id" else _tenant_id).get()
+        if value:
+            event.setdefault("tags", {})[key] = value
+    if _user_id.get():
+        event["user"] = {"id": _user_id.get()}  # id only: no email, name or IP
+    for exc in (event.get("exception") or {}).get("values") or []:
+        if isinstance(exc.get("value"), str):
+            exc["value"] = redact(exc["value"])
+        # Source lines shown around each frame can hold hardcoded secrets too.
+        for frame in (exc.get("stacktrace") or {}).get("frames") or []:
+            for key in ("context_line", "pre_context", "post_context"):
+                if key in frame:
+                    frame[key] = redact_values(frame[key])
+    for key in ("message", "logentry"):
+        if key in event:
+            event[key] = redact_values(event[key])
+    crumbs = event.get("breadcrumbs") or {}
+    for crumb in crumbs.get("values") or []:
+        if "message" in crumb:
+            crumb["message"] = redact_values(crumb["message"])
+    request = event.get("request")
+    if isinstance(request, dict):
+        request.pop("cookies", None)
+        request.pop("data", None)
+        request["headers"] = {k: v for k, v in (request.get("headers") or {}).items()
+                              if k.lower() in ("user-agent", "content-type", "x-request-id")}
+        if "query_string" in request:
+            request["query_string"] = redact_values(request["query_string"])
+        if "url" in request:
+            request["url"] = redact(request["url"])
+    return event
+
+
+def init_error_tracking(service: str) -> bool:
+    """Send errors to Sentry when SENTRY_DSN is set. Call once at startup (after configure_logging)."""
+    dsn = os.getenv("SENTRY_DSN")
+    if not dsn:
+        return False
+    global _sentry_on
+    import sentry_sdk
+    from sentry_sdk.integrations.logging import LoggingIntegration, ignore_logger
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment=os.getenv("SENTRY_ENVIRONMENT") or os.getenv("ENVIRONMENT") or "production",
+        release=f"{service}@{_VERSION}",
+        server_name=os.getenv("K_SERVICE") or service,
+        send_default_pii=False,
+        # Errors only by default (free plan quota); tracing is Phase 3.
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0")),
+        integrations=[LoggingIntegration(level=logging.INFO, event_level=logging.ERROR)],
+        before_send=_scrub_event,
+        max_breadcrumbs=50,
+        # Frame locals hold raw requests (headers, cookies, bodies): never send them.
+        include_local_variables=False,
+    )
+    # A 5xx access line repeats the exception Sentry already has.
+    ignore_logger("access")
+    _sentry_on = True
+    logging.getLogger(__name__).info("error tracking on (Sentry), release %s@%s", service, _VERSION)
+    return True

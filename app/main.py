@@ -16,10 +16,11 @@ import logging
 
 import anyio
 
-from app.core.observability import RequestContextMiddleware, configure_logging
+from app.core.observability import RequestContextMiddleware, configure_logging, init_error_tracking
 
 # JSON logs on stdout (Cloud Logging), request id on every line: app/core/observability.py
 configure_logging("client-backend")
+init_error_tracking("client-backend")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
