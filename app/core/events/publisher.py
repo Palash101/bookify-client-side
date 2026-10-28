@@ -16,7 +16,7 @@ from typing import Any, Optional
 from app.core.events.envelope import EventEnvelope
 from app.core.logging import get_logger
 from app.core.settings import settings
-from app.core.observability import current_request_id
+from app.core.observability import current_request_id, trace_carrier
 
 log = get_logger(__name__)
 
@@ -60,6 +60,8 @@ class GooglePubSubPublisher(EventPublisher):
         # Lets the consumer log under the same id as the request that caused it.
         if request_id := current_request_id():
             publish_kwargs["request_id"] = request_id
+        # And the trace (traceparent), so the activities worker's spans join this request's.
+        publish_kwargs.update(trace_carrier())
         if settings.PUBSUB_ENABLE_MESSAGE_ORDERING and event.ordering_key:
             publish_kwargs["ordering_key"] = event.ordering_key
 

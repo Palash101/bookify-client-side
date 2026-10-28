@@ -20,3 +20,13 @@ redis>=5.0.0,<6
 qrcode==8.2
 Pillow==11.3.0
 sentry-sdk[fastapi]==2.70.0
+# Tracing (off unless TRACE_SAMPLE_RATE is set): app/core/observability.py init_tracing
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-http==1.45.1
+opentelemetry-exporter-gcp-trace==1.15.0
+opentelemetry-propagator-gcp==1.15.0
+opentelemetry-instrumentation-fastapi==0.66b1
+opentelemetry-instrumentation-sqlalchemy==0.66b1
+opentelemetry-instrumentation-redis==0.66b1
+opentelemetry-instrumentation-httpx==0.66b1
+opentelemetry-instrumentation-requests==0.66b1
