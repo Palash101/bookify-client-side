@@ -8,9 +8,10 @@ from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, Response
+from starlette.datastructures import Headers
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -66,11 +67,35 @@ _log = logging.getLogger(__name__)
 
 
 def _public_booking_qr_url(*, class_id: uuid.UUID, booking_id: uuid.UUID, tenant_id: str, token: str) -> str:
+    """Browser page with the booking's QR; ``token`` is the QR's own check-in token."""
     base = f"https://api.{settings.PAYMENT_TENANT_BASE_DOMAIN}".rstrip("/")
     return (
-        f"{base}{settings.API_V1_STR}/classes/{class_id}/bookings/{booking_id}/qr"
+        f"{base}{settings.API_V1_STR}/classes/{class_id}/bookings/{booking_id}/qr/view"
         f"?tenant_id={tenant_id}&token={token}"
     )
+
+
+# The QR travels inside the email (an inline image); remote and SVG images are blocked
+# or not shown by most mail apps.
+BOOKING_QR_CID = "booking-qr"
+
+
+def _booking_qr_png(qr_value: str) -> bytes:
+    """A plain black-on-white QR (with its quiet zone) that any check-in scanner reads."""
+    vendor_path = Path(__file__).resolve().parents[1].parent / ".vendor_qr"
+    try:
+        import qrcode
+    except ImportError:
+        if str(vendor_path) not in sys.path:
+            sys.path.insert(0, str(vendor_path))
+        import qrcode
+
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=4)
+    qr.add_data(qr_value)
+    qr.make(fit=True)
+    output = BytesIO()
+    qr.make_image(fill_color="black", back_color="white").save(output, format="PNG")
+    return output.getvalue()
 
 
 def _booking_qr_email(
@@ -79,6 +104,7 @@ def _booking_qr_email(
     tenant_id: str,
     booking,
     current_user: User,
+    gym_name: Optional[str] = None,
 ) -> Optional[dict]:
     """The QR email for a confirmed booking (send_email kwargs), or None without an address.
     Built while the request still has its DB session; sent after the response."""
@@ -91,14 +117,27 @@ def _booking_qr_email(
         booking_id=booking.id,
     )
     website = TenantWebsiteConfigService.get_active_config(db, tenant_id=tenant_id)
-    brand_name = getattr(website, "theme_name", None) or settings.PROJECT_NAME
+    brand_name = escape(gym_name or getattr(website, "theme_name", None) or settings.PROJECT_NAME)
     primary_color = _safe_hex_color(getattr(website, "primary_color", None), "#1d4ed8")
-    qr_url = _public_booking_qr_url(
+    qr_url = escape(_public_booking_qr_url(
         class_id=booking.class_id,
         booking_id=booking.id,
         tenant_id=tenant_id,
         token=qr_data["qr_token"],
-    )
+    ))
+    gym_class = db.query(GymClass).filter(GymClass.id == booking.class_id).first()
+    class_line = ""
+    if gym_class is not None:
+        when = " ".join(
+            part
+            for part in (
+                gym_class.class_date.strftime("%a %d %b %Y") if gym_class.class_date else "",
+                gym_class.start_time.strftime("%H:%M") if gym_class.start_time else "",
+            )
+            if part
+        )
+        name = escape(gym_class.title or gym_class.theme_name or "")
+        class_line = f'<p style="margin:0 0 4px;"><strong>Class:</strong> {name}{" · " + when if when else ""}</p>'
     html_body = f"""
     <html>
       <body style="font-family: Arial, sans-serif; background:#f8fafc; padding:24px; color:#0f172a;">
@@ -106,22 +145,40 @@ def _booking_qr_email(
           <h2 style="margin:0 0 12px;">Your Booking QR</h2>
           <p style="margin:0 0 18px;">Your class booking is confirmed. Show this QR at check-in.</p>
           <div style="text-align:center; margin:24px 0;">
-            <img src="{qr_url}" alt="Booking QR" style="max-width:320px; width:100%; border-radius:24px; border:10px solid {primary_color};" />
+            <img src="cid:{BOOKING_QR_CID}" alt="Booking QR code" width="264" height="264" style="display:block; margin:0 auto; width:264px; height:264px; background:#ffffff; border:8px solid {primary_color}; border-radius:16px;" />
           </div>
-          <p style="margin:0 0 8px;"><strong>Booking Ref:</strong> {booking.booking_ref or "-"}</p>
+          {class_line}
+          <p style="margin:0 0 8px;"><strong>Booking Ref:</strong> {escape(booking.booking_ref or "-")}</p>
           <p style="margin:0 0 20px;"><strong>Gym:</strong> {brand_name}</p>
-          <p style="margin:0;">
+          <p style="margin:0 0 8px;">
             <a href="{qr_url}" style="display:inline-block; background:{primary_color}; color:#ffffff; text-decoration:none; padding:12px 20px; border-radius:999px;">Open QR</a>
           </p>
+          <p style="margin:0; font-size:12px; color:#64748b;">Can't see the QR above? Use Open QR to show it in your browser.</p>
         </div>
       </body>
     </html>
     """
+    qr_png = UploadFile(
+        filename="booking-qr.png",
+        file=BytesIO(_booking_qr_png(qr_data["qr_token"])),
+        headers=Headers({"content-type": "image/png"}),
+    )
     return {
         "subject": "Your Booking QR Code",
         "recipients": [current_user.email],
         "body": "Your booking QR code is ready.",
         "html_body": html_body,
+        "attachments": [
+            {
+                "file": qr_png,
+                "headers": {
+                    "Content-ID": f"<{BOOKING_QR_CID}>",
+                    "Content-Disposition": 'inline; filename="booking-qr.png"',
+                },
+                "mime_type": "image",
+                "mime_subtype": "png",
+            }
+        ],
     }
 
 
@@ -592,6 +649,7 @@ def validate_class_booking(
     response_model=BookingCreateResponse,
 )
 async def create_class_booking(
+    request: Request,
     class_id: uuid.UUID,
     body: BookingRequestBody,
     background_tasks: BackgroundTasks,
@@ -645,6 +703,7 @@ async def create_class_booking(
                     tenant_id=tenant_id,
                     booking=booking,
                     current_user=current_user,
+                    gym_name=getattr(getattr(request.state, "tenant", None), "name", None),
                 )
                 if message:
                     background_tasks.add_task(_send_booking_qr_email, message, booking.id)
