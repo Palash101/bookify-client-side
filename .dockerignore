@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+env/
+
+# Local-only files and secrets (never baked into an image)
+.env
+.env.*
+service_account.json
+
+# Tooling
+.git/
+.pytest_cache/
+.vscode/
+.idea/
+tests/
