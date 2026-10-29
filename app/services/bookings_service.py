@@ -978,12 +978,10 @@ class BookingsService:
         offset = (page - 1) * limit
         total_pages = (total + limit - 1) // limit if total else 0
 
-        trainer_user = aliased(User)
         program = aliased(FitnessProgram)
         rows = (
-            db.query(ClassBooking, GymClass, trainer_user, program)
+            db.query(ClassBooking, GymClass, program)
             .outerjoin(GymClass, ClassBooking.class_id == GymClass.id)
-            .outerjoin(trainer_user, GymClass.trainer_id == trainer_user.id)
             .outerjoin(
                 program,
                 and_(
@@ -1003,7 +1001,17 @@ class BookingsService:
             "past": [],
             "waiting": [],
         }
-        for booking, gym_class, trainer, training_program in rows:
+        trainer_ids = {
+            t
+            for _, gym_class, _ in rows
+            if gym_class is not None
+            for t in (gym_class.trainer_ids or ([gym_class.trainer_id] if gym_class.trainer_id else []))
+        }
+        trainer_names = {
+            u.id: f"{u.first_name or ''} {u.last_name or ''}".strip() or u.email
+            for u in (db.query(User).filter(User.id.in_(trainer_ids)).all() if trainer_ids else [])
+        }
+        for booking, gym_class, training_program in rows:
             starts_at = _class_starts_at(gym_class, tz) if gym_class is not None else None
             class_name = None
             booking_type: Optional[str] = None
@@ -1011,8 +1019,9 @@ class BookingsService:
                 class_name = gym_class.title or gym_class.theme_name
                 booking_type = gym_class.booking_type
             trainer_name: Optional[str] = None
-            if trainer:
-                trainer_name = f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() or trainer.email
+            if gym_class is not None:
+                ids = gym_class.trainer_ids or ([gym_class.trainer_id] if gym_class.trainer_id else [])
+                trainer_name = " & ".join(trainer_names[t] for t in ids if t in trainer_names) or None
 
             can_cancel, cancel_deadline_iso = booking_cancel_info(
                 booking, gym_class, cfg, tz, now
@@ -1228,29 +1237,10 @@ class BookingsService:
     def _load_class_for_tenant(
         db: Session, tenant_id: str, class_id: UUID
     ) -> Optional[GymClass]:
-        """
-        Class is bookable for this tenant if:
-        - no trainer, or trainer belongs to this tenant, OR
-        - linked fitness_programs row matches this tenant (handles trainer tenant data bugs).
-        """
+        """The class, if it belongs to this tenant."""
         return (
             db.query(GymClass)
-            .outerjoin(User, GymClass.trainer_id == User.id)
-            .outerjoin(
-                FitnessProgram,
-                and_(
-                    FitnessProgram.id == GymClass.training_programme_id,
-                    FitnessProgram.tenant_id == tenant_id,
-                ),
-            )
-            .filter(
-                GymClass.id == class_id,
-                or_(
-                    GymClass.trainer_id.is_(None),
-                    User.tenant_id == tenant_id,
-                    FitnessProgram.id.isnot(None),
-                ),
-            )
+            .filter(GymClass.id == class_id, GymClass.tenant_id == tenant_id)
             .first()
         )
 

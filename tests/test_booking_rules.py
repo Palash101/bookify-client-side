@@ -148,11 +148,11 @@ class BookingFactory:
         h, m = (int(x) for x in start.split(":"))
         end_h = (h + 1) % 24
         self._exec(
-            "insert into classes (id, title, trainer_id, class_date, start_time, end_time, "
+            "insert into classes (id, title, tenant_id, trainer_id, trainer_ids, class_date, start_time, end_time, "
             "booking_type, gender, status, max_bookings, max_waitings, price, training_programme_id) "
-            "values (:id, :title, :tr, :d, make_time(:h, :m, 0), make_time(:eh, :m, 0), "
+            "values (:id, :title, :tid, :tr, ARRAY[cast(:tr as uuid)], :d, make_time(:h, :m, 0), make_time(:eh, :m, 0), "
             "cast(:bt as booking_type_enum), 'mixed', 'published', :mb, :mw, :price, :pid)",
-            id=cid, title=f"{self.tag} class", tr=self._trainer["id"], d=class_date, h=h, m=m, eh=end_h,
+            id=cid, title=f"{self.tag} class", tid=TENANT_ID, tr=self._trainer["id"], d=class_date, h=h, m=m, eh=end_h,
             bt=booking_type, mb=max_bookings, mw=max_waitings, price=price, pid=program_id,
         )
         self.classes.append(cid)
