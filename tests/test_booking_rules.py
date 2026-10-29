@@ -54,6 +54,7 @@ def _config(**overrides: Any):
             "advance_booking_window_days": 0,
             "booking_cutoff_minutes": 0,
         },
+        "attendance_check_in": {},
     }
     for dotted, value in overrides.items():
         section, key = dotted.split("__", 1)

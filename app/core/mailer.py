@@ -39,7 +39,8 @@ class EmailService:
         subject: str,
         recipients: List[str],
         body: str,
-        html_body: Optional[str] = None
+        html_body: Optional[str] = None,
+        attachments: Optional[list] = None,
     ) -> bool:
         """
         Send an email.
@@ -49,6 +50,8 @@ class EmailService:
             recipients: List of recipient email addresses
             body: Plain text email body
             html_body: HTML email body (optional)
+            attachments: fastapi_mail attachments; an image with a Content-ID header can
+                be shown in the HTML as <img src="cid:...">
         
         Returns:
             bool: True if email sent successfully, False otherwise
@@ -60,7 +63,8 @@ class EmailService:
                 subject=subject,
                 recipients=recipients,
                 body=body,
-                subtype="html" if html_body else "plain"
+                subtype="html" if html_body else "plain",
+                attachments=attachments or [],
             )
             
             if html_body:

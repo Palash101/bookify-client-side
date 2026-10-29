@@ -116,7 +116,7 @@ def _hub_tenant_id(request: Request) -> Optional[str]:
 
 def _public_qr_tenant_id(request: Request) -> Optional[str]:
     path = request.url.path
-    if not path.endswith("/qr") or "/bookings/" not in path:
+    if not (path.endswith("/qr") or path.endswith("/qr/view")) or "/bookings/" not in path:
         return None
     token = request.query_params.get("token")
     if token:

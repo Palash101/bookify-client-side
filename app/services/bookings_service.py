@@ -576,6 +576,23 @@ def _class_starts_at(gym_class: GymClass, tz: ZoneInfo) -> Optional[datetime]:
     return datetime(d.year, d.month, d.day, t.hour, t.minute, t.second, tzinfo=tz)
 
 
+# A check-in QR stays valid until this long after its class ends.
+CHECKIN_QR_GRACE = timedelta(hours=12)
+
+
+def _checkin_token_lifetime(gym_class: GymClass, tz: ZoneInfo) -> timedelta:
+    """From now until the class ends (plus CHECKIN_QR_GRACE); at least 24 hours."""
+    starts_at = _class_starts_at(gym_class, tz)
+    if starts_at is None:
+        return timedelta(hours=24)
+    ends_at = starts_at
+    if gym_class.end_time and gym_class.end_time > gym_class.start_time:
+        ends_at = starts_at.replace(
+            hour=gym_class.end_time.hour, minute=gym_class.end_time.minute, second=gym_class.end_time.second
+        )
+    return max(ends_at + CHECKIN_QR_GRACE - datetime.now(tz), timedelta(hours=24))
+
+
 def booking_cancel_info(
     booking: ClassBooking,
     gym_class: Optional[GymClass],
@@ -2165,7 +2182,14 @@ class BookingsService:
                     detail="Invalid token",
                 )
             token_tenant = str(payload.get("tenant_id") or "").strip()
-            token_user_id = str(payload.get("sub") or "").strip()
+            # The QR's own check-in token (the link in the booking email) or the member's login.
+            if payload.get("type") == "class_checkin":
+                if str(payload.get("booking_id") or "") != str(booking.id):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Token is for another booking",
+                    )
+            token_user_id = str(payload.get("sub") or payload.get("user_id") or "").strip()
             if token_tenant != str(tenant_id):
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -2196,13 +2220,15 @@ class BookingsService:
 
         token = booking.checkin_token
         expires_at: Optional[str] = None
-        if not token:
+        # A stored token that no longer verifies (older ones expired 24h after booking,
+        # often before the class) is replaced; the QR must still scan at the class.
+        if not token or verify_token(token) is None:
             token = create_class_checkin_token(
                 booking_id=str(booking.id),
                 class_id=str(class_id),
                 tenant_id=str(tenant_id),
                 user_id=str(booking.user_id),
-                expires_delta=timedelta(hours=24),
+                expires_delta=_checkin_token_lifetime(gym_class, _tenant_tz(db, tenant_id, config)),
             )
             booking.checkin_token = token
             db.flush()
