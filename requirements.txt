@@ -13,7 +13,8 @@ alembic==1.12.1
 python-dotenv==1.0.0
 fastapi-mail==1.4.1
 httpx>=0.27.0
-stripe>=10.0.0
+# Pinned: a new major changes the Stripe API version (and object behaviour) under us.
+stripe==16.1.0
 google-cloud-secret-manager
 google-cloud-pubsub>=2.18.0
 redis>=5.0.0,<6
