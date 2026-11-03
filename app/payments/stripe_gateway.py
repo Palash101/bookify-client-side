@@ -9,6 +9,7 @@ Required settings keys:
   - cancel_url        : (optional) redirect after cancelled payment
 """
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 import logging
 from uuid import uuid4
@@ -29,6 +30,20 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _as_dict(obj: Any) -> dict:
+    """A Stripe object as a plain dict. From stripe-python 15, Stripe objects are no
+    longer dicts: .get() and dict(obj) raise, so read them through this."""
+    if obj is None:
+        return {}
+    to_dict = getattr(obj, "to_dict", None)
+    return to_dict() if callable(to_dict) else dict(obj)
+
+
+def _minor_units(amount: Any) -> int:
+    """19.99 -> 1999. int(amount * 100) loses a cent on floats like 19.99 (1998.99...)."""
+    return int((Decimal(str(amount)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 class StripePaymentGateway(BasePaymentGateway):
@@ -56,13 +71,14 @@ class StripePaymentGateway(BasePaymentGateway):
 
     def create_payment(self, request: PaymentRequest) -> PaymentResponse:
         try:
+            # No payment_method_types: current Stripe API versions reject it, and Checkout
+            # offers the payment methods enabled in the Stripe Dashboard instead.
             session = stripe_lib.checkout.Session.create(
-                payment_method_types=["card"],
                 line_items=[
                     {
                         "price_data": {
                             "currency": request.currency.lower(),
-                            "unit_amount": int(request.amount * 100),  # cents
+                            "unit_amount": _minor_units(request.amount),  # cents
                             "product_data": {
                                 "name": request.description or f"Order {request.order_id}",
                             },
@@ -79,13 +95,14 @@ class StripePaymentGateway(BasePaymentGateway):
                 cancel_url=self.get_cancel_url(self.settings["callback_base_url"])
                            + "?session_id={CHECKOUT_SESSION_ID}",
             )
+            data = _as_dict(session)
             return PaymentResponse(
                 success=True,
                 gateway=self.GATEWAY_TYPE,
-                payment_url=getattr(session, "url", None) or (session.get("url") if isinstance(session, dict) else None),
-                transaction_id=getattr(session, "id", None) or (session.get("id") if isinstance(session, dict) else None),
+                payment_url=data.get("url"),
+                transaction_id=data.get("id"),
                 status=PaymentStatus.PENDING,
-                raw_response=dict(session) if isinstance(session, dict) else getattr(session, "to_dict", lambda: {})(),
+                raw_response=data,
             )
         except stripe_lib.error.StripeError as exc:
             self._log_error("create_payment failed", exc)
@@ -125,17 +142,30 @@ class StripePaymentGateway(BasePaymentGateway):
                 error_message=str(exc),
             )
 
-        if event["type"] == "checkout.session.completed":
-            session = event["data"]["object"]
+        event = _as_dict(event)
+        # Card payments are paid when the session completes. Methods enabled in the Stripe
+        # Dashboard can also settle later (bank debits): those complete as "unpaid" and are
+        # settled by checkout.session.async_payment_succeeded / _failed.
+        session_events = {
+            "checkout.session.completed": None,  # status from payment_status
+            "checkout.session.async_payment_succeeded": PaymentStatus.SUCCESS,
+            "checkout.session.async_payment_failed": PaymentStatus.FAILED,
+        }
+        if event.get("type") in session_events:
+            session = (event.get("data") or {}).get("object") or {}
+            status = session_events[event["type"]] or (
+                PaymentStatus.SUCCESS if session.get("payment_status") in ("paid", "no_payment_required")
+                else PaymentStatus.PENDING
+            )
             return CallbackResult(
                 success=True,
-                order_id=session.get("client_reference_id", ""),
-                transaction_id=session["id"],
-                status=PaymentStatus.SUCCESS,
+                order_id=session.get("client_reference_id") or "",
+                transaction_id=session.get("id"),
+                status=status,
                 gateway=self.GATEWAY_TYPE,
-                amount=session["amount_total"] / 100,
-                currency=session["currency"].upper(),
-                raw_payload=dict(session),
+                amount=session["amount_total"] / 100 if session.get("amount_total") is not None else None,
+                currency=(session.get("currency") or "").upper() or None,
+                raw_payload=session,
             )
 
         # Unhandled event type — not an error, just not actionable
@@ -150,7 +180,7 @@ class StripePaymentGateway(BasePaymentGateway):
 
     def verify_payment(self, transaction_id: str) -> CallbackResult:
         try:
-            session = stripe_lib.checkout.Session.retrieve(transaction_id)
+            session = _as_dict(stripe_lib.checkout.Session.retrieve(transaction_id))
             status = (
                 PaymentStatus.SUCCESS
                 if session["payment_status"] == "paid"
@@ -163,8 +193,8 @@ class StripePaymentGateway(BasePaymentGateway):
                 status=status,
                 gateway=self.GATEWAY_TYPE,
                 amount=session["amount_total"] / 100 if session.get("amount_total") else None,
-                currency=session.get("currency", "").upper() or None,
-                raw_payload=dict(session),
+                currency=(session.get("currency") or "").upper() or None,
+                raw_payload=session,
             )
         except stripe_lib.error.StripeError as exc:
             self._log_error("verify_payment failed", exc)
@@ -185,14 +215,14 @@ class StripePaymentGateway(BasePaymentGateway):
     ) -> RefundResponse:
         try:
             # Retrieve the payment intent from the session first
-            session = stripe_lib.checkout.Session.retrieve(transaction_id)
+            session = _as_dict(stripe_lib.checkout.Session.retrieve(transaction_id))
             payment_intent_id = session.get("payment_intent")
 
-            refund = stripe_lib.Refund.create(
+            refund = _as_dict(stripe_lib.Refund.create(
                 payment_intent=payment_intent_id,
-                amount=int(amount * 100),
+                amount=_minor_units(amount),
                 reason=reason or None,
-            )
+            ))
             return RefundResponse(
                 success=True,
                 refund_id=refund["id"],
