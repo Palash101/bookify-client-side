@@ -656,7 +656,9 @@ async def _handle_payment_callback(
                     if status_value == SalesTransactionStatus.cancelled:
                         payment_failed_sales_transaction_id = str(init_pkg_txn.id)
                 db.commit()
-            else:
+            elif order is not None or audit_sale is not None:
+                # No initiation row and no sale means this order isn't a package purchase:
+                # a wallet top-up's order id lands here and is handled below.
                 txn = SalesTransactions(
                     sales_id=order.id if order else order_uuid,
                     tenant_id=tenant_id,
