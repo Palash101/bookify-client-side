@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, BigInteger, Date, Time, DateTime, ForeignKey, Text, Numeric, Integer
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.db.session import Base
@@ -13,7 +13,12 @@ class GymClass(Base):
     training_programme_id = Column(BigInteger, nullable=True, default=0)
     title = Column(String(255), nullable=True)
     theme_name = Column(String(255), nullable=True)
+    # The owning gym (e.g. ORG-201); filter classes on this.
+    tenant_id = Column(String(50), nullable=False, index=True)
+    # The lead trainer: always trainer_ids[0].
     trainer_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    # Everyone teaching the class, lead first.
+    trainer_ids = Column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list, server_default="{}")
     class_date = Column(Date, nullable=True, index=True)
     start_time = Column(Time, nullable=True)
     end_time = Column(Time, nullable=True)

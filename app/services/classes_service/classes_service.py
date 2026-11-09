@@ -162,7 +162,6 @@ class ClassesService:
         fp = aliased(FitnessProgram)
         query = (
             db.query(GymClass)
-            .outerjoin(User, GymClass.trainer_id == User.id)
             .outerjoin(
                 fp,
                 and_(
@@ -171,13 +170,9 @@ class ClassesService:
                 ),
             )
             .filter(
+                GymClass.tenant_id == tenant_id,
                 GymClass.class_date >= start_date,
                 GymClass.class_date <= end_date,
-                or_(
-                    GymClass.trainer_id.is_(None),
-                    User.tenant_id == tenant_id,
-                    fp.id.isnot(None),
-                ),
             )
         )
 
@@ -251,23 +246,36 @@ class ClassesService:
         return pid if pid > 0 else 0
 
     @staticmethod
+    def _trainers_by_id(db: Session, classes: List[GymClass]) -> dict[str, dict]:
+        """{id: {id, name, avatar}} for everyone teaching any of ``classes`` (one query)."""
+        ids = {t for c in classes for t in ClassesService._trainer_ids(c)}
+        if not ids:
+            return {}
+        rows = db.execute(
+            select(User.id, User.first_name, User.last_name, User.avatar).where(User.id.in_(list(ids)))
+        ).all()
+        return {
+            str(tid): {"id": str(tid), "name": f"{first or ''} {last or ''}".strip() or None, "avatar": avatar}
+            for tid, first, last, avatar in rows
+        }
+
+    @staticmethod
+    def _trainer_ids(gym_class: GymClass) -> list:
+        """Lead first; classes saved before trainer_ids existed only have trainer_id."""
+        ids = list(getattr(gym_class, "trainer_ids", None) or [])
+        lead = getattr(gym_class, "trainer_id", None)
+        return ids or ([lead] if lead else [])
+
+    @staticmethod
+    def _class_trainers(gym_class: GymClass, trainer_by_id: dict[str, dict]) -> list[dict]:
+        return [trainer_by_id[str(t)] for t in ClassesService._trainer_ids(gym_class) if str(t) in trainer_by_id]
+
+    @staticmethod
     def _catalog_dicts(
         db: Session, tenant_id: str, classes: List[GymClass]
     ) -> list[dict]:
-        """Class + trainer + program. Layouts and live occupancy are not cached."""
-        trainer_ids = {
-            c.trainer_id for c in classes if getattr(c, "trainer_id", None) is not None
-        }
-        trainer_by_id: dict[str, dict] = {}
-        if trainer_ids:
-            rows = db.execute(
-                select(User.id, User.first_name, User.last_name, User.avatar).where(
-                    User.id.in_(list(trainer_ids))
-                )
-            ).all()
-            for tid, first, last, avatar in rows:
-                full = f"{first or ''} {last or ''}".strip()
-                trainer_by_id[str(tid)] = {"name": full or None, "image": avatar}
+        """Class + trainers + program. Layouts and live occupancy are not cached."""
+        trainer_by_id = ClassesService._trainers_by_id(db, classes)
 
         programme_ids = set()
         for c in classes:
@@ -289,9 +297,11 @@ class ClassesService:
         payload: list[dict] = []
         for gym_class in classes:
             item = GymClassResponse.model_validate(gym_class).model_dump(mode="json")
-            trainer = trainer_by_id.get(str(getattr(gym_class, "trainer_id", "")), {})
-            item["trainer_name"] = trainer.get("name")
-            item["trainer_image"] = trainer.get("image")
+            trainers = ClassesService._class_trainers(gym_class, trainer_by_id)
+            lead = trainers[0] if trainers else {}
+            item["trainer_name"] = lead.get("name")
+            item["trainer_image"] = lead.get("avatar")
+            item["trainers"] = trainers
             pid = ClassesService._programme_id(
                 getattr(gym_class, "training_programme_id", None)
             )
@@ -534,22 +544,7 @@ class ClassesService:
         """
         gym_class = (
             db.query(GymClass)
-            .outerjoin(User, GymClass.trainer_id == User.id)
-            .outerjoin(
-                FitnessProgram,
-                and_(
-                    FitnessProgram.id == GymClass.training_programme_id,
-                    FitnessProgram.tenant_id == tenant_id,
-                ),
-            )
-            .filter(
-                GymClass.id == class_id,
-                or_(
-                    GymClass.trainer_id.is_(None),
-                    User.tenant_id == tenant_id,
-                    FitnessProgram.id.isnot(None),
-                ),
-            )
+            .filter(GymClass.id == class_id, GymClass.tenant_id == tenant_id)
             .first()
         )
 
@@ -558,9 +553,9 @@ class ClassesService:
 
         gym_config = GymConfigService.get_gym_config(db, tenant_id)
 
-        trainer = None
-        if gym_class.trainer_id:
-            trainer = db.query(User).filter(User.id == gym_class.trainer_id).first()
+        trainers = ClassesService._class_trainers(
+            gym_class, ClassesService._trainers_by_id(db, [gym_class])
+        )
 
         program = None
         if gym_class.training_programme_id and int(gym_class.training_programme_id) != 0:
@@ -694,11 +689,8 @@ class ClassesService:
             "layouts": live_layout,
             "fully_booked": ClassesService.fully_booked_for_class(db, gym_class, live_layout),
             "program": FitnessProgramsService.program_short_payload(program),
-            "trainer": {
-                "id": str(trainer.id) if trainer else "",
-                "name": f"{trainer.first_name or ''} {trainer.last_name or ''}".strip() if trainer else None,
-                "avatar": trainer.avatar if trainer else None,
-            },
+            "trainer": trainers[0] if trainers else {"id": "", "name": None, "avatar": None},
+            "trainers": trainers,
             "location": {
                 "id": str(location.id) if location else "",
                 "name": location.name if location else None,

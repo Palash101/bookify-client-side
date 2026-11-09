@@ -7,12 +7,23 @@ from decimal import Decimal
 from app.schemas.transactions import PaginationMeta
 
 
+class TrainerShortResponse(BaseModel):
+    id: str
+    name: Optional[str] = None
+    avatar: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class GymClassBase(BaseModel):
     title: Optional[str] = None
     theme_name: Optional[str] = None
     trainer_id: Optional[UUID] = None
     trainer_name: Optional[str] = None
     trainer_image: Optional[str] = None
+    # Everyone teaching the class, lead first ({id, name, avatar}).
+    trainers: List[TrainerShortResponse] = []
     class_date: Optional[DateType] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None
@@ -75,15 +86,6 @@ class ClassesListResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Class details (single class)
 # ---------------------------------------------------------------------------
-
-class TrainerShortResponse(BaseModel):
-    id: str
-    name: Optional[str] = None
-    avatar: Optional[str] = None
-
-    class Config:
-        from_attributes = True
-
 
 class LocationShortResponse(BaseModel):
     id: str
@@ -176,6 +178,7 @@ class ClassDetailsResponse(BaseModel):
 
     program: ProgramShortResponse
     trainer: TrainerShortResponse
+    trainers: List[TrainerShortResponse] = []
     location: LocationShortResponse
     schedule: ScheduleShortResponse
 
