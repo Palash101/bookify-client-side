@@ -9,6 +9,7 @@ from app.models.otp import OTP
 from app.models.tenant_api_key import TenantAPIKey
 from app.models.class_schedule import ClassSchedule
 from app.models.gym_class import GymClass
+from app.models.client_trainer import ClientTrainer
 from app.models.package_discount import PackageDiscount
 from app.models.package import Package
 from app.models.package_pricing import PackagePricing

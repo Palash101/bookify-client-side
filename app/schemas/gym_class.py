@@ -24,6 +24,7 @@ class GymClassBase(BaseModel):
     trainer_image: Optional[str] = None
     # Everyone teaching the class, lead first ({id, name, avatar}).
     trainers: List[TrainerShortResponse] = []
+    trainer_ids: List[UUID] = []
     class_date: Optional[DateType] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None
@@ -34,6 +35,8 @@ class GymClassBase(BaseModel):
     booking_type: Optional[str] = None
     price: Optional[Decimal] = None
     gender: Optional[str] = None
+    # 'assigned_clients': only clients of its trainers may book (gym mode 'mixed').
+    audience: Optional[str] = "everyone"
     status: Optional[str] = None
 
 
@@ -194,4 +197,4 @@ class ClassDetailsResponse(BaseModel):
 class ClassDetailsOuterResponse(BaseModel):
     success: bool = True
     message: str = "Class details fetched successfully"
-    data: ClassDetailsResponse
+    data: Optional[ClassDetailsResponse] = None  # None: "Class not found"

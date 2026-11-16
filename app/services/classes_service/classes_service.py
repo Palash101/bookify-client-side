@@ -17,6 +17,7 @@ from app.schemas.gym_class import GymClassResponse
 from app.services.bookings_service import UNRELEASED_STATUSES, _effective_capacity, _tenant_tz, booking_cancel_info
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
+from app.services.trainer_assignment_service import Visibility
 
 # Same window as locations: catalog can go stale this long, live booking
 # fields are never stored — they are overlaid on every request.
@@ -498,6 +499,7 @@ class ClassesService:
         sort_order: str = "asc",
         page: int = 1,
         limit: int = 20,
+        visible: Visibility = None,
     ) -> tuple[List[GymClassResponse], int]:
         """
         Location-scoped class list for the client API.
@@ -505,27 +507,42 @@ class ClassesService:
         A plain request is paginated out of the cached catalog, then live
         occupancy is applied to the page only. Search or sort goes to the
         database so those queries never pollute the cache.
+        ``visible`` (trainer assignment) drops classes this viewer may not see; it runs
+        after the shared cache, before paging.
         """
         if not search and sort_by is None:
             rows = ClassesService.get_location_classes(
                 db, tenant_id, location_id, start_date, end_date
             )
+            if visible is not None:
+                rows = [row for row in rows if visible(row)]
             offset = (page - 1) * limit
             page_rows = rows[offset : offset + limit]
             return ClassesService._with_live_fields_for_page(db, page_rows), len(rows)
 
-        classes, total = ClassesService.list_classes(
-            db,
-            tenant_id=tenant_id,
-            start_date=start_date,
-            end_date=end_date,
-            location_id=location_id,
-            search=search,
-            sort_by=sort_by,
-            sort_order=sort_order,
-            page=page,
-            limit=limit,
-        )
+        if visible is None:
+            classes, total = ClassesService.list_classes(
+                db,
+                tenant_id=tenant_id,
+                start_date=start_date,
+                end_date=end_date,
+                location_id=location_id,
+                search=search,
+                sort_by=sort_by,
+                sort_order=sort_order,
+                page=page,
+                limit=limit,
+            )
+        else:
+            found = [
+                c for c in ClassesService._fetch_classes(
+                    db, tenant_id, start_date, end_date, location_id=location_id,
+                    search=search, sort_by=sort_by, sort_order=sort_order,
+                )
+                if visible(c)
+            ]
+            offset = (page - 1) * limit
+            classes, total = found[offset : offset + limit], len(found)
         catalog = ClassesService._catalog_dicts(db, tenant_id, classes)
         return ClassesService._with_live_fields_for_page(db, catalog), total
 
@@ -535,6 +552,7 @@ class ClassesService:
         tenant_id,
         class_id,
         user_id: Optional[UUID] = None,
+        visible: Visibility = None,
     ):
         """
         Returns a single class details payload.
@@ -550,6 +568,8 @@ class ClassesService:
 
         if not gym_class:
             return None
+        if visible is not None and not visible(gym_class):
+            return None  # trainer assignment: answered like a class that doesn't exist
 
         gym_config = GymConfigService.get_gym_config(db, tenant_id)
 

@@ -14,6 +14,9 @@ import uuid
 from app.models.fitness_program import FitnessProgram
 from app.models.gym_class import GymClass
 from app.models.user import User
+from app.models.class_booking import ClassBooking
+from app.services.gym_config_service import GymConfigService
+from app.services.trainer_assignment_service import visibility_for
 
 router = APIRouter()
 
@@ -42,11 +45,15 @@ def get_classes_by_date_for_location(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     tenant_id: str = Depends(get_current_tenant_id),
+    current_user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Location-scoped classes list.
     Route: /api/v1/locations/{location_id}/classes
+
+    Bearer token optional. With the gym's trainer assignment mode on, a logged-in
+    client only gets the classes they may book (services/trainer_assignment_service.py).
     """
     if class_date is not None:
         start_date = class_date
@@ -66,6 +73,7 @@ def get_classes_by_date_for_location(
         sort_order=sort_order,
         page=page,
         limit=limit,
+        visible=visibility_for(db, tenant_id, current_user, GymConfigService.get_gym_config(db, tenant_id)),
     )
     return {
         "success": True,
@@ -134,11 +142,21 @@ def get_class_details_for_location(
             "data": None,
         }
 
+    visible = visibility_for(db, tenant_id, current_user, GymConfigService.get_gym_config(db, tenant_id))
+    if visible is not None and current_user is not None:
+        # A class they already booked (e.g. staff booked them in) stays viewable.
+        booked = db.query(ClassBooking.id).filter(
+            ClassBooking.class_id == class_id, ClassBooking.user_id == current_user.id
+        ).first()
+        if booked:
+            visible = None
+
     payload = ClassesService.get_class_details(
         db=db,
         tenant_id=tenant_id,
         class_id=class_id,
         user_id=current_user.id if current_user else None,
+        visible=visible,
     )
 
     if payload is None:

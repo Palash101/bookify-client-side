@@ -38,6 +38,7 @@ from app.core.security import (
 from app.schemas.booking import PaymentMode
 from app.schemas.gym_config_value import GymConfigValue
 from app.services.no_show_block import booking_blocked_until
+from app.services.trainer_assignment_service import booking_refusal
 from app.services.fitness_programs_service.fitness_programs_service import FitnessProgramsService
 from app.services.gym_config_service import GymConfigService
 from app.services.wallet_locks import lock_member
@@ -1447,6 +1448,14 @@ class BookingsService:
         if not gender_ok:
             _finalize_booking_validation(outcome, pm)
             return outcome
+
+        # Trainer assignment / online booking switch (services/trainer_assignment_service.py).
+        refusal = booking_refusal(db, tenant_id, user, gym_class, config)
+        if refusal:
+            outcome.set_check(refusal[0], False, message=refusal[1])
+            _finalize_booking_validation(outcome, pm)
+            return outcome
+        outcome.set_check("assigned_trainer", True)
 
         # No-show penalty "booking_block" (see services/no_show_block.py).
         blocked_until = booking_blocked_until(db, tenant_id, user.id, config.attendance_check_in, now.date())

@@ -122,6 +122,8 @@ class BookingSettingsConfig(BaseModel):
     cancellation_window_hours: int = 24
     advance_booking_window_days: int = 30
     booking_cutoff_minutes: int = 0
+    # open | assigned_only | mixed (see services/trainer_assignment_service.py)
+    trainer_assignment_mode: str = "open"
 
 
 class AttendanceCheckInConfig(BaseModel):

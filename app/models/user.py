@@ -68,6 +68,8 @@ class User(Base):
     skills = Column(JSONB, nullable=True)
     
     is_active = Column(Boolean, default=True, nullable=True)
+    # False: the member can't book from the app; staff book for them.
+    can_book_online = Column(Boolean, nullable=False, server_default="true")
     # user_type: "member", "client", "admin" etc.
     user_type = Column(String(20), nullable=False, server_default="member")
 

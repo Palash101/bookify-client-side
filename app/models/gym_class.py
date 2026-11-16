@@ -29,6 +29,8 @@ class GymClass(Base):
     booking_type = Column(String(50), nullable=True)
     price = Column(Numeric(10, 2), nullable=True)
     gender = Column(String(20), nullable=True)
+    # 'everyone' or 'assigned_clients' (gym booking mode 'mixed'); see trainer_assignment_service.
+    audience = Column(String(20), nullable=False, server_default="everyone")
     terms_text = Column(Text, nullable=True)
     status = Column(String(50), nullable=True)
     publish_at = Column(DateTime(timezone=True), nullable=True)
