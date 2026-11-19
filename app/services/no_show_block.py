@@ -4,7 +4,7 @@ Gym config (attendance_check_in), no_show_penalty = "booking_block":
   once a member has no_show_limit no-shows within no_show_period_days, they can't book
   until booking_block_days after their last no-show.
 
-Nothing is stored: it's worked out from the member's ``no_show`` bookings when they
+Nothing is stored: it's worked out from the member's no-shows (``show = False``) when they
 book, so the block ends by itself. Staff bookings (staff backend) ignore it. The
 no-shows are written by the staff backend's class sweep (gym_classes/no_show_marker.py).
 """
@@ -38,7 +38,8 @@ def booking_blocked_until(
         .filter(
             ClassBooking.tenant_id == tenant_id,
             ClassBooking.user_id == user_id,
-            ClassBooking.status == ClassBookingStatus.no_show,
+            ClassBooking.show.is_(False),
+            ClassBooking.status.notin_((ClassBookingStatus.cancelled, ClassBookingStatus.late_cancelled)),
             GymClass.class_date >= since,
         )
         .order_by(GymClass.class_date.desc())

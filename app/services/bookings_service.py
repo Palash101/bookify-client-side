@@ -594,6 +594,11 @@ def _checkin_token_lifetime(gym_class: GymClass, tz: ZoneInfo) -> timedelta:
     return max(ends_at + CHECKIN_QR_GRACE - datetime.now(tz), timedelta(hours=24))
 
 
+def _attendance_recorded(booking: ClassBooking) -> bool:
+    """The member checked in or was marked a no-show (``show`` set)."""
+    return booking.show is not None or booking.checkin_time is not None
+
+
 def booking_cancel_info(
     booking: ClassBooking,
     gym_class: Optional[GymClass],
@@ -615,9 +620,11 @@ def booking_cancel_info(
         cutoff = starts_at - timedelta(hours=cancel_hours) if cancel_hours > 0 else starts_at
         cancel_deadline_iso = cutoff.astimezone(dt_timezone.utc).isoformat().replace("+00:00", "Z")
         if allow_late:
-            can_cancel = booking.status not in (ClassBookingStatus.completed,)
+            can_cancel = True
         else:
-            can_cancel = now <= cutoff and booking.status not in (ClassBookingStatus.completed,)
+            can_cancel = now <= cutoff
+        if _attendance_recorded(booking) or booking.status == ClassBookingStatus.completed:
+            can_cancel = False
 
     return can_cancel, cancel_deadline_iso
 
@@ -1068,6 +1075,7 @@ class BookingsService:
                 "program": FitnessProgramsService.program_short_payload(training_program),
                 "can_cancel": can_cancel,
                 "cancel_deadline": cancel_deadline_iso,
+                "show": booking.show,
                 **_member_booking_amount_fields(gym_class, cfg),
             }
             if cancelled_at_iso is not None:
@@ -2025,6 +2033,11 @@ class BookingsService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Booking already {class_booking_status_value(booking.status)}",
             )
+        if _attendance_recorded(booking):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Booking already checked in" if booking.show is not False else "Booking already marked as no-show",
+            )
 
         gym_class = (
             db.query(GymClass)
@@ -2325,8 +2338,7 @@ class BookingsService:
             booking.checkin_time = checked_in_at
             current_attendance = int(gym_class.attendance_count or 0)
             gym_class.attendance_count = current_attendance + 1
-            if booking.status == ClassBookingStatus.confirmed:
-                booking.status = ClassBookingStatus.completed
+            booking.show = True  # attendance lives in show; the status stays as it is
             booking.notes = (booking.notes or "").strip() or None
             scan_note = f"QR checked in by {scanner_user.id}"
             booking.notes = scan_note if booking.notes is None else f"{booking.notes}\n{scan_note}"
