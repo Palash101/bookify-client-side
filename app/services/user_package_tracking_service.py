@@ -404,7 +404,7 @@ def backfill_missing_booking_debits(
     bookings = (
         db.query(ClassBooking)
         .filter(
-            ClassBooking.user_package_id.in_(refs),
+            ClassBooking.user_package_purchase_id.in_(refs),
             ClassBooking.payment_mode == "package",
             ClassBooking.status.in_(_ACTIVE_PACKAGE_BOOKING_STATUSES),
             ClassBooking.sessions_deducted > 0,
