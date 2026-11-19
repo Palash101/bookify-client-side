@@ -2,6 +2,7 @@ import enum
 from typing import Any, Optional
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     Enum,
@@ -25,8 +26,9 @@ class ClassBookingStatus(str, enum.Enum):
     waiting = "waiting"
     pending = "pending"
     pending_payment = "pending_payment"
+    # Legacy: attendance is the ``show`` column now. Nothing writes these two any more
+    # (the DB enum keeps them); old rows were moved to confirmed + show.
     completed = "completed"
-    # Written by the staff backend's class sweep / staff check-out.
     no_show = "no_show"
     # Cancelled outside the free-cancel window: no refund.
     late_cancelled = "late_cancelled"
@@ -132,6 +134,8 @@ class ClassBooking(Base):
     notes = Column(Text, nullable=True)
 
     checkin_time = Column(DateTime(timezone=True), nullable=True)
+    # Attendance: None = not marked yet, True = showed up (checked in), False = no-show.
+    show = Column(Boolean, nullable=True, default=None)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

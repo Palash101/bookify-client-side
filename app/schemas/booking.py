@@ -136,6 +136,8 @@ class MemberUpcomingBookingItem(BaseModel):
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
+    # Attendance: null = not marked yet, true = attended, false = no-show.
+    show: Optional[bool] = None
 
 
 class MemberPastBookingItem(BaseModel):
@@ -156,6 +158,8 @@ class MemberPastBookingItem(BaseModel):
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
+    # Attendance: null = not marked yet, true = attended, false = no-show.
+    show: Optional[bool] = None
 
 
 class MemberWaitingBookingItem(BaseModel):
@@ -176,6 +180,8 @@ class MemberWaitingBookingItem(BaseModel):
     can_cancel: bool = False
     cancel_deadline: Optional[str] = None
     cancelled_at: Optional[str] = None
+    # Attendance: null = not marked yet, true = attended, false = no-show.
+    show: Optional[bool] = None
     waiting_position: Optional[int] = None
 
 
