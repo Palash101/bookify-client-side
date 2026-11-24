@@ -12,6 +12,13 @@ status, latency). Code that knows the tenant or user calls ``bind_request(...)``
 later log line of that request carries them. Pub/Sub publishers send ``current_request_id()``
 as a message attribute, so a consumer can log under the same id.
 
+The access line also says where the time went (``timing``): SQL (queries, total ms), new DB
+connections, outgoing HTTP calls (requests / httpx) and the rest (Python, other I/O). A request
+slower than ``SLOW_REQUEST_MS`` (default 1000) is logged as a WARNING with ``slow: true`` and
+its slowest query, most repeated query (an N+1 loop) and slowest HTTP call. The same numbers go
+out in a ``Server-Timing`` header (Chrome DevTools > Network > Timing); ``SERVER_TIMING=0``
+turns the header off, ``REQUEST_TIMING=0`` turns the whole breakdown off.
+
 Secrets never reach the output: bearer tokens, JWTs and ``password= / token= / otp= ...``
 values are replaced, emails and phone numbers are masked (also inside stack traces).
 
@@ -48,6 +55,7 @@ _request_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("req
 _trace: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("trace", default=None)
 _tenant_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("tenant_id", default=None)
 _user_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_id", default=None)
+_timing: contextvars.ContextVar[Optional["_Timing"]] = contextvars.ContextVar("timing", default=None)
 
 _SERVICE = "app"
 _VERSION = os.getenv("K_REVISION") or os.getenv("GIT_SHA") or "dev"
@@ -56,6 +64,9 @@ _SKIP_ACCESS_LOG = ("/health", "/ready", "/live", "/favicon.ico")
 _sentry_on = False
 _tracing_on = False
 _REQUEST_ID_OK = re.compile(r"^[A-Za-z0-9._:-]{1,64}$")
+_TIMING_ON = os.getenv("REQUEST_TIMING", "1") != "0"
+_SERVER_TIMING = os.getenv("SERVER_TIMING", "1") != "0"
+_SLOW_MS = float(os.getenv("SLOW_REQUEST_MS") or 1000)
 
 
 # ---------------------------------------------------------------- request context
@@ -110,6 +121,9 @@ class RequestContextMiddleware:
     def __init__(self, app):
         self.app = app
         self.access = logging.getLogger("access")
+        self.served = 0
+        if _TIMING_ON:
+            _start_request_timing()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -130,12 +144,19 @@ class RequestContextMiddleware:
             sentry_sdk.set_tag("request_id", request_id)
         status = 500
         start = time.perf_counter()
+        timing = _Timing() if _TIMING_ON else None
+        timing_token = _timing.set(timing)
+        self.served += 1
+        first_request = self.served == 1
 
         async def send_with_id(message):
             nonlocal status
             if message["type"] == "http.response.start":
                 status = message["status"]
-                message.setdefault("headers", []).append((b"x-request-id", request_id.encode()))
+                headers = message.setdefault("headers", [])
+                headers.append((b"x-request-id", request_id.encode()))
+                if timing is not None and _SERVER_TIMING:
+                    headers.append((b"server-timing", timing.server_timing(time.perf_counter() - start).encode()))
             await send(message)
 
         try:
@@ -146,16 +167,221 @@ class RequestContextMiddleware:
                 state = scope.get("state") or {}
                 bind_request(tenant_id=state.get("tenant_id"), user_id=state.get("user_id"))
                 route = scope.get("route")
+                latency_ms = round((time.perf_counter() - start) * 1000, 1)
+                slow = latency_ms >= _SLOW_MS
+                fields: dict = {
+                    "http": {"method": scope.get("method"), "path": path, "status": status,
+                             "route": getattr(route, "path", None), "latency_ms": latency_ms}}
+                if timing is not None:
+                    fields["timing"] = timing.summary(latency_ms, details=slow)
+                if slow:
+                    fields["slow"] = True
+                if first_request:
+                    fields["first_request"] = True  # first on this instance: cold caches and pools
                 self.access.log(
-                    logging.ERROR if status >= 500 else logging.WARNING if status >= 400 else logging.INFO,
-                    "%s %s %s", scope.get("method"), path, status,
-                    extra={"fields": {
-                        "http": {"method": scope.get("method"), "path": path, "status": status,
-                                 "route": getattr(route, "path", None),
-                                 "latency_ms": round((time.perf_counter() - start) * 1000, 1)}}},
+                    logging.ERROR if status >= 500 else logging.WARNING if status >= 400 or slow else logging.INFO,
+                    "%s %s %s %sms%s", scope.get("method"), path, status, round(latency_ms),
+                    " SLOW" if slow else "",
+                    extra={"fields": fields},
                 )
+            _timing.reset(timing_token)
             for var, token in zip((_request_id, _trace, _tenant_id, _user_id), tokens):
                 var.reset(token)
+
+
+# ---------------------------------------------------------------- per-request timing
+def _short_sql(statement: str) -> str:
+    # Bound parameters are placeholders, so no values reach the log; redact() covers literals.
+    return redact(" ".join(statement.split())[:300])
+
+
+class _Timing:
+    """Where one request spent its time. Shared by reference with the threadpool and the
+    tasks BaseHTTPMiddleware starts (they get a copy of the context, not of this object)."""
+
+    __slots__ = ("db_s", "queries", "connect_s", "connects", "http_s", "http_calls",
+                 "slowest_sql", "slowest_http", "repeats")
+
+    def __init__(self):
+        self.db_s = self.connect_s = self.http_s = 0.0
+        self.queries = self.connects = self.http_calls = 0
+        self.slowest_sql: tuple = (0.0, "")
+        self.slowest_http: tuple = (0.0, "")
+        self.repeats: dict = {}
+
+    def add_sql(self, seconds: float, statement: str) -> None:
+        self.db_s += seconds
+        self.queries += 1
+        if seconds > self.slowest_sql[0]:
+            self.slowest_sql = (seconds, statement)
+        if statement in self.repeats or len(self.repeats) < 300:
+            self.repeats[statement] = self.repeats.get(statement, 0) + 1
+
+    def add_connect(self, seconds: float) -> None:
+        self.connect_s += seconds
+        self.connects += 1
+
+    def add_http(self, seconds: float, label: str) -> None:
+        self.http_s += seconds
+        self.http_calls += 1
+        if seconds > self.slowest_http[0]:
+            self.slowest_http = (seconds, label)
+
+    def summary(self, latency_ms: float, details: bool = False) -> dict:
+        ms = lambda s: round(s * 1000, 1)  # noqa: E731
+        out: dict = {
+            "db_ms": ms(self.db_s), "db_queries": self.queries,
+            "http_ms": ms(self.http_s), "http_calls": self.http_calls,
+            # Python, JSON, waiting for a thread / pool connection, gRPC (Pub/Sub), file I/O.
+            "other_ms": round(max(latency_ms - ms(self.db_s + self.connect_s + self.http_s), 0.0), 1),
+        }
+        if self.connects:
+            out["db_connects"] = self.connects
+            out["db_connect_ms"] = ms(self.connect_s)
+        if details:
+            if self.slowest_sql[1]:
+                out["slowest_sql_ms"] = ms(self.slowest_sql[0])
+                out["slowest_sql"] = _short_sql(self.slowest_sql[1])
+            if self.repeats:
+                statement, count = max(self.repeats.items(), key=lambda kv: kv[1])
+                if count > 1:
+                    out["most_repeated_sql_count"] = count
+                    out["most_repeated_sql"] = _short_sql(statement)
+            if self.slowest_http[1]:
+                out["slowest_http_ms"] = ms(self.slowest_http[0])
+                out["slowest_http"] = self.slowest_http[1]
+        return out
+
+    def server_timing(self, total_s: float) -> str:
+        parts = [f'db;dur={self.db_s * 1000:.1f};desc="{self.queries} queries"']
+        if self.connects:
+            parts.append(f'dbconnect;dur={self.connect_s * 1000:.1f};desc="{self.connects} new connections"')
+        if self.http_calls:
+            parts.append(f'ext;dur={self.http_s * 1000:.1f};desc="{self.http_calls} HTTP calls"')
+        other = max(total_s - self.db_s - self.connect_s - self.http_s, 0.0)
+        parts.append(f"app;dur={other * 1000:.1f}")
+        parts.append(f"total;dur={total_s * 1000:.1f}")
+        return ", ".join(parts)
+
+
+_timing_started = False
+
+
+def _start_request_timing() -> None:
+    """Hook SQLAlchemy (every engine, also tenant engines made later) and requests / httpx once."""
+    global _timing_started
+    if _timing_started:
+        return
+    _timing_started = True
+    try:
+        _time_sql()
+        _time_http()
+    except Exception:  # timing must never stop a service from starting
+        logging.getLogger(__name__).exception("request timing could not start")
+
+
+def _time_sql() -> None:
+    if importlib.util.find_spec("sqlalchemy") is None:
+        return
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.pool import Pool
+
+    def done(conn, statement) -> None:
+        started = conn.info.pop("_timing_start", None)
+        timing = _timing.get()
+        if started is not None and timing is not None:
+            timing.add_sql(time.perf_counter() - started, statement or "")
+
+    @event.listens_for(Engine, "before_cursor_execute")
+    def _before(conn, cursor, statement, parameters, context, executemany):
+        if _timing.get() is not None:
+            conn.info["_timing_start"] = time.perf_counter()
+
+    @event.listens_for(Engine, "after_cursor_execute")
+    def _after(conn, cursor, statement, parameters, context, executemany):
+        done(conn, statement)
+
+    @event.listens_for(Engine, "handle_error")
+    def _failed(ctx):
+        if ctx.connection is not None:
+            done(ctx.connection, ctx.statement)
+
+    # A new database connection (pool empty, first use of a tenant, after a drop) is slow on
+    # Cloud SQL: count it apart from the queries.
+    @event.listens_for(Engine, "do_connect")
+    def _connecting(dialect, conn_rec, cargs, cparams):
+        if _timing.get() is not None:
+            conn_rec.info["_timing_connect"] = time.perf_counter()
+
+    @event.listens_for(Pool, "connect")
+    def _connected(dbapi_connection, conn_rec):
+        started = conn_rec.info.pop("_timing_connect", None)
+        timing = _timing.get()
+        if started is not None and timing is not None:
+            timing.add_connect(time.perf_counter() - started)
+
+
+def _http_label(method: Any, url: Any) -> str:
+    # Host and path only: query strings can carry keys and tokens.
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(str(url))
+    return f"{method} {parts.hostname or ''}{parts.path}"[:200]
+
+
+def _time_http() -> None:
+    """Time outgoing calls made with requests (also google-auth, Stripe) and httpx."""
+    if importlib.util.find_spec("requests") is not None:
+        import requests
+
+        original = requests.Session.send
+        if not getattr(original, "_timed", False):
+            def send(self, request, **kwargs):
+                timing = _timing.get()
+                if timing is None:
+                    return original(self, request, **kwargs)
+                started = time.perf_counter()
+                try:
+                    return original(self, request, **kwargs)
+                finally:
+                    timing.add_http(time.perf_counter() - started, _http_label(request.method, request.url))
+
+            send._timed = True
+            requests.Session.send = send
+
+    if importlib.util.find_spec("httpx") is not None:
+        import httpx
+
+        original_sync = httpx.Client.send
+        if not getattr(original_sync, "_timed", False):
+            def send_sync(self, request, **kwargs):
+                timing = _timing.get()
+                if timing is None:
+                    return original_sync(self, request, **kwargs)
+                started = time.perf_counter()
+                try:
+                    return original_sync(self, request, **kwargs)
+                finally:
+                    timing.add_http(time.perf_counter() - started, _http_label(request.method, request.url))
+
+            send_sync._timed = True
+            httpx.Client.send = send_sync
+
+        original_async = httpx.AsyncClient.send
+        if not getattr(original_async, "_timed", False):
+            async def send_async(self, request, **kwargs):
+                timing = _timing.get()
+                if timing is None:
+                    return await original_async(self, request, **kwargs)
+                started = time.perf_counter()
+                try:
+                    return await original_async(self, request, **kwargs)
+                finally:
+                    timing.add_http(time.perf_counter() - started, _http_label(request.method, request.url))
+
+            send_async._timed = True
+            httpx.AsyncClient.send = send_async
 
 
 # ---------------------------------------------------------------- redaction
